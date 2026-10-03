@@ -259,6 +259,10 @@
 - Fixed session-affinity pins growing without bound in long-lived gateways; pins are now capped at 256 sessions per provider.
 - Fixed Anthropic sessions failing every request with HTTP 400 ("role 'system' must precede an 'assistant' message") after a tool change coincided with compaction or an interrupted or failed reply; sessions already stuck this way recover on the next message ([#14746](https://github.com/can1357/oh-my-pi/issues/14746)).
 
+### Added
+
+- Broker account-pool files (`OMP_AUTH_BROKER_ACCOUNT_POOL_FILE`) can now act as an allow-list: `"*": false` hides every provider not listed, OAuth and API keys alike, and a provider entry can be `true`, `false`, or `{ "accounts": [...], "apiKeys": false }` to hide its API keys. Existing files behave as before ([#14235](https://github.com/can1357/oh-my-pi/pull/14235) by [@will-bogusz](https://github.com/will-bogusz))
+
 ## [18.7.0] - 2026-10-06
 
 ### Added
