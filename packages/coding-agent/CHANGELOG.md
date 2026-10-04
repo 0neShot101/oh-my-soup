@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed advisor names, autoresearch branch names and fork remote names to use the shared `slugify` from `@oh-my-pi/pi-utils`, and vibe worker names to use the same sanitizer as task agents; names are unchanged ([#14283](https://github.com/can1357/oh-my-pi/pull/14283) by [@jaredlyon](https://github.com/jaredlyon))
+
 ## [18.11.0] - 2026-10-14
 
 ### Added
