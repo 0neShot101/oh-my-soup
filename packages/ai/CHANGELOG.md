@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added opt-in `reclaimAbovePct` to `auth.accountPolicies`: sessions automatically moved to a lower-priority account return to the preferred one once it has that much quota left ([#14237](https://github.com/can1357/oh-my-pi/pull/14237) by [@will-bogusz](https://github.com/will-bogusz))
+
 ## [18.10.4] - 2026-10-13
 
 ### Fixed
@@ -265,10 +269,6 @@
 - Fixed compatibility with Command Code DeepSeek and other DeepSeek-family models by preserving the reasoning context required for warm OpenAI Responses sessions and correctly handling incomplete DSML tool-call wrappers in visible output.
 
 ## [18.6.0] - 2026-10-03
-
-### Added
-
-- Running sessions can now move back to a preferred account once it recovers: set `reclaimAbovePct` on its `auth.accountPolicies` entry, and sessions automatically pinned to a lower-priority account return on their next request once the preferred account has at least that much quota left. Opt-in; the value must be above the account's reserve, and explicitly chosen accounts never move ([#14237](https://github.com/can1357/oh-my-pi/pull/14237) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Fixed
 
