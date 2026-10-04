@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed Devin model discovery to send legacy Windsurf Enterprise keys unprefixed in one request, dropping the Windsurf-editor retry that returned a smaller model list ([#13677](https://github.com/can1357/oh-my-pi/pull/13677) by [@will-bogusz](https://github.com/will-bogusz))
+
 ## [18.10.4] - 2026-10-13
 
 ### Added
@@ -262,10 +266,6 @@
 - Bundled prompt-cache lifetimes are recomputed from current policy instead of being inherited from previous generated models ([#13966](https://github.com/can1357/oh-my-pi/pull/13966) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
 - Fixed HTTP 400 `messages.N.output_config: Extra inputs are not permitted` on later turns with Claude Sonnet 5.5, Opus 5, Opus 5.5, and Fable 5.1 on Google Vertex AI ([#13994](https://github.com/can1357/oh-my-pi/issues/13994))
 - Fixed Claude Opus 5.5 conversations failing with a "bound to a different conversation" 400 after the system prompt changed. Opus 5.5 now gets Sonnet 5.5's prefix-bound thinking handling on every provider, and Bedrock asks the server to drop stale signed thinking instead of rejecting the request ([#14019](https://github.com/can1357/oh-my-pi/pull/14019) by [@nick-maderight](https://github.com/nick-maderight))
-
-### Changed
-
-- Devin model discovery makes one request with the native Devin CLI identity and sends legacy Windsurf Enterprise keys unprefixed, the way the Devin CLI does, instead of retrying under a pinned Windsurf editor identity that returns a smaller model list ([#13677](https://github.com/can1357/oh-my-pi/pull/13677) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.4.9] - 2026-10-01
 
