@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed `pwsh` code blocks rendering without PowerShell syntax colors ([#15008](https://github.com/can1357/oh-my-pi/issues/15008)).
+- Minimized cargo output keeps one "Blocking waiting for file lock on …" line, so a build stuck behind another cargo process says why ([#14631](https://github.com/can1357/oh-my-pi/pull/14631) by [@jorgoose](https://github.com/jorgoose))
 
 ## [18.10.2] - 2026-10-12
 
@@ -100,10 +101,6 @@
 ### Fixed
 
 - Fixed background shell builtins and other in-process commands so they terminate when their subshell exits and can be stopped with `kill %N`, matching the behavior of external commands.
-
-### Fixed
-
-- Minimized cargo output keeps one "Blocking waiting for file lock on …" line, so a build stuck behind another cargo process says why ([#14631](https://github.com/can1357/oh-my-pi/pull/14631) by [@jorgoose](https://github.com/jorgoose))
 
 ## [18.7.0] - 2026-10-06
 
