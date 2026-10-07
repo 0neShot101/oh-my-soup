@@ -460,6 +460,9 @@
 - Corrected tool behavior and configuration documentation for `read`, background `bash`, Python evaluation, replace editing, goal removal, and `advisor.immuneTurns`.
 - Fixed custom glob backends from hanging indefinitely; scans now respect the tool deadline and report incomplete results when necessary.
 - Fixed `--resume <path>` from silently creating a new session for a missing path; it now reports the missing path, consistent with `--fork <path>` and `--resume <id>`.
+### Fixed
+
+- `omp commit` and `/git` now sign commits when Git's `commit.gpgsign` is enabled ([#14810](https://github.com/can1357/oh-my-pi/issues/14810)).
 
 ## [18.8.0] - 2026-10-07
 

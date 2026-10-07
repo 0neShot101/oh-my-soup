@@ -304,6 +304,16 @@ pub(crate) fn prefers_in_process(err: &Error) -> bool {
 pub(crate) fn run_sync(cwd: &Path, args: &[String], timeout: Duration) -> Result<CliOutput> {
 	run_sync_capped(cwd, args, timeout, OUTPUT_LIMIT_BYTES)
 }
+/// Run local Git plumbing with explicit identity variables and a write-safe
+/// environment. Used for signing, which Git delegates to configured programs.
+pub(crate) fn run_sync_with_env(
+	cwd: &Path,
+	args: &[String],
+	timeout: Duration,
+	env: &[(&str, &str)],
+) -> Result<CliOutput> {
+	run_sync_impl(cwd, args, timeout, OUTPUT_LIMIT_BYTES, false, env)
+}
 
 /// [`run_sync`] with an explicit retention cap. The cap is a parameter rather
 /// than a constant read inside the reader threads so a test can exercise the
@@ -315,7 +325,18 @@ pub(crate) fn run_sync_capped(
 	timeout: Duration,
 	limit: usize,
 ) -> Result<CliOutput> {
-	let argv = hardened_args(args, true);
+	run_sync_impl(cwd, args, timeout, limit, true, &[])
+}
+
+fn run_sync_impl(
+	cwd: &Path,
+	args: &[String],
+	timeout: Duration,
+	limit: usize,
+	read_only: bool,
+	env: &[(&str, &str)],
+) -> Result<CliOutput> {
+	let argv = hardened_args(args, read_only);
 	let mut cmd = std::process::Command::new("git");
 	cmd.args(&argv)
 		.current_dir(cwd)
@@ -323,6 +344,9 @@ pub(crate) fn run_sync_capped(
 		.stdout(Stdio::piped())
 		.stderr(Stdio::piped());
 	apply_env(&mut cmd);
+	for (key, value) in env {
+		cmd.env(key, value);
+	}
 	let mut child = cmd.spawn().map_err(|err| spawn_error(cwd, err))?;
 	let stdout = spawn_sync_reader("git-cli-stdout", child.stdout.take(), limit);
 	let stderr = spawn_sync_reader("git-cli-stderr", child.stderr.take(), limit);

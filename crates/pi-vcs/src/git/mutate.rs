@@ -186,7 +186,8 @@ impl GitRepo {
 			.map_err(|err| Error::backend("git reset", err))
 	}
 
-	/// Create a commit and return its object id.
+	/// Create a commit, signing through Git when `commit.gpgSign` is enabled.
+	/// A failed signer leaves HEAD unchanged.
 	pub fn commit_create(&self, message: &str, options: &CommitOptions) -> Result<String> {
 		let repo = self.gix()?;
 		run_commit_hook(self, "pre-commit", &[])?;
@@ -260,10 +261,44 @@ impl GitRepo {
 		run_commit_hook(self, "commit-msg", &[message_path.as_os_str()])?;
 		let message = fs::read_to_string(&message_path)
 			.map_err(|err| Error::backend("git commit read commit-msg result", err))?;
-		let commit = repo
-			.new_commit_as(committer, author, message, tree, parents)
-			.map_err(|err| Error::backend("git commit", err))?;
-		let id = commit.id;
+		let id = if repo
+			.config_snapshot()
+			.boolean("commit.gpgSign")
+			.unwrap_or(false)
+		{
+			let mut args = vec![
+				"commit-tree".to_owned(),
+				"-S".to_owned(),
+				"-F".to_owned(),
+				message_path.to_string_lossy().into_owned(),
+				tree.to_hex().to_string(),
+			];
+			for parent in &parents {
+				args.push("-p".to_owned());
+				args.push(parent.to_hex().to_string());
+			}
+			let author_name = author.name.to_str_lossy();
+			let author_email = author.email.to_str_lossy();
+			let committer_name = committer.name.to_str_lossy();
+			let committer_email = committer.email.to_str_lossy();
+			let output =
+				super::cli::run_sync_with_env(self.root(), &args, super::cli::COMMAND_TIMEOUT, &[
+					("GIT_AUTHOR_NAME", &author_name),
+					("GIT_AUTHOR_EMAIL", &author_email),
+					("GIT_AUTHOR_DATE", author.time),
+					("GIT_COMMITTER_NAME", &committer_name),
+					("GIT_COMMITTER_EMAIL", &committer_email),
+					("GIT_COMMITTER_DATE", committer.time),
+				])?
+				.into_checked(&args)?;
+			gix::hash::ObjectId::from_hex(output.stdout.trim().as_bytes())
+				.map_err(|err| Error::backend("git commit-tree", err))?
+		} else {
+			repo
+				.new_commit_as(committer, author, message, tree, parents)
+				.map_err(|err| Error::backend("git commit", err))?
+				.id
+		};
 		let expected = old_commit
 			.map_or(gix::refs::transaction::PreviousValue::MustNotExist, |old| {
 				gix::refs::transaction::PreviousValue::MustExistAndMatch(old.into())
@@ -2015,6 +2050,59 @@ mod tests {
 		assert_eq!(git(temp.path(), &["status", "--porcelain"]), "A  new");
 		repo.unstage(&[]).unwrap();
 		assert_eq!(git(temp.path(), &["status", "--porcelain"]), "?? new");
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn commit_respects_configured_signing_and_refuses_failed_signatures() {
+		let (temp, repo) = fixture();
+		let key = temp.path().join("signing-key");
+		let output = Command::new("ssh-keygen")
+			.args(["-q", "-t", "ed25519", "-N", "", "-f"])
+			.arg(&key)
+			.output()
+			.unwrap();
+		assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+		let signers = temp.path().join("allowed-signers");
+		fs::write(
+			&signers,
+			format!("test@example.com {}\n", fs::read_to_string(key.with_extension("pub")).unwrap()),
+		)
+		.unwrap();
+		git(temp.path(), &["config", "gpg.format", "ssh"]);
+		git(temp.path(), &["config", "user.signingkey", key.to_str().unwrap()]);
+		git(temp.path(), &["config", "gpg.ssh.allowedSignersFile", signers.to_str().unwrap()]);
+		git(temp.path(), &["config", "commit.gpgsign", "true"]);
+		fs::write(temp.path().join("a"), "signed\n").unwrap();
+		repo.stage_files(&["a".into()]).unwrap();
+		let signed = repo
+			.commit_create("signed", &CommitOptions::default())
+			.unwrap();
+		assert_eq!(git(temp.path(), &["rev-parse", "HEAD"]), signed);
+		git(temp.path(), &["verify-commit", "HEAD"]);
+		let amended = repo
+			.commit_create("signed amend", &CommitOptions { amend: true, ..Default::default() })
+			.unwrap();
+		assert_ne!(amended, signed);
+		assert_eq!(git(temp.path(), &["rev-list", "--count", "HEAD"]), "2");
+		git(temp.path(), &["verify-commit", "HEAD"]);
+
+		git(temp.path(), &["config", "user.signingkey", "/no-such-signing-key"]);
+		fs::write(temp.path().join("a"), "must not commit\n").unwrap();
+		repo.stage_files(&["a".into()]).unwrap();
+		assert!(
+			repo
+				.commit_create("failed signer", &CommitOptions::default())
+				.is_err()
+		);
+		assert_eq!(git(temp.path(), &["rev-parse", "HEAD"]), amended);
+
+		git(temp.path(), &["config", "commit.gpgsign", "false"]);
+		let repo = GitRepo::require(temp.path()).unwrap();
+		repo
+			.commit_create("unsigned by choice", &CommitOptions::default())
+			.unwrap();
+		assert!(!git(temp.path(), &["cat-file", "-p", "HEAD"]).contains("\ngpgsig "));
 	}
 
 	/// Staged entries record the file's stat so later status calls can skip
