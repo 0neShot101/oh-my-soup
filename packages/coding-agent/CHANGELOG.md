@@ -310,6 +310,7 @@
 - Fixed resumed xAI, Factory Droid and OpenAI sessions forgetting earlier reasoning on their first request, while a retry after a stale Responses item error still rebuilds history ([#15148](https://github.com/can1357/oh-my-pi/pull/15148) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed the startup default ignoring the model a provider's discovery names as the account's default: with no model chosen, Devin Pro now starts on SWE-2 at High instead of SWE-1.6 ([#15115](https://github.com/can1357/oh-my-pi/pull/15115) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed `/jobs` doing nothing when a subagent is running a job: a focused subagent view now runs the read-only `/jobs` and `/jobs full` forms, which open the background jobs sheet instead of only showing the "runs in the main session" hint; the mutating `/jobs kill` still requires returning to the main session ([#14814](https://github.com/can1357/oh-my-pi/issues/14814))
+- Fixed `/jobs` doing nothing when a subagent is running a job: a focused subagent view now opens a read-only jobs sheet over the main session's jobs, while the mutating `/jobs kill` still requires returning to the main session ([#15161](https://github.com/can1357/oh-my-pi/pull/15161) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ## [18.8.7] - 2026-10-09
 
