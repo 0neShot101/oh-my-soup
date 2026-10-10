@@ -56,6 +56,10 @@
 - Fixed macOS menu inspection and selection for menus containing items whose titles cannot be read; those items are now skipped safely.
 - Fixed syntax highlighting and language detection for several languages, including TOML, PowerShell, SCSS, Less, Vim script, GraphQL, Protobuf, Terraform/HCL, Dockerfile, CMake, INI, gitignore, Kotlin, Swift, Elixir, Sass, Python f-strings, Julia interpolations, and Elixir interpolations.
 
+### Fixed
+
+- Fixed macOS `setValue` on native text fields that Contacts, Reminders, Calendar, Font Book and System Settings showed but never stored: the text is now entered the way `win.type` enters it, and a mismatch names what the field reads
+
 ## [18.8.8] - 2026-10-10
 
 ### Changed
