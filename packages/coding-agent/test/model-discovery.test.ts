@@ -1028,11 +1028,12 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("warns with the env var only when an env-redirected implicit endpoint fails discovery", async () => {
-		const unreachable: FetchImpl = async () => {
-			throw new Error("EHOSTUNREACH: connect failed");
+		// Echo the request URL like real fetch errors do, so credential leaks through the error are caught too.
+		const unreachable: FetchImpl = async input => {
+			throw new Error(`EHOSTUNREACH: connect failed ${String(input)}`);
 		};
 		{
-			using _baseUrl = withEnv("OLLAMA_BASE_URL", "http://ollama.typo:11434");
+			using _baseUrl = withEnv("OLLAMA_BASE_URL", "http://reviewer:topsecret@ollama.typo:11434");
 			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: unreachable });
 			await registry.refresh();
 			const warnings = registry.drainConfigWarnings().filter(warning => warning.includes("ollama"));
@@ -1040,6 +1041,8 @@ describe("ModelRegistry runtime discovery", () => {
 			expect(warnings[0]).toContain("OLLAMA_BASE_URL");
 			expect(warnings[0]).toContain("http://ollama.typo:11434");
 			expect(warnings[0]).toContain("EHOSTUNREACH");
+			expect(warnings[0]).not.toContain("topsecret");
+			expect(warnings[0]).not.toContain("reviewer");
 		}
 		{
 			// The default loopback probe is optional: a missing local Ollama stays silent.

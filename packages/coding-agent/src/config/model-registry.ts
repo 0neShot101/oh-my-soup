@@ -51,6 +51,7 @@ import { apiServesKind, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/t
 import { getAgentDir, isBunTestRuntime, logger, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import { resolveProviderModelReference } from "../config/model-resolver";
 import { generateCodexAttestation } from "../live/attestation";
+import { redactUrlForLog } from "../mcp/json-rpc";
 import type { AuthStorage } from "../session/auth-storage";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
 import type { ConfigError, ConfigFile } from "./config-file";
@@ -151,6 +152,8 @@ setCodexAttestationProvider(generateCodexAttestation);
 
 /** One built-in discovery pass rewriting more payload rows than this is debug-logged. */
 const MODEL_CACHE_REWRITE_LOG_THRESHOLD = 5;
+/** `scheme://user:pass@` in free text (e.g. a fetch error echoing the request URL). */
+const URL_USERINFO_RE = /([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi;
 const BUILT_IN_MODEL_MANAGER_PROVIDER_IDS: Readonly<Record<string, true>> = Object.freeze(
 	Object.fromEntries(
 		[...PROVIDER_DESCRIPTORS.map(descriptor => descriptor.providerId), ...SPECIAL_MODEL_MANAGER_PROVIDER_IDS].map(
@@ -2145,18 +2148,22 @@ export class ModelRegistry {
 			return;
 		}
 		this.#lastDiscoveryWarnings.set(providerConfig.provider, error);
+		const { baseUrl } = providerConfig;
+		const url = baseUrl && redactUrlForLog(baseUrl);
 		logger.warn("model discovery failed for provider", {
 			provider: providerConfig.provider,
-			url: providerConfig.baseUrl,
+			url,
 			error,
 		});
 		// An env var silently redirected a built-in provider the user never
 		// configured; a log line alone leaves its failures untraceable.
 		const endpointEnv = this.#implicitProviderEndpointEnv.get(providerConfig.provider);
-		if (endpointEnv) {
+		if (endpointEnv && baseUrl && url) {
 			const provider = providerConfig.provider;
+			// The endpoint env var may embed `user:pass@`, and fetch errors can echo it.
+			const detail = error.replaceAll(baseUrl, url).replace(URL_USERINFO_RE, "$1").replace(/\s+/g, " ").trim();
 			this.#configWarnings.push(
-				`Built-in ${provider} provider: model discovery at ${providerConfig.baseUrl} (from ${endpointEnv}) failed. Fix or unset ${endpointEnv}, or add "${provider}" to disabledProviders. Error: ${error.replace(/\s+/g, " ").trim()}`,
+				`Built-in ${provider} provider: model discovery at ${url} (from ${endpointEnv}) failed. Fix or unset ${endpointEnv}, or add "${provider}" to disabledProviders. Error: ${detail}`,
 			);
 		}
 	}
