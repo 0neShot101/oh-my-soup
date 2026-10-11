@@ -409,13 +409,11 @@ async function collectReferencedBlobHashes(sessionRoots: string[], exactSessionF
 }
 
 /**
- * Exact session files recorded in the persistent registry
- * (`<agentDir>/custom-session-files/*`, one marker per transcript whose
- * content is its absolute path). Recording files rather than parent
- * directories preserves `--session` paths outside the root-scan globs,
- * including names without a `.jsonl` suffix.
+ * Paths recorded in the persistent registry (`<agentDir>/custom-session-files/*`).
+ * A first save may leave only its staging temp, so the target need not exist
+ * when reclaiming crash leftovers.
  */
-async function collectRegisteredSessionFiles(registryDir: string): Promise<string[]> {
+async function collectRegisteredSessionPaths(registryDir: string): Promise<string[]> {
 	let entries: string[];
 	try {
 		entries = await fs.readdir(registryDir);
@@ -428,8 +426,6 @@ async function collectRegisteredSessionFiles(registryDir: string): Promise<strin
 		const recorded = (await readTextIfPresent(path.join(registryDir, entry))).trim();
 		if (!recorded) continue;
 		const sessionFile = path.resolve(recorded);
-		const stat = await statIfPresent(sessionFile);
-		if (!stat?.isFile()) continue;
 		files.set(normalizePathForComparison(sessionFile), sessionFile);
 	}
 	return [...files.values()];
@@ -564,7 +560,8 @@ async function runBlobGc(options: ResolvedGcOptions, archiveSessionsRoot: string
 	const sessionsRoot = getSessionsDir(options.agentDir);
 	const defaultRoots = [sessionsRoot, archiveSessionsRoot];
 	const exactSessionFiles = new Map<string, string>();
-	for (const file of await collectRegisteredSessionFiles(getCustomSessionFilesDir(options.agentDir))) {
+	for (const file of await collectRegisteredSessionPaths(getCustomSessionFilesDir(options.agentDir))) {
+		if (!(await statIfPresent(file))?.isFile()) continue;
 		exactSessionFiles.set(normalizePathForComparison(file), file);
 	}
 	for (const file of await collectBreadcrumbSessionFiles(getTerminalSessionsDir(options.agentDir))) {
@@ -1710,10 +1707,11 @@ async function collectSessionStagingFiles(sessionsRoot: string, exactSessionFile
 async function sweepSessionStagingFiles(
 	options: ResolvedGcOptions,
 	sessionsRoot: string,
+	registeredSessionPaths: string[],
 	result: ArchiveGcResult,
 ): Promise<void> {
 	const exactSessionFiles = [
-		...(await collectRegisteredSessionFiles(getCustomSessionFilesDir(options.agentDir))),
+		...registeredSessionPaths,
 		...(await collectBreadcrumbSessionFiles(getTerminalSessionsDir(options.agentDir))),
 	];
 	const deleteBeforeMs = Date.now() - GC_WRITE_GRACE_MS;
@@ -1732,7 +1730,11 @@ async function sweepSessionStagingFiles(
 	}
 }
 
-async function runArchiveGc(options: ResolvedGcOptions, archiveRoot: string): Promise<ArchiveGcResult> {
+async function runArchiveGc(
+	options: ResolvedGcOptions,
+	archiveRoot: string,
+	registeredSessionPaths: string[],
+): Promise<ArchiveGcResult> {
 	const sessionsRoot = getSessionsDir(options.agentDir);
 	const sessions = await listActiveSessions(sessionsRoot);
 	const cutoffMs = Date.now() - options.coldArchiveAfterDays * DAY_MS;
@@ -1791,7 +1793,7 @@ async function runArchiveGc(options: ResolvedGcOptions, archiveRoot: string): Pr
 
 	result.wouldArchive = candidates.length;
 	// Before archiving moves transcripts away from the temps staged beside them.
-	await sweepSessionStagingFiles(options, sessionsRoot, result);
+	await sweepSessionStagingFiles(options, sessionsRoot, registeredSessionPaths, result);
 	if (!options.apply) return result;
 
 	const archivedSessionIds: string[] = [];
@@ -2087,10 +2089,14 @@ export async function runGcCommand(args: GcCommandArgs): Promise<GcResult> {
 	const archiveRoot = getArchivedSessionsDir(options.agentDir);
 	const result = await withGcLock(options.agentDir, async lockPath => {
 		const next: GcResult = { agentDir: options.agentDir, apply: options.apply, lockPath };
-		// Stale state first: pruned collab replicas then release their blobs to this run's sweep.
+		// Stale cleanup may prune a missing first-save target's registry marker.
+		const registeredSessionPaths = options.runArchive
+			? await collectRegisteredSessionPaths(getCustomSessionFilesDir(options.agentDir))
+			: [];
+		// Pruned collab replicas release their blobs to this run's sweep.
 		if (options.runStale) next.stale = await runStaleGc(options);
 		if (options.runBlobs) next.blobs = await runBlobGc(options, archiveRoot);
-		if (options.runArchive) next.archive = await runArchiveGc(options, archiveRoot);
+		if (options.runArchive) next.archive = await runArchiveGc(options, archiveRoot, registeredSessionPaths);
 		if (options.runWal) next.wal = await runWalGc(options);
 		return next;
 	});

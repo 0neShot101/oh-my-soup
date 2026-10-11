@@ -810,6 +810,25 @@ describe("runGcCommand session staging sweep", () => {
 			expect(await Bun.file(kept).exists()).toBe(true);
 		}
 	});
+	test("sweeps the first-save temp of a missing registered session before its stale marker is pruned", async () => {
+		const target = path.join(root, "external-sessions", "first-save");
+		const marker = path.join(getCustomSessionFilesDir(root), "first-save");
+		await Bun.write(marker, target);
+		await agePath(marker, 2);
+		const abandoned = sessionStagingPath(target);
+		await Bun.write(abandoned, "partial");
+		await agePath(abandoned);
+
+		const result = await runGcCommand({
+			flags: { agentDir: root, archive: true, stale: true, apply: true },
+		});
+
+		expect(result.archive).toMatchObject({ wouldDeleteTemps: 1, deletedTemps: 1, errors: [] });
+		expect(result.stale?.danglingMarkers).toBe(1);
+		expect(await Bun.file(marker).exists()).toBe(false);
+		expect(await Bun.file(abandoned).exists()).toBe(false);
+		expect(await Bun.file(target).exists()).toBe(false);
+	});
 });
 
 describe("runGcCommand cold-session archive", () => {
