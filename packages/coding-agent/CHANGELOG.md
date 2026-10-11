@@ -9,6 +9,7 @@
 ### Changed
 
 - The in-composer tool approval prompt summarizes the command, path, or content to one row so the composer keeps its room; `Ctrl+O` shows them in full ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+- Changed the `todo` tool and system prompt guidance so agents send to-do updates alongside their next tool call instead of spending a separate model turn on them ([#15402](https://github.com/can1357/oh-my-pi/pull/15402) by [@will-bogusz](https://github.com/will-bogusz))
 ### Changed
 
 - Background task guidance now lives in the Task tool description (and in same-name extension replacements that delegate to Task) instead of being repeated in every spawn acknowledgment ([#15477](https://github.com/can1357/oh-my-pi/pull/15477) by [@iliaal](https://github.com/iliaal))
@@ -116,10 +117,6 @@
 - Fixed `RpcClient.stop()` occasionally waiting forever because the agent process was never signaled.
 - Fixed blank rows opening under the input after an `ask` dialog, command report or todo list closed in a session that had filled the screen; the transcript now refills the screen ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
 - Fixed blank rows appearing between the last paragraphs of a streamed answer when the turn ended ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
-
-### Changed
-
-- Changed the `todo` tool and system prompt guidance so agents send to-do updates alongside their next tool call instead of spending a separate model turn on them
 
 ## [18.9.2] - 2026-10-11
 
