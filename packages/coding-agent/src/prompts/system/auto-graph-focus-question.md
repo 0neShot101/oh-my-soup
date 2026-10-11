@@ -1,1 +1,0 @@
-The state is a Markdown table from a coding assistant's answer, with each column's inferred type. A chart will be drawn under the table, one entry per row. Which row is the table about: the option it recommends or picks, the current or proposed one the others are weighed against, or the one it highlights? Choose none when no single row stands out from the rest.
