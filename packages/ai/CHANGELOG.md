@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Improved Anthropic prompt-cache breakpoint selection in long conversations to pick cache anchors in a single backward walk, removing the per-request index arrays that grew with conversation length ([#15219](https://github.com/can1357/oh-my-pi/pull/15219) by [@yuzu-octopus](https://github.com/yuzu-octopus))
+
+## [18.9.1] - 2026-10-11
+
 ### Added
 
 - Added `compat.supportsThinkingBindingControls` for Bedrock Converse: setting it to `false` stops prefix-bound Claude requests from sending `thinking.block_binding`, the `thinking-binding-controls-2026-08-01` beta and the `/input_transformations` response path, for gateways or regions that reject them ([#15316](https://github.com/can1357/oh-my-pi/pull/15316) by [@harshaygadekar](https://github.com/harshaygadekar))
