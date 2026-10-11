@@ -33,6 +33,10 @@
  * 4. **Gemini summary-header runaway** — handled separately by
  *    {@link GeminiHeaderRunDetector}.
  *
+ * The semantic heuristics (2, 3) judge prose only: code-shaped lines are dropped
+ * before analysis because legitimate code repeats one keyword skeleton with
+ * different literals, and numeric tokens are stripped during normalization.
+ *
  * Scope: exact cycles are guarded for every model; semantic heuristics remain
  * limited to Gemini, DeepSeek, and Grok family streams. Thinking stays armed
  * after a tool call starts — xAI/Grok can keep emitting `thinking_delta` after
@@ -45,7 +49,6 @@
  * three guarded attempts and then fail closed. Disable detection with
  * `PI_NO_THINKING_LOOP_GUARD=1`.
  */
-import { modelFamilyToken } from "@oh-my-pi/pi-catalog/identity";
 import { logger } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import type { Api, AssistantMessage, Model, StreamOptions } from "../types";
@@ -109,24 +112,27 @@ const LEX_STALL_MIN_RUN = 8;
 const CONCRETE_ANCHOR =
 	/`[^`]+`|\b\w{2,}\.[a-zA-Z]\w{0,4}\b|[\w-]+(?:\/[\w-]+){2,}|\b\w+_\w+\b|\b[a-z]+[A-Z]\w*\b|\b[A-Z][a-z]+[A-Z]\w*\b/g;
 
+/** A whole line shaped like code rather than prose: a fence marker, an indented
+ *  line that is not a nested list item, or a line ending in a block, statement,
+ *  or markup delimiter. Classified per line rather than by fence state because Gemini
+ *  thought summaries routinely end inside an unclosed fence; tracking fences
+ *  would hide every later prose paragraph from the heuristics. */
+const CODE_LINE = /^(?:[ \t]*```.*|(?: {2,}|\t)(?![ \t]*(?:[-*+]|\d+[.)])[ \t]).*|.*[{}[\](;,>][ \t]*)$/gm;
+
 /**
- * True when `model.id` belongs to a family guarded by the semantic loop
- * heuristics: Gemini, DeepSeek, or Grok. Exact suffix-cycle detection applies to
- * every enabled model independently of this predicate.
- *
- * Model identity is derived only from its id; provider and compatibility metadata
- * do not opt opaque aliases into semantic detection.
+ * True when resolved compatibility policy enables semantic loop heuristics for
+ * this model. Exact suffix-cycle detection applies to every enabled model
+ * independently of this predicate.
  */
 export function isLoopGuardedModel(model: Model<Api>, options?: StreamOptions): boolean {
 	if (options?.loopGuard?.enabled === false) return false;
-	switch (modelFamilyToken(model.id)) {
-		case "gemini":
-		case "deepseek":
-		case "grok":
-			return true;
-		default:
-			return false;
-	}
+	const compat = model.compat;
+	if (compat !== undefined) return "thinkingLoopGuard" in compat && compat.thinkingLoopGuard !== undefined;
+	// Custom API surfaces resolve no compat record, so the KDL `thinking-loop-guard`
+	// axis cannot land on them; fall back to the class facts the axis encodes
+	// (classes/{gemini,deepseek,xai}.kdl).
+	const cls = model.identity?.class;
+	return cls === "gemini" || cls === "deepseek" || cls === "xai";
 }
 
 /**
@@ -192,7 +198,7 @@ export class ThinkingLoopDetector {
 				return null;
 			}
 			// An over-long segment is chunked so each piece stays comparable.
-			for (let rest = raw; rest.length > 0; ) {
+			for (let rest = raw; rest.length > 0;) {
 				const chunk = rest.length > SEGMENT_CHAR_CAP ? rest.slice(0, SEGMENT_CHAR_CAP) : rest;
 				rest = rest.slice(chunk.length);
 				const hit = this.#consumeSegment(chunk);
@@ -227,9 +233,13 @@ export class ThinkingLoopDetector {
 	#consumeSegment(raw: string): string | null {
 		// Reasoning-summarizer titles ("**Maintaining Momentum**", "## Heading")
 		// are per-thought formatting, not chain-of-thought; their ever-changing
-		// wording would otherwise mask a loop by inflating novelty. Strip them
-		// before analysis (a title-only segment then falls below the length gate).
-		const segment = raw.replace(/^[ \t]*#{1,6}[ \t].*$/gm, "").replace(/^[ \t]*\*{2,3}.+?\*{2,3}[ \t]*$/gm, "");
+		// wording would otherwise mask a loop by inflating novelty. Strip them and
+		// code lines before analysis (a title- or code-only segment then falls below
+		// the length gate).
+		const segment = raw
+			.replace(CODE_LINE, "")
+			.replace(/^[ \t]*#{1,6}[ \t].*$/gm, "")
+			.replace(/^[ \t]*\*{2,3}.+?\*{2,3}[ \t]*$/gm, "");
 		const normalized = normalizeSegment(segment);
 		if (normalized.length < SEGMENT_MIN_NORM_CHARS) return null;
 
@@ -309,7 +319,7 @@ export class ThinkingLoopDetector {
  * real narration runaway burns dozens-to-hundreds of titles, so this still trips
  * fast on the actual pathology.
  */
-export const GEMINI_HEADER_RUNAWAY_THRESHOLD = 24;
+export const GEMINI_HEADER_RUNAWAY_THRESHOLD = 36;
 
 /**
  * True when a single trimmed line is a Gemini reasoning-summary title: a markdown
@@ -483,7 +493,7 @@ export function withThinkingLoopGuard<
 	const controller = new AbortController();
 	const caller = options?.signal;
 	const signal = caller ? AbortSignal.any([caller, controller.signal]) : controller.signal;
-	const merged = { ...(options ?? {}), signal } as O;
+	const merged = { ...options, signal } as O;
 	return guardThinkingLoopStream(dispatch(merged), model, controller, options);
 }
 
@@ -514,28 +524,36 @@ function buildThinkingLoopError(model: Model<Api>, detail: string): AssistantMes
 	};
 }
 
+/** Reused Z-array scratch; scans are synchronous, so one buffer suffices. */
+const exactZ = new Uint16Array(EXACT_MAX_UNIT + 1);
+
 /**
  * Detect an exact cycle at the text suffix. A Z-array over the reversed tail
  * finds every possible suffix period in linear time without substring churn.
- * Short cycles retain the original 180-character/four-repeat sensitivity; long
+ * The reversal is virtual (indexed from the end) and only `z[1..maxUnit]` is
+ * computed — the period check reads nothing past it, and each `z[i]` reads
+ * only `z[i - left]` with `i - left < i`, which is already filled. Short
+ * cycles retain the original 180-character/four-repeat sensitivity; long
  * cycles require at least three repeats and 1024 repeated characters.
  */
 function detectExactSuffixCycle(text: string): [unit: string, count: number] | null {
-	if (text.length < EXACT_SHORT_MIN_REPEATED_CHARS) return null;
-	const reversed = text.split("").reverse().join("");
-	const z = new Uint16Array(reversed.length);
+	const n = text.length;
+	if (n < EXACT_SHORT_MIN_REPEATED_CHARS) return null;
+	const last = n - 1;
+	const maxUnit = Math.min(EXACT_MAX_UNIT, Math.floor(n / 3));
+	const z = exactZ;
 	let left = 0;
 	let right = 0;
-	for (let i = 1; i < reversed.length; i++) {
-		if (i <= right) z[i] = Math.min(right - i + 1, z[i - left]);
-		while (i + z[i] < reversed.length && reversed[z[i]] === reversed[i + z[i]]) z[i]++;
-		if (i + z[i] - 1 > right) {
+	for (let i = 1; i <= maxUnit; i++) {
+		let zi = i <= right ? Math.min(right - i + 1, z[i - left]) : 0;
+		while (i + zi < n && text.charCodeAt(last - zi) === text.charCodeAt(last - i - zi)) zi++;
+		z[i] = zi;
+		if (i + zi - 1 > right) {
 			left = i;
-			right = i + z[i] - 1;
+			right = i + zi - 1;
 		}
 	}
 
-	const maxUnit = Math.min(EXACT_MAX_UNIT, Math.floor(reversed.length / 3));
 	for (let len = 2; len <= maxUnit; len++) {
 		const count = 1 + Math.floor(z[len] / len);
 		const minCount = len <= EXACT_SHORT_MAX_UNIT ? 4 : 3;

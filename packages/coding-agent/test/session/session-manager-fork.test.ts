@@ -1,13 +1,24 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { isSyntheticToolResultMessage } from "@oh-my-pi/pi-agent-core";
+import {
+	collectPendingToolCalls,
+	createInterruptedToolResults,
+	createInterruptedTurnAbortMessage,
+	describePendingToolCalls,
+	SESSION_EXIT_CUSTOM_TYPE,
+	TOOL_EXECUTION_START_CUSTOM_TYPE,
+} from "@oh-my-pi/pi-coding-agent/session/exit-diagnostics";
 import {
 	CURRENT_SESSION_VERSION,
+	type SessionEntry,
 	type SessionHeader,
 	type SessionMessageEntry,
 } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { loadEntriesFromFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { FileSessionStorage, MemorySessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { getTerminalId } from "@oh-my-pi/pi-tui";
 import { getAgentDir, getTerminalSessionsDir, removeWithRetries, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
@@ -45,6 +56,12 @@ async function createSessionWithArtifacts(root: string): Promise<{
 	await Bun.write(path.join(sourceArtifactsDir, "1.read.log"), "tool output");
 	await Bun.write(path.join(sourceArtifactsDir, "nested", "result.txt"), "nested output");
 	return { cwd, sessionDir, sourceFile, sourceArtifactsDir };
+}
+
+/** Load a session file's transcript entries, dropping the non-entry session header. */
+async function loadHistory(file: string): Promise<SessionEntry[]> {
+	const entries = await loadEntriesFromFile(file);
+	return entries.filter((entry): entry is SessionEntry => entry.type !== "session");
 }
 
 describe("SessionManager.forkFrom", () => {
@@ -170,5 +187,577 @@ describe("SessionManager.forkFrom", () => {
 
 		expect(await Bun.file(path.join(forkArtifactsDir, "unrelated.txt")).exists()).toBe(false);
 		expect(await Bun.file(unrelatedFile).text()).toBe("must not be copied");
+	});
+
+	it("zeroes inherited cost while preserving token counts only when reset is requested", async () => {
+		using tempDir = TempDir.createSync("@omp-session-fork-cost-");
+		const cwd = path.join(tempDir.path(), "project");
+		const sessionDir = path.join(tempDir.path(), "sessions");
+		await fs.mkdir(sessionDir, { recursive: true });
+		const sourceFile = path.join(sessionDir, "source.jsonl");
+		const timestamp = new Date().toISOString();
+		const sourceHeader: SessionHeader = {
+			type: "session",
+			version: CURRENT_SESSION_VERSION,
+			id: "cost-source",
+			timestamp,
+			cwd,
+		};
+		const assistantEntry = {
+			type: "message",
+			id: "assistant-1",
+			parentId: null,
+			timestamp,
+			message: {
+				role: "assistant",
+				content: [],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude",
+				stopReason: "stop",
+				timestamp: Date.now(),
+				usage: {
+					input: 100,
+					output: 50,
+					cacheRead: 10,
+					cacheWrite: 5,
+					totalTokens: 165,
+					premiumRequests: 2,
+					credits: { cost: 3, committedCost: 3, acuCost: 1 },
+					cost: { input: 1, output: 4, cacheRead: 0.5, cacheWrite: 0.5, total: 6 },
+				},
+			},
+		};
+		await Bun.write(sourceFile, `${JSON.stringify(sourceHeader)}\n${JSON.stringify(assistantEntry)}\n`);
+		const sourceText = await Bun.file(sourceFile).text();
+		const sourceManager = await SessionManager.open(sourceFile, sessionDir, undefined, { suppressBreadcrumb: true });
+
+		const findAssistant = async (file: string) => {
+			const entries = await loadEntriesFromFile(file);
+			const entry = entries.find((e): e is SessionMessageEntry => e.type === "message");
+			if (entry?.message.role !== "assistant") throw new Error("expected assistant message");
+			return entry.message;
+		};
+
+		const preserved = await SessionManager.forkFrom(sourceFile, cwd, path.join(tempDir.path(), "keep"), undefined, {
+			suppressBreadcrumb: true,
+		});
+		const preservedFile = preserved.getSessionFile();
+		if (!preservedFile) throw new Error("expected preserved fork file");
+		const preservedMessage = await findAssistant(preservedFile);
+		expect(preservedMessage.usage.cost.total).toBe(6);
+		expect(preservedMessage.usage.premiumRequests).toBe(2);
+
+		const reset = await SessionManager.forkFrom(sourceFile, cwd, path.join(tempDir.path(), "reset"), undefined, {
+			suppressBreadcrumb: true,
+			resetInheritedCost: true,
+		});
+		const resetFile = reset.getSessionFile();
+		if (!resetFile) throw new Error("expected reset fork file");
+		const resetMessage = await findAssistant(resetFile);
+		expect(resetMessage.usage.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
+		expect(resetMessage.usage.credits).toBeUndefined();
+		expect(resetMessage.usage.premiumRequests).toBeUndefined();
+		// Token counts are context, not spend — compaction anchors depend on them.
+		expect(resetMessage.usage.input).toBe(100);
+		expect(resetMessage.usage.output).toBe(50);
+		expect(resetMessage.usage.totalTokens).toBe(165);
+		const sourceMessage = sourceManager.getEntries().find(entry => entry.type === "message");
+		if (sourceMessage?.type !== "message" || sourceMessage.message.role !== "assistant") {
+			throw new Error("expected source assistant message");
+		}
+		expect(sourceMessage.message.usage.cost.total).toBe(6);
+		expect(sourceMessage.message.usage.premiumRequests).toBe(2);
+		expect(await Bun.file(sourceFile).text()).toBe(sourceText);
+		await sourceManager.close();
+	});
+
+	for (const { name, createStorage, padding } of [
+		{ name: "buffered file", createStorage: () => new FileSessionStorage(), padding: "" },
+		{ name: "streamed file", createStorage: () => new FileSessionStorage(), padding: "x".repeat(8 * 1024 * 1024) },
+		{ name: "memory", createStorage: () => new MemorySessionStorage(), padding: "" },
+	]) {
+		it(`keeps independently loaded ${name} entries unchanged when the fork migrates and branches`, async () => {
+			using tempDir = TempDir.createSync("@omp-session-fork-ownership-");
+			const cwd = tempDir.path();
+			const sessionDir = path.join(cwd, "sessions");
+			const sourceFile = path.join(sessionDir, "source.jsonl");
+			const storage = createStorage();
+			const timestamp = new Date().toISOString();
+			const sourceText =
+				[
+					{ type: "session", version: 2, id: "legacy-source", timestamp, cwd },
+					{
+						type: "message",
+						id: "user",
+						parentId: null,
+						timestamp,
+						message: { role: "user", content: "source", timestamp: 1 },
+					},
+					{
+						type: "message",
+						id: "hook",
+						parentId: "user",
+						timestamp,
+						message: {
+							role: "hookMessage",
+							customType: "legacy",
+							content: padding || "legacy output",
+							display: true,
+							timestamp: 2,
+						},
+					},
+				]
+					.map(entry => JSON.stringify(entry))
+					.join("\n") + "\n";
+			await storage.writeText(sourceFile, sourceText);
+			const loadedBeforeFork = await loadEntriesFromFile(sourceFile, storage);
+			const forked = await SessionManager.forkFrom(sourceFile, cwd, path.join(cwd, "forks"), storage, {
+				suppressBreadcrumb: true,
+				copyArtifacts: false,
+			});
+			const migrated = forked.getEntries().find(entry => entry.id === "hook");
+			expect(migrated).toMatchObject({ type: "message", message: { role: "custom", customType: "legacy" } });
+			forked.branch("user");
+			forked.appendMessage({ role: "user", content: "fork-only continuation", timestamp: 3 });
+			expect(forked.buildSessionContext().messages).toMatchObject([
+				{ role: "user", content: "source" },
+				{ role: "user", content: "fork-only continuation" },
+			]);
+			await forked.close();
+			expect(loadedBeforeFork[0]).toMatchObject({ type: "session", version: 2 });
+			expect(loadedBeforeFork[2]).toMatchObject({ type: "message", message: { role: "hookMessage" } });
+			expect(loadedBeforeFork).toEqual(await loadEntriesFromFile(sourceFile, storage));
+			expect(await storage.readText(sourceFile)).toBe(sourceText);
+		});
+	}
+
+	it("pairs an unresolved tool call with an unknown-outcome result only when repair is requested", async () => {
+		using tempDir = TempDir.createSync("@omp-session-fork-repair-");
+		const cwd = path.join(tempDir.path(), "project");
+		const sessionDir = path.join(tempDir.path(), "sessions");
+		await fs.mkdir(sessionDir, { recursive: true });
+		const sourceFile = path.join(sessionDir, "source.jsonl");
+		const timestamp = new Date().toISOString();
+		const header: SessionHeader = {
+			type: "session",
+			version: CURRENT_SESSION_VERSION,
+			id: "live-parent",
+			timestamp,
+			cwd,
+		};
+		// Parent is mid-turn: the assistant emitted a tool call whose result was
+		// delivered only to the parent, so the forked tail is non-terminal.
+		const assistant = {
+			type: "message",
+			id: "m1",
+			parentId: null,
+			timestamp,
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "toolu_live", name: "bash", arguments: { command: "sleep 40" } }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude",
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+				usage: {
+					input: 10,
+					output: 5,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 15,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+			},
+		};
+		await Bun.write(sourceFile, `${JSON.stringify(header)}\n${JSON.stringify(assistant)}\n`);
+
+		const untouched = await SessionManager.forkFrom(
+			sourceFile,
+			cwd,
+			path.join(tempDir.path(), "untouched"),
+			undefined,
+			{
+				suppressBreadcrumb: true,
+			},
+		);
+		const untouchedEntries = await loadHistory(untouched.getSessionFile()!);
+		expect(collectPendingToolCalls(untouchedEntries).map(call => call.toolCallId)).toEqual(["toolu_live"]);
+
+		const repaired = await SessionManager.forkFrom(
+			sourceFile,
+			cwd,
+			path.join(tempDir.path(), "repaired"),
+			undefined,
+			{
+				suppressBreadcrumb: true,
+				repairInterruptedTail: true,
+			},
+		);
+		const repairedEntries = await loadHistory(repaired.getSessionFile()!);
+		expect(collectPendingToolCalls(repairedEntries)).toEqual([]);
+		const result = repairedEntries.find(
+			(entry): entry is SessionMessageEntry => entry.type === "message" && entry.message.role === "toolResult",
+		);
+		if (!result || result.message.role !== "toolResult") throw new Error("expected an unknown tool result");
+		expect(result.message.toolCallId).toBe("toolu_live");
+		expect(result.message.isError).toBe(true);
+		expect(result.message).not.toHaveProperty("details");
+		expect(
+			result.message.content.some(
+				block => block.type === "text" && block.text.includes("may still be running this tool"),
+			),
+		).toBe(true);
+	});
+
+	it("leaves an exited source's interrupted tail to resume recovery", async () => {
+		using tempDir = TempDir.createSync("@omp-session-fork-exited-");
+		const cwd = path.join(tempDir.path(), "project");
+		const sessionDir = path.join(tempDir.path(), "sessions");
+		await fs.mkdir(sessionDir, { recursive: true });
+		const sourceFile = path.join(sessionDir, "source.jsonl");
+		const timestamp = new Date().toISOString();
+		const entries = [
+			{ type: "session", version: CURRENT_SESSION_VERSION, id: "crashed-parent", timestamp, cwd },
+			{
+				type: "message",
+				id: "m1",
+				parentId: null,
+				timestamp,
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "toolu_crashed", name: "bash", arguments: { command: "make" } }],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "claude",
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+					usage: {
+						input: 10,
+						output: 5,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 15,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+				},
+			},
+			{
+				type: "custom",
+				id: "m2",
+				parentId: "m1",
+				timestamp,
+				customType: SESSION_EXIT_CUSTOM_TYPE,
+				data: { reason: "uncaughtException", kind: "fatal", recordedAt: timestamp },
+			},
+		];
+		await Bun.write(sourceFile, `${entries.map(entry => JSON.stringify(entry)).join("\n")}\n`);
+
+		const forked = await SessionManager.forkFrom(sourceFile, cwd, path.join(tempDir.path(), "fork"), undefined, {
+			suppressBreadcrumb: true,
+			repairInterruptedTail: true,
+		});
+		const branch = forked.getBranch();
+		expect(collectPendingToolCalls(branch).map(call => call.toolCallId)).toEqual(["toolu_crashed"]);
+		expect(describePendingToolCalls(branch)).toContain("toolu_crashed");
+		expect(createInterruptedTurnAbortMessage(branch)?.stopReason).toBe("aborted");
+		const [result] = createInterruptedToolResults(branch);
+		expect(result?.toolCallId).toBe("toolu_crashed");
+		expect(
+			result?.content.some(block => block.type === "text" && block.text.includes("Previous OMP process exited")),
+		).toBe(true);
+	});
+
+	it("retains the length-stop guard only when a call has no start marker", async () => {
+		using tempDir = TempDir.createSync("@omp-session-fork-length-repair-");
+		const cwd = path.join(tempDir.path(), "project");
+		const sessionDir = path.join(tempDir.path(), "sessions");
+		await fs.mkdir(sessionDir, { recursive: true });
+		const sourceFile = path.join(sessionDir, "source.jsonl");
+		const timestamp = new Date().toISOString();
+		const header: SessionHeader = {
+			type: "session",
+			version: CURRENT_SESSION_VERSION,
+			id: "length-limited-parent",
+			timestamp,
+			cwd,
+		};
+		const assistant = {
+			type: "message",
+			id: "m1",
+			parentId: null,
+			timestamp,
+			message: {
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "toolu_truncated",
+						name: "write",
+						arguments: { path: "partial.txt", content: "incomplete payload" },
+					},
+				],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude",
+				stopReason: "length",
+				timestamp: Date.now(),
+				usage: {
+					input: 10,
+					output: 5,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 15,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+			},
+		};
+		await Bun.write(sourceFile, `${JSON.stringify(header)}\n${JSON.stringify(assistant)}\n`);
+
+		const forked = await SessionManager.forkFrom(sourceFile, cwd, path.join(tempDir.path(), "fork"), undefined, {
+			suppressBreadcrumb: true,
+			repairInterruptedTail: true,
+		});
+		const branch = forked.getBranch();
+		expect(collectPendingToolCalls(branch)).toEqual([]);
+		const result = branch.find(
+			(entry): entry is SessionMessageEntry =>
+				entry.type === "message" &&
+				entry.message.role === "toolResult" &&
+				isSyntheticToolResultMessage(entry.message),
+		);
+		if (!result || !isSyntheticToolResultMessage(result.message)) {
+			throw new Error("expected a synthetic tool result for the truncated call");
+		}
+		expect(result.message.toolCallId).toBe("toolu_truncated");
+		expect(result.message.details).toMatchObject({ source: "assistant_stop_length", executed: false });
+		expect(
+			result.message.content.some(
+				block => block.type === "text" && block.text.includes("truncated and unsafe to run"),
+			),
+		).toBe(true);
+		const startedSourceFile = path.join(sessionDir, "started-source.jsonl");
+		const startedHeader = { ...header, id: "length-started-parent" };
+		const startMarker = {
+			type: "custom",
+			id: "m2",
+			parentId: "m1",
+			timestamp,
+			customType: TOOL_EXECUTION_START_CUSTOM_TYPE,
+			data: { toolCallId: "toolu_truncated", toolName: "write", startedAt: timestamp },
+		};
+		await Bun.write(
+			startedSourceFile,
+			`${JSON.stringify(startedHeader)}\n${JSON.stringify(assistant)}\n${JSON.stringify(startMarker)}\n`,
+		);
+		const startedFork = await SessionManager.forkFrom(
+			startedSourceFile,
+			cwd,
+			path.join(tempDir.path(), "started-fork"),
+			undefined,
+			{
+				suppressBreadcrumb: true,
+				repairInterruptedTail: true,
+			},
+		);
+		const startedEntries = await loadHistory(startedFork.getSessionFile()!);
+		expect(collectPendingToolCalls(startedEntries)).toEqual([]);
+		const startedResult = startedEntries.find(
+			entry =>
+				entry.type === "message" &&
+				entry.message.role === "toolResult" &&
+				entry.message.toolCallId === "toolu_truncated",
+		);
+		if (startedResult?.type !== "message" || startedResult.message.role !== "toolResult") {
+			throw new Error("expected the started length-stopped call to be paired");
+		}
+		expect(isSyntheticToolResultMessage(startedResult.message)).toBe(false);
+		expect(startedResult.message).not.toHaveProperty("details");
+		expect(
+			startedResult.message.content.some(
+				block => block.type === "text" && block.text.includes("may still be running this tool"),
+			),
+		).toBe(true);
+	});
+
+	it("repairs only the active branch when sibling paths contain assistants and results", async () => {
+		using tempDir = TempDir.createSync("@omp-session-fork-branch-repair-");
+		const cwd = path.join(tempDir.path(), "project");
+		const sessionDir = path.join(tempDir.path(), "sessions");
+		await fs.mkdir(sessionDir, { recursive: true });
+		const sourceFile = path.join(sessionDir, "source.jsonl");
+		const timestamp = new Date().toISOString();
+		const header: SessionHeader = {
+			type: "session",
+			version: CURRENT_SESSION_VERSION,
+			id: "branched-parent",
+			timestamp,
+			cwd,
+		};
+		const usage = {
+			input: 10,
+			output: 5,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 15,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		const activeAssistant = {
+			type: "message",
+			id: "active-assistant",
+			parentId: null,
+			timestamp,
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "toolu_active", name: "bash", arguments: { command: "sleep 40" } }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude",
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+				usage,
+			},
+		};
+		const siblingResult = {
+			type: "message",
+			id: "sibling-result",
+			parentId: "active-assistant",
+			timestamp,
+			message: {
+				role: "toolResult",
+				toolCallId: "toolu_active",
+				toolName: "bash",
+				content: [{ type: "text", text: "completed on abandoned branch" }],
+				isError: false,
+				timestamp: Date.now(),
+			},
+		};
+		const siblingAssistant = {
+			type: "message",
+			id: "sibling-assistant",
+			parentId: null,
+			timestamp,
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "toolu_sibling", name: "read", arguments: { path: "old.txt" } }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude",
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+				usage,
+			},
+		};
+		const activeLeaf = {
+			type: "message",
+			id: "active-leaf",
+			parentId: "active-assistant",
+			timestamp,
+			message: { role: "user", content: "continue on this branch", timestamp: Date.now() },
+		};
+		await Bun.write(
+			sourceFile,
+			`${JSON.stringify(header)}\n${JSON.stringify(activeAssistant)}\n${JSON.stringify(siblingResult)}\n${JSON.stringify(siblingAssistant)}\n${JSON.stringify(activeLeaf)}\n`,
+		);
+
+		const forked = await SessionManager.forkFrom(sourceFile, cwd, path.join(tempDir.path(), "fork"), undefined, {
+			suppressBreadcrumb: true,
+			repairInterruptedTail: true,
+		});
+		const branch = forked.getBranch();
+		expect(collectPendingToolCalls(branch)).toEqual([]);
+		const result = branch.find(
+			entry =>
+				entry.type === "message" &&
+				entry.message.role === "toolResult" &&
+				entry.message.toolCallId === "toolu_active",
+		);
+		if (result?.type !== "message" || result.message.role !== "toolResult") {
+			throw new Error("expected the active branch's unknown tool result");
+		}
+		expect(result.message).not.toHaveProperty("details");
+		expect(
+			result.message.content.some(
+				block => block.type === "text" && block.text.includes("may still be running this tool"),
+			),
+		).toBe(true);
+		expect(
+			(await loadHistory(forked.getSessionFile()!)).some(
+				entry =>
+					entry.type === "message" &&
+					isSyntheticToolResultMessage(entry.message) &&
+					entry.message.toolCallId === "toolu_sibling",
+			),
+		).toBe(false);
+	});
+
+	it("leaves an already-terminal tail with a completed tool call untouched when repair is requested", async () => {
+		using tempDir = TempDir.createSync("@omp-session-fork-terminal-");
+		const cwd = path.join(tempDir.path(), "project");
+		const sessionDir = path.join(tempDir.path(), "sessions");
+		await fs.mkdir(sessionDir, { recursive: true });
+		const sourceFile = path.join(sessionDir, "source.jsonl");
+		const timestamp = new Date().toISOString();
+		const header: SessionHeader = {
+			type: "session",
+			version: CURRENT_SESSION_VERSION,
+			id: "settled-parent",
+			timestamp,
+			cwd,
+		};
+		const assistant = {
+			type: "message",
+			id: "m1",
+			parentId: null,
+			timestamp,
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "toolu_done", name: "bash", arguments: { command: "echo hi" } }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude",
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+				usage: {
+					input: 10,
+					output: 5,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 15,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+			},
+		};
+		const toolResult = {
+			type: "message",
+			id: "m2",
+			parentId: "m1",
+			timestamp,
+			message: {
+				role: "toolResult",
+				toolCallId: "toolu_done",
+				toolName: "bash",
+				content: [{ type: "text", text: "hi" }],
+				isError: false,
+				timestamp: Date.now(),
+			},
+		};
+		await Bun.write(
+			sourceFile,
+			`${JSON.stringify(header)}\n${JSON.stringify(assistant)}\n${JSON.stringify(toolResult)}\n`,
+		);
+
+		const forked = await SessionManager.forkFrom(sourceFile, cwd, path.join(tempDir.path(), "fork"), undefined, {
+			suppressBreadcrumb: true,
+			repairInterruptedTail: true,
+		});
+		const forkedEntries = await loadHistory(forked.getSessionFile()!);
+		const messageEntries = forkedEntries.filter(entry => entry.type === "message");
+		expect(messageEntries).toHaveLength(2);
+		expect(collectPendingToolCalls(forkedEntries)).toEqual([]);
+		expect(forkedEntries.some(entry => entry.type === "message" && isSyntheticToolResultMessage(entry.message))).toBe(
+			false,
+		);
 	});
 });

@@ -3,7 +3,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { directoryIsEnterableSync, getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import { type BlobDestinationId, type BlobDestinationMetadata, BUILTIN_BLOB_DESTINATIONS } from "./destinations";
 import type { BlobPublication, BlobUploader, BlobUploadRequest } from "./publication";
 import { type DestinationRuntimeConfig, DestinationUnavailableError, optionString } from "./uploader-runtime";
@@ -21,13 +21,20 @@ const URL_PATTERN = /https?:\/\/\S+/g;
 /**
  * Quote-aware argv split for the command template. Supports single/double
  * quotes and backslash escapes outside single quotes — enough for uploader
- * command lines without invoking a shell.
+ * command lines without invoking a shell. On Windows a backslash is the path
+ * separator, so it only escapes a following quote (or whitespace outside
+ * quotes) and `C:\tools\upload.exe {file}` stays intact.
  */
-export function splitCommandTemplate(template: string): string[] {
+export function splitCommandTemplate(template: string, platform: NodeJS.Platform = process.platform): string[] {
 	const argv: string[] = [];
 	let current = "";
 	let started = false;
 	let quote: '"' | "'" | undefined;
+	const isEscape = (next: string): boolean => {
+		if (platform !== "win32") return true;
+		if (quote === '"') return next === '"';
+		return next === '"' || next === "'" || next === " " || next === "\t";
+	};
 	for (let i = 0; i < template.length; i++) {
 		const ch = template[i];
 		if (quote === "'") {
@@ -35,7 +42,7 @@ export function splitCommandTemplate(template: string): string[] {
 			else current += ch;
 			continue;
 		}
-		if (ch === "\\" && i + 1 < template.length) {
+		if (ch === "\\" && i + 1 < template.length && isEscape(template[i + 1])) {
 			current += template[++i];
 			started = true;
 			continue;
@@ -93,7 +100,11 @@ export function createCommandUploader(template: string): BlobUploader {
 				const argv = argvTemplate.map(arg =>
 					arg.replaceAll("{file}", file).replaceAll("{mime}", mimeType).replaceAll("{ext}", extension),
 				);
-				const proc = Bun.spawn(argv, { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+				const cwd = getProjectDir();
+				if (!directoryIsEnterableSync(cwd)) {
+					throw new Error(`Project directory is not accessible: ${cwd}`);
+				}
+				const proc = Bun.spawn(argv, { stdin: "ignore", stdout: "pipe", stderr: "pipe", cwd });
 				const timeout = setTimeout(() => proc.kill(), UPLOAD_TIMEOUT_MS);
 				const [stdout, stderr, exitCode] = await Promise.all([
 					new Response(proc.stdout as ReadableStream<Uint8Array>).text(),

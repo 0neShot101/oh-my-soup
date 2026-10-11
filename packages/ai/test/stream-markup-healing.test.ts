@@ -10,6 +10,8 @@ import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-comple
 import { stream } from "@oh-my-pi/pi-ai/stream";
 import type { Context, FetchImpl, Model, TextContent, ThinkingContent, Tool, ToolCall } from "@oh-my-pi/pi-ai/types";
 import { getStreamMarkupHealingPattern, StreamMarkupHealing } from "@oh-my-pi/pi-ai/utils/stream-markup-healing";
+import { stripDsmlToolMarkup } from "@oh-my-pi/pi-ai/utils/dsml-leak";
+import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
@@ -75,6 +77,26 @@ function chunk(model: string, delta: SseChoiceDelta, finish: SseChunk["choices"]
 		choices: [{ index: 0, delta, finish_reason: finish }],
 	};
 }
+
+it("preserves a parse-error sentinel through Kimi markup healing", async () => {
+	const model = kimiModel();
+	const raw = '{"path":"repaired.txt","content":"hello';
+	const text =
+		"<|tool_calls_section_begin|><|tool_call_begin|>functions.write:0<|tool_call_argument_begin|>" +
+		raw +
+		"<|tool_call_end|><|tool_calls_section_end|>";
+	const result = await streamOpenAICompletions(model, baseContext(), {
+		apiKey: "test-key",
+		fetch: mockFetch([chunk(model.id, { content: text }), chunk(model.id, {}, "stop"), "[DONE]"]),
+	}).result();
+	expect(result.stopReason).toBe("toolUse");
+	const call = result.content.find(block => block.type === "toolCall");
+	if (!call) throw new Error("Expected tool call");
+	expect(call.arguments).toEqual({ __parseError: expect.any(String), __rawJson: raw });
+	expect(() =>
+		validateToolArguments({ name: "write", description: "", parameters: { type: "object" } }, call),
+	).toThrow("Tool call arguments are not valid JSON");
+});
 
 const REPORTED_DSML_LEAK =
 	"<｜DSML｜tool_calls>\n" +
@@ -159,18 +181,31 @@ function mockNdjsonFetch(lines: ReadonlyArray<unknown>): FetchImpl {
 	const fn = async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> => ndjsonResponse(lines);
 	return Object.assign(fn, { preconnect: fetch.preconnect });
 }
+function healingModel(provider: string, id: string): Model<"ollama-chat"> {
+	return buildModel({
+		id,
+		api: "ollama-chat",
+		provider,
+		baseUrl: "http://localhost:11434",
+		name: id,
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128_000,
+		maxTokens: 16_384,
+	});
+}
 
 describe("StreamMarkupHealing pattern selection", () => {
 	it("routes tool-call leaks to their grammar and everything else to thinking", () => {
-		expect(getStreamMarkupHealingPattern("openrouter", "moonshotai/kimi-k2")).toBe("kimi");
-		expect(getStreamMarkupHealingPattern("ollama-cloud", "deepseek-v4-pro")).toBe("dsml");
-		expect(getStreamMarkupHealingPattern("nanogpt", "deepseek/deepseek-v4-pro")).toBe("dsml");
+		expect(getStreamMarkupHealingPattern(healingModel("openrouter", "moonshotai/kimi-k2"))).toBe("kimi");
+		expect(getStreamMarkupHealingPattern(healingModel("ollama-cloud", "deepseek-v4-pro"))).toBe("dsml");
+		expect(getStreamMarkupHealingPattern(healingModel("nanogpt", "deepseek/deepseek-v4-pro"))).toBe("dsml");
 		// Every other model heals leaked reasoning idioms by default.
-		expect(getStreamMarkupHealingPattern("opencode-zen", "minimax-m3")).toBe("thinking");
-		expect(getStreamMarkupHealingPattern("openrouter", "google/gemini-3.5-flash")).toBe("thinking");
-		expect(getStreamMarkupHealingPattern("ollama-cloud", "gpt-oss:120b")).toBe("thinking");
-		// A DeepSeek id on a non-DSML provider falls back to thinking, not the envelope grammar.
-		expect(getStreamMarkupHealingPattern("openai", "deepseek-v4-pro")).toBe("thinking");
+		expect(getStreamMarkupHealingPattern(healingModel("opencode-zen", "minimax-m3"))).toBe("thinking");
+		expect(getStreamMarkupHealingPattern(healingModel("openrouter", "google/gemini-3.5-flash"))).toBe("thinking");
+		expect(getStreamMarkupHealingPattern(healingModel("ollama-cloud", "gpt-oss:120b"))).toBe("thinking");
+		expect(getStreamMarkupHealingPattern(healingModel("openai", "deepseek-v4-pro"))).toBe("dsml");
 	});
 });
 
@@ -389,6 +424,38 @@ describe("StreamMarkupHealing DSML envelope pattern", () => {
 		expect(after.text).toBe("\nAfter");
 	});
 
+	it("keeps quoted prose after an unclosed wrapper with no invoke", () => {
+		const input =
+			"之前这些源的完整 `<｜DSML｜tool_calls>` 信封显示为纯文本，工具从不执行。\n\n## Next section\nmore text";
+		const healing = new StreamMarkupHealing({ pattern: "dsml" });
+		let visible = "";
+		for (let i = 0; i < input.length; i += 7) visible += healing.feed(input.slice(i, i + 7));
+		visible += healing.flushPending();
+		expect(visible).toBe(input);
+		expect(stripDsmlToolMarkup(visible)).toBeUndefined();
+		expect(healing.drainCompleted()).toEqual([]);
+	});
+
+	it("passes an unclosed, unquoted wrapper to leak recovery without losing later prose", () => {
+		const input = "Intro. <|DSML|tool_calls>broken call\n\nThe build passed.";
+		const healing = new StreamMarkupHealing({ pattern: "dsml" });
+		let visible = "";
+		for (let i = 0; i < input.length; i += 5) visible += healing.feed(input.slice(i, i + 5));
+		visible += healing.flushPending();
+		expect(stripDsmlToolMarkup(visible)).toBe("Intro.\n\nThe build passed.");
+		expect(healing.drainCompleted()).toEqual([]);
+	});
+
+	it("passes a closed wrapper without an invoke to leak recovery", () => {
+		const input = "Intro.<|DSML|tool_calls>broken</|DSML|tool_calls>Outro.";
+		const healing = new StreamMarkupHealing({ pattern: "dsml" });
+		let visible = "";
+		for (let i = 0; i < input.length; i += 6) visible += healing.feed(input.slice(i, i + 6));
+		visible += healing.flushPending();
+		expect(stripDsmlToolMarkup(visible)).toBe("Intro.\n\nOutro.");
+		expect(healing.drainCompleted()).toEqual([]);
+	});
+
 	it("drops partial calls when the stream ends mid-envelope", () => {
 		const healing = new StreamMarkupHealing({ pattern: "dsml" });
 		const truncated = REPORTED_DSML_LEAK.slice(0, REPORTED_DSML_LEAK.length - 30);
@@ -429,6 +496,42 @@ describe("StreamMarkupHealing DSML envelope pattern", () => {
 			),
 		).toBe("");
 		expect(healing.drainCompleted()).toHaveLength(1);
+	});
+
+	it("strips leaked orphan DSML close tags with no matching open (issue #10556)", () => {
+		// Long-session degradation: the model leaks bare closers into visible text.
+		// They must never survive into stored content, where replay reinforces the
+		// XML-protocol mimicry that drops subsequent tool calls.
+		const healing = new StreamMarkupHealing({ pattern: "dsml" });
+		const leaked = "分析文本。\n\n</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>";
+		const visible = healing.feed(leaked) + healing.flushPending();
+		expect(visible).toBe("分析文本。\n\n\n\n");
+		expect(healing.drainCompleted()).toHaveLength(0);
+	});
+
+	it("keeps a malformed call's closers so its removal stops before following prose", () => {
+		// A bare parameter opener (no tool_calls/invoke wrapper) cannot be healed.
+		// Its closers must survive as the call's end marker; stripping them as
+		// orphans would leave no boundary and the prose after would be lost.
+		const leaked =
+			'Intro.\nbash\n<｜DSML｜parameter name="command" string="true">echo hi</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>\nThe build passed.';
+		const healing = new StreamMarkupHealing({ pattern: "dsml" });
+		let visible = "";
+		for (let i = 0; i < leaked.length; i += 6) visible += healing.feed(leaked.slice(i, i + 6));
+		visible += healing.flushPending();
+		expect(visible).toBe(leaked);
+		expect(healing.drainCompleted()).toHaveLength(0);
+		expect(stripDsmlToolMarkup(visible)).toBe("Intro.\n\nThe build passed.");
+	});
+
+	it("preserves whitespace after orphan DSML closers split across chunk boundaries", () => {
+		const healing = new StreamMarkupHealing({ pattern: "dsml" });
+		const leaked = "text</｜DSML｜parameter> \n  </|DSML|invoke>\n\tmore";
+		let visible = "";
+		for (let i = 0; i < leaked.length; i += 5) visible += healing.feed(leaked.slice(i, i + 5));
+		visible += healing.flushPending();
+		expect(visible).toBe("text \n  \n\tmore");
+		expect(healing.drainCompleted()).toHaveLength(0);
 	});
 
 	it("heals a leaked thinking fence while still reconstructing the tool call", () => {
@@ -1053,7 +1156,7 @@ describe("OpenAI completions MiniMax thinking healing", () => {
 
 		expect(result.content).toEqual([
 			{ type: "text", text: "visible " },
-			{ type: "thinking", thinking: "hidden reasoning", thinkingSignature: undefined },
+			{ type: "thinking", thinking: "hidden reasoning", thinkingSignature: undefined, summary: false },
 			{ type: "text", text: " answer" },
 		]);
 	});

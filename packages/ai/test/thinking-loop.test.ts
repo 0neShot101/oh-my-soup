@@ -15,6 +15,7 @@ import {
 	ThinkingLoopDetector,
 	withThinkingLoopGuard,
 } from "@oh-my-pi/pi-ai/utils/thinking-loop";
+import { classifyModel } from "@oh-my-pi/pi-catalog/compat/taxonomy";
 import { isRetryableError } from "@oh-my-pi/pi-utils";
 
 function context(): Context {
@@ -229,6 +230,32 @@ function perFileTemplates(): string {
 		.join("\n\n");
 }
 
+/** A VRML scene drafted inside reasoning — the reported gemini-3.8-flash shape.
+ *  Per-part blocks share one keyword skeleton and differ only in numeric
+ *  literals, and the fence stays unclosed when the thought summary ends. */
+function vrmlDraft(parts: number): string {
+	const blocks = Array.from({ length: parts }, (_, i) =>
+		[
+			"    Transform {",
+			`      translation ${(i * 0.05).toFixed(2)} 0.1 ${(i % 2 ? -0.2 : 0.2).toFixed(1)}`,
+			"      children [",
+			"        Shape {",
+			"          appearance Appearance {",
+			"            material Material {",
+			`              diffuseColor 0.${i % 10} 0.${(i + 3) % 10} 0.${(i + 6) % 10}`,
+			"            }",
+			"          }",
+			"          geometry Sphere {",
+			`            radius 0.0${(i % 9) + 1}`,
+			"          }",
+			"        }",
+			"      ]",
+			"    },",
+		].join("\n"),
+	);
+	return `\`\`\`wrl\n#VRML V2.0 utf8\nTransform {\n  children [\n${blocks.join("\n")}\n\n`;
+}
+
 describe("ThinkingLoopDetector", () => {
 	test("trips on a tight near-duplicate paragraph loop via the trigram path", () => {
 		// High word-trigram overlap: the cluster check claims it before the lexical
@@ -301,6 +328,21 @@ describe("ThinkingLoopDetector", () => {
 		// letter or pictograph must never count as a loop.
 		const detector = new ThinkingLoopDetector();
 		expect(detector.push("00 ".repeat(200))).toBeNull();
+	});
+
+	test("does not trip on structurally repetitive code that differs only in literals", () => {
+		// Numbers are dropped during normalization, so code chunks reduce to the same
+		// keyword skeleton; code lines must stay out of the prose heuristics.
+		expect(feed(vrmlDraft(24), 97)).toBeNull();
+	});
+
+	test("judges a prose loop after an unclosed code draft as if the code were absent", () => {
+		// Gemini thought summaries often end inside an open fence; later prose must
+		// stay guarded rather than being swallowed as fenced code.
+		const loop = nearDuplicateLoop(12);
+		const detail = feed(loop);
+		expect(detail).not.toBeNull();
+		expect(feed(`${vrmlDraft(8)}${loop}`)).toBe(detail);
 	});
 
 	test("does not trip on short requested repetitive text", () => {
@@ -503,7 +545,12 @@ describe("thinking-loop guard (stream wrapper)", () => {
 
 describe("withThinkingLoopGuard (Vertex transport)", () => {
 	test("emits a retryable empty-content error for a looping Vertex Gemini stream", async () => {
-		const model = { api: "google-vertex", provider: "google-vertex", id: "gemini-2.5-pro" } as unknown as Model<Api>;
+		const model = {
+			api: "google-vertex",
+			provider: "google-vertex",
+			id: "gemini-2.5-pro",
+			identity: classifyModel("google-vertex", "gemini-2.5-pro"),
+		} as unknown as Model<Api>;
 		const partial = { role: "assistant", content: [] } as unknown as AssistantMessage;
 
 		const guarded = withThinkingLoopGuard(model, undefined, () => {
@@ -530,7 +577,12 @@ describe("withThinkingLoopGuard (Vertex transport)", () => {
 
 describe("withThinkingLoopGuard (thinking after toolcall)", () => {
 	test("trips on a thinking loop that continues after toolcall_start", async () => {
-		const model = { api: "openai-responses", provider: "xai-oauth", id: "grok-4.6" } as unknown as Model<Api>;
+		const model = {
+			api: "openai-responses",
+			provider: "xai-oauth",
+			id: "grok-4.6",
+			identity: classifyModel("xai-oauth", "grok-4.6"),
+		} as unknown as Model<Api>;
 		const partial = { role: "assistant", content: [] } as unknown as AssistantMessage;
 
 		const guarded = withThinkingLoopGuard(model, undefined, () => {
@@ -557,7 +609,12 @@ describe("withThinkingLoopGuard (thinking after toolcall)", () => {
 	});
 
 	test("re-arms thinking after thinking_end when more reasoning arrives after a tool call", async () => {
-		const model = { api: "openai-responses", provider: "xai-oauth", id: "grok-4.6" } as unknown as Model<Api>;
+		const model = {
+			api: "openai-responses",
+			provider: "xai-oauth",
+			id: "grok-4.6",
+			identity: classifyModel("xai-oauth", "grok-4.6"),
+		} as unknown as Model<Api>;
 		const partial = { role: "assistant", content: [] } as unknown as AssistantMessage;
 
 		const guarded = withThinkingLoopGuard(model, undefined, () => {
@@ -585,7 +642,12 @@ describe("withThinkingLoopGuard (thinking after toolcall)", () => {
 	});
 
 	test("does not re-arm thinking after visible answer text even if a tool call already started", async () => {
-		const model = { api: "openai-responses", provider: "xai-oauth", id: "grok-4.6" } as unknown as Model<Api>;
+		const model = {
+			api: "openai-responses",
+			provider: "xai-oauth",
+			id: "grok-4.6",
+			identity: classifyModel("xai-oauth", "grok-4.6"),
+		} as unknown as Model<Api>;
 		const partial = { role: "assistant", content: [] } as unknown as AssistantMessage;
 
 		const guarded = withThinkingLoopGuard(model, undefined, () => {
@@ -610,7 +672,12 @@ describe("withThinkingLoopGuard (thinking after toolcall)", () => {
 	});
 
 	test("does not latch thinking off on text_start before any visible answer text", async () => {
-		const model = { api: "openai-responses", provider: "xai-oauth", id: "grok-4.6" } as unknown as Model<Api>;
+		const model = {
+			api: "openai-responses",
+			provider: "xai-oauth",
+			id: "grok-4.6",
+			identity: classifyModel("xai-oauth", "grok-4.6"),
+		} as unknown as Model<Api>;
 		const partial = { role: "assistant", content: [] } as unknown as AssistantMessage;
 
 		const guarded = withThinkingLoopGuard(model, undefined, () => {
@@ -638,7 +705,7 @@ describe("withThinkingLoopGuard (thinking after toolcall)", () => {
 });
 
 describe("isLoopGuardedModel", () => {
-	test("guards Gemini, DeepSeek, and Grok model-id families only", () => {
+	test("guards models with Gemini, DeepSeek, and xAI structured identity", () => {
 		const gemini = createMockModel({ provider: "openrouter", id: "google/gemini-3.5-flash" }).model;
 		const deepseek = createMockModel({ provider: "deepseek", id: "deepseek-reasoner" }).model;
 		const grok46 = createMockModel({ provider: "venice", id: "grok-4-6" }).model;
@@ -654,6 +721,8 @@ describe("isLoopGuardedModel", () => {
 		expect(isLoopGuardedModel(gemini)).toBe(true);
 		expect(isLoopGuardedModel(deepseek)).toBe(true);
 		expect(isLoopGuardedModel(grok46)).toBe(true);
+		// Cursor's wrapped per-tier Grok ids carry structured xai identity
+		// (`taxonomy/xai.kdl` cursor-grok- prefix), so the guard applies.
 		expect(isLoopGuardedModel(cursorGrok46)).toBe(true);
 		expect(isLoopGuardedModel(grok460)).toBe(true);
 		expect(isLoopGuardedModel(grok45)).toBe(true);
@@ -679,6 +748,7 @@ describe("loop guard assistant prose/text loops", () => {
 			api: "openai-completions",
 			provider: "deepseek",
 			id: "deepseek-reasoner",
+			identity: classifyModel("deepseek", "deepseek-reasoner"),
 		} as unknown as Model<Api>;
 		const partial = { role: "assistant", content: [], stopReason: "stop" } as unknown as AssistantMessage;
 		const options = { loopGuard: { checkAssistantContent: true } };
@@ -713,6 +783,7 @@ describe("loop guard assistant prose/text loops", () => {
 			api: "openai-completions",
 			provider: "deepseek",
 			id: "deepseek-reasoner",
+			identity: classifyModel("deepseek", "deepseek-reasoner"),
 		} as unknown as Model<Api>;
 		const partial = { role: "assistant", content: [], stopReason: "stop" } as unknown as AssistantMessage;
 		const options = { loopGuard: { checkAssistantContent: false } };
@@ -787,7 +858,7 @@ describe("GeminiHeaderRunDetector", () => {
 	test("does not trip on a legitimate 10-header debugging block (regression)", () => {
 		// A real, productive debugging stretch emitted 10 distinct progressing headers; never interrupt that.
 		expect(feedHeaders(distinctPlanningRunaway(10))).toBe(false);
-		expect(feedHeaders(distinctPlanningRunaway(24))).toBe(true);
+		expect(feedHeaders(distinctPlanningRunaway(GEMINI_HEADER_RUNAWAY_THRESHOLD))).toBe(true);
 	});
 
 	test("counts headers across intervening paragraphs (one summary = one header)", () => {
@@ -833,10 +904,12 @@ describe("thinking-loop retry budget (result path)", () => {
 		try {
 			const mock = createMockModel({ provider: "openrouter", id: "google/gemini-3.5-flash" });
 			for (let i = 0; i < 4; i++) mock.push(loopResponse());
+			const attempts: AssistantMessage[] = [];
 
-			const result = await completeSimple(mock.model, context());
+			const result = await completeSimple(mock.model, context(), { onAttempt: message => attempts.push(message) });
 
 			expect(mock.calls).toHaveLength(3);
+			expect(attempts).toHaveLength(3);
 			expect(result.stopReason).toBe("error");
 			expect(result.content).toEqual([]);
 			expect(result.errorMessage).toContain(THINKING_LOOP_ERROR_MARKER);

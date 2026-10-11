@@ -1,33 +1,36 @@
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { ModelTokenizer } from "@oh-my-pi/pi-catalog/types";
-import { countTokens as countTokensNat, Encoding } from "@oh-my-pi/pi-natives";
-import { stringifyJson } from "@oh-my-pi/pi-utils";
+import * as natives from "@oh-my-pi/pi-natives";
+import { materializeString, stringifyJson } from "@oh-my-pi/pi-utils";
+import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { isEstimateCacheable, messageEstimateVersion } from "./compaction/message-cache";
+import { base64ImageSize, estimateImageContentTokens } from "./image-tokens";
 import type { AgentMessage } from "./types";
 
 const testEnv = Bun.env.NODE_ENV === "test";
 const accurate = process.env.PI_TOKENIZER_ACCURATE === "1" && !testEnv;
 
-const NATIVE_ENCODING: Record<ModelTokenizer, Encoding> = {
-	"claude-v3": Encoding.ClaudeV3,
-	"claude-v47": Encoding.ClaudeV47,
-	"claude-v5": Encoding.ClaudeV5,
-	"claude-v5-sonnet": Encoding.ClaudeV5Sonnet,
-	qwen3: Encoding.Qwen3,
-	"deepseek-v3": Encoding.DeepSeekV3,
-	"kimi-k2": Encoding.KimiK2,
-	glm5: Encoding.Glm5,
+const NATIVE_ENCODING: Record<ModelTokenizer, natives.Encoding> = {
+	"claude-v3": natives.Encoding.ClaudeV3,
+	"claude-v47": natives.Encoding.ClaudeV47,
+	"claude-v5": natives.Encoding.ClaudeV5,
+	"claude-v5-sonnet": natives.Encoding.ClaudeV5Sonnet,
+	qwen3: natives.Encoding.Qwen3,
+	"deepseek-v3": natives.Encoding.DeepSeekV3,
+	"kimi-k2": natives.Encoding.KimiK2,
+	glm5: natives.Encoding.Glm5,
 };
 
 /** Maps the catalog-resolved tokenizer family to its native implementation. */
-export function tokenizerEncodingForModel(model: Pick<Model, "tokenizer"> | null | undefined): Encoding | null {
+export function tokenizerEncodingForModel(model: Pick<Model, "tokenizer"> | null | undefined): natives.Encoding | null {
 	return model?.tokenizer ? NATIVE_ENCODING[model.tokenizer] : null;
 }
 
 /**
- * `strict` always pays for an exact native count (the catalog-resolved
- * tokenizer when known, o200k_base otherwise). `approximate` and
+ * `strict` always tries an exact native count (the catalog-resolved tokenizer
+ * when known, o200k_base otherwise), falling back to the byte upper bound when
+ * the loaded addon does not recognize that encoding. `approximate` and
  * `upperbound` prefer the same exact count for known tokenizer families or
  * when `PI_TOKENIZER_ACCURATE=1` is set; otherwise they use a cheap heuristic:
  * `approximate` a bytes/4 guess, `upperbound` the raw byte length (never
@@ -61,25 +64,73 @@ function sumFragments(text: string | string[], perFragment: (t: string) => numbe
 	return Array.isArray(text) ? text.reduce((sum, t) => sum + perFragment(t), 0) : perFragment(text);
 }
 
+interface NativeTokenCount {
+	tokens: number;
+	exact: boolean;
+}
+
+// Growing streamed text and large tool results must not evict the reusable
+// short fragments. Account for UTF-16 key storage plus a per-entry allowance.
+const NATIVE_CACHE_MAX_LENGTH = 16 * 1024;
+
+function countNativeFragment(
+	text: string,
+	encoding: natives.Encoding | null | undefined,
+	counts: LRUCache<string, number>,
+): number {
+	if (text.length > NATIVE_CACHE_MAX_LENGTH) return natives.countTokens(text, encoding);
+	const cached = counts.get(text);
+	if (cached !== undefined) return cached;
+	const tokens = natives.countTokens(text, encoding);
+	// Detach sliced strings so a small key cannot retain a much larger source.
+	counts.set(materializeString(text), tokens);
+	return tokens;
+}
+
+function countTokensNat(
+	text: string | string[],
+	encoding: natives.Encoding | null | undefined,
+	mode: TokenCountMode,
+	counts: LRUCache<string, number>,
+): NativeTokenCount {
+	try {
+		let tokens: number;
+		if (typeof text === "string") {
+			tokens = countNativeFragment(text, encoding, counts);
+		} else if (text.length > 0 && text.length < 16) {
+			// The native API sums independent fragments, not their concatenation.
+			// Keep its parallel batch path for arrays of 16 or more fragments.
+			tokens = 0;
+			for (const fragment of text) tokens += countNativeFragment(fragment, encoding, counts);
+		} else {
+			tokens = natives.countTokens(text, encoding);
+		}
+		return { tokens, exact: true };
+	} catch (error) {
+		if (
+			!(error instanceof Error) ||
+			(!error.message.includes("does not match any variant of enum") &&
+				!error.message.includes("unknown enum variant"))
+		) {
+			throw error;
+		}
+		const tokens = sumFragments(text, mode === "approximate" ? byteEstimate : byteLength);
+		return { tokens, exact: false };
+	}
+}
+
 /** Verdict from {@link Tokenizer.checkTokenBudget}. */
 export interface TokenBudgetCheck {
 	/** Whether the text fits the budget. */
 	fits: boolean;
 	/**
 	 * Token count behind the verdict: the exact native count when `exact` is
-	 * set, otherwise the cheap byte upper bound (which already fit, so it is
-	 * only an over-estimate of a count known to be under budget).
+	 * set, otherwise the conservative byte upper bound.
 	 */
 	tokens: number;
-	/** Whether the exact tokenizer had to run because the cheap bound busted. */
+	/** Whether `tokens` came from the exact native tokenizer. */
 	exact: boolean;
 }
-
-/**
- * Image content has no tokenizer representation; charge a fixed estimate
- * matching what providers typically bill for inline images.
- */
-const IMAGE_TOKEN_ESTIMATE = 1200;
 
 /**
  * Memoized estimates for one message under this tokenizer's encoding, split by
@@ -98,13 +149,22 @@ interface MessageEstimate {
  * Model-aware local token counter. Immutable: the catalog-resolved encoding
  * is fixed at construction, so a cached count can never straddle two
  * encodings. An `Agent` owns one for its active model (swapping the instance
- * when the model's encoding changes); one-shot flows construct their own for
- * the model that will be billed. Known tokenizer families use exact native
- * counts; unknown models keep the fast byte estimate (or o200k when
- * `PI_TOKENIZER_ACCURATE=1`).
+ * when the model's encoding or snapcompact frame pricing changes); one-shot
+ * flows construct their own for the model that will be billed. Known
+ * tokenizer families use exact native counts; unknown models keep the fast
+ * byte estimate (or o200k when `PI_TOKENIZER_ACCURATE=1`).
  */
 export class Tokenizer {
-	readonly #encoding: Encoding | null;
+	readonly #encoding: natives.Encoding | null;
+	readonly #frameBilling: snapcompact.FrameBilling;
+	readonly frameBillingKey: string;
+
+	/** Exact counts only; byte fallbacks remain mode-dependent and uncached. */
+	readonly #nativeCounts = new LRUCache<string, number>({
+		max: 256,
+		maxSize: 512 * 1024,
+		sizeCalculation: (_tokens, text) => text.length * 2 + 64,
+	});
 
 	/**
 	 * Per-message estimate memo. Keyed by message identity, deliberately not a
@@ -116,18 +176,21 @@ export class Tokenizer {
 	 */
 	#estimates = new WeakMap<AgentMessage, MessageEstimate>();
 
-	constructor(model?: Pick<Model, "tokenizer"> | null) {
+	constructor(model?: (Pick<Model, "tokenizer"> & snapcompact.ShapeTarget) | null) {
 		this.#encoding = tokenizerEncodingForModel(model);
+		this.#frameBilling = snapcompact.frameBilling(model ?? undefined);
+		this.frameBillingKey = snapcompact.frameBillingKey(this.#frameBilling);
 	}
 
-	get encoding(): Encoding | null {
+	get encoding(): natives.Encoding | null {
 		return this.#encoding;
 	}
 
 	countTokens(text: string | string[], mode: TokenCountMode = "approximate"): number {
-		if (mode === "strict") return countTokensNat(text, this.#encoding);
-		if (!testEnv && this.#encoding !== null) return countTokensNat(text, this.#encoding);
-		if (accurate) return countTokensNat(text);
+		if (mode === "strict") return countTokensNat(text, this.#encoding, mode, this.#nativeCounts).tokens;
+		if (!testEnv && this.#encoding !== null)
+			return countTokensNat(text, this.#encoding, mode, this.#nativeCounts).tokens;
+		if (accurate) return countTokensNat(text, undefined, mode, this.#nativeCounts).tokens;
 		return sumFragments(text, mode === "upperbound" ? byteLength : byteEstimate);
 	}
 
@@ -145,8 +208,8 @@ export class Tokenizer {
 	checkTokenBudget(text: string | string[], budget: number): TokenBudgetCheck {
 		const bound = sumFragments(text, byteLength);
 		if (bound <= budget) return { fits: true, tokens: bound, exact: false };
-		const tokens = this.countTokens(text, "strict");
-		return { fits: tokens <= budget, tokens, exact: true };
+		const result = countTokensNat(text, this.#encoding, "strict", this.#nativeCounts);
+		return { fits: result.tokens <= budget, tokens: result.tokens, exact: result.exact };
 	}
 
 	/**
@@ -155,7 +218,8 @@ export class Tokenizer {
 	 * Settled historical messages are counted once and reused until an owner
 	 * (prune/shake/strip-images) calls `invalidateMessageCache`; streaming
 	 * assistants bypass the memo entirely (see the message-cache settle-gate
-	 * invariant). Image blocks charge a fixed per-image estimate.
+	 * invariant). Image blocks charge {@link estimateImageContentTokens}, the
+	 * same dimension-based estimate the native remote-compaction probe applies.
 	 */
 	countMessage(message: AgentMessage, options?: MessageCountOptions): number {
 		const floored = options?.excludeEncryptedReasoning === true;
@@ -194,14 +258,22 @@ export class Tokenizer {
 		}
 
 		switch (message.role) {
-			case "user": {
-				const content: string | Array<{ type: string; text?: string }> = message.content;
+			case "user":
+			case "developer": {
+				// Both roles carry `string | (TextContent | ImageContent)[]` and both are
+				// sent to the provider -- convertMessageToLlm handles developer alongside
+				// user -- so they are counted alike. Without the developer case the switch
+				// fell through to `default: return 0`, and the old annotation narrowed the
+				// blocks to text-only, hiding the image charge the toolResult arm applies.
+				const content = message.content;
 				if (typeof content === "string") {
 					fragments.push(content);
 				} else if (Array.isArray(content)) {
 					for (const block of content) {
 						if (block.type === "text" && block.text) {
 							fragments.push(block.text);
+						} else if (block.type === "image") {
+							extra += estimateImageContentTokens(block);
 						}
 					}
 				}
@@ -241,6 +313,7 @@ export class Tokenizer {
 				}
 				break;
 			}
+			case "custom":
 			case "hookMessage":
 			case "toolResult": {
 				if (typeof message.content === "string") {
@@ -250,7 +323,7 @@ export class Tokenizer {
 						if (block.type === "text" && block.text) {
 							fragments.push(block.text);
 						} else if (block.type === "image") {
-							extra += IMAGE_TOKEN_ESTIMATE;
+							extra += estimateImageContentTokens(block);
 						}
 					}
 				}
@@ -263,11 +336,12 @@ export class Tokenizer {
 					if (message.blocks) {
 						for (const block of message.blocks) {
 							if (block.type === "text") fragments.push(block.text);
-							else extra += snapcompact.FRAME_TOKEN_ESTIMATE;
+							else extra += this.#frameTokens(block.data);
 						}
 					} else if (message.images) {
-						// Snapcompact frames render at ≥1568px; providers bill the downscaled cap.
-						extra += message.images.length * snapcompact.FRAME_TOKEN_ESTIMATE;
+						for (const image of message.images) {
+							extra += this.#frameTokens(image.data);
+						}
 					}
 				}
 				break;
@@ -278,5 +352,11 @@ export class Tokenizer {
 
 		if (fragments.length === 0) return extra;
 		return extra + this.countTokens(fragments);
+	}
+
+	/** One snapcompact frame at the active model's price for its pixel size; unreadable frames cost the ceiling. */
+	#frameTokens(data: string): number {
+		const size = base64ImageSize(data);
+		return size ? snapcompact.frameTokens(this.#frameBilling, size) : snapcompact.FRAME_TOKEN_ESTIMATE;
 	}
 }

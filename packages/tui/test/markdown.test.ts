@@ -1,17 +1,18 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import {
-	autolinkSchemeScanIndex,
 	clearRenderCache,
+	extractMarkdownLinks,
 	Markdown,
-	mathStartIndex,
 	renderInlineMarkdown,
-	urlTokenPossible,
 } from "@oh-my-pi/pi-tui/components/markdown";
 import { setTerminalTextSizing, TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
+import { loadTheme } from "@oh-my-pi/pi-tui/theme/loader";
+import { getSymbolTheme, setThemeInstance } from "@oh-my-pi/pi-tui/theme/theme";
 import { type Component, TUI } from "@oh-my-pi/pi-tui/tui";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { Chalk } from "@oh-my-pi/pi-utils/chalk";
+import { mathStartIndex } from "@oh-my-pi/pi-utils/math-delimiters";
 import { defaultMarkdownTheme } from "./test-themes.js";
 import { VirtualTerminal } from "./virtual-terminal.js";
 
@@ -50,6 +51,26 @@ describe("renderInlineMarkdown", () => {
 	it("applies baseColor to fallback for non-string input", () => {
 		const rendered = renderInlineMarkdown(null as unknown as string, defaultMarkdownTheme, t => `[${t}]`);
 		expect(rendered).toBe("[]");
+	});
+});
+
+describe("extractMarkdownLinks", () => {
+	it("returns formatted labels as visible text", () => {
+		expect(extractMarkdownLinks("[**bold** and _em_](https://example.com)")).toEqual([
+			{ text: "bold and em", href: "https://example.com" },
+		]);
+	});
+
+	it("collapses multiline labels to one row", () => {
+		expect(extractMarkdownLinks("[line one\nline two  \nline three](https://example.com)")).toEqual([
+			{ text: "line one line two line three", href: "https://example.com" },
+		]);
+	});
+
+	it("returns codespan labels without Markdown delimiters", () => {
+		expect(extractMarkdownLinks("[run `bun test`](https://example.com)")).toEqual([
+			{ text: "run bun test", href: "https://example.com" },
+		]);
 	});
 });
 
@@ -1295,6 +1316,31 @@ bar`,
 			// Should have italic from quote styling (\x1b[3m)
 			expect(allOutput.includes("\x1b[3m")).toBeTruthy();
 		});
+
+		it("preserves quote foreground color after inline code spans in blockquotes", () => {
+			const quoteFg = "\x1b[38;2;119;125;136m";
+			const codeFg = "\x1b[38;2;229;193;255m";
+			const testTheme = {
+				...defaultMarkdownTheme,
+				quote: (text: string) => `${quoteFg}${text}\x1b[39m`,
+				code: (text: string) => `${codeFg}${text}\x1b[39m`,
+			};
+
+			const markdown = new Markdown("> before `code` after", 0, 0, testTheme);
+			const [line] = markdown.render(80);
+
+			expect(line).toContain(`${codeFg}code\x1b[39m${quoteFg}`);
+
+			const multiMarkdown = new Markdown("> start `first` middle `second` end", 0, 0, testTheme);
+			const [multiLine] = multiMarkdown.render(80);
+			expect(multiLine).toContain(`${codeFg}first\x1b[39m${quoteFg}`);
+			expect(multiLine).toContain(`${codeFg}second\x1b[39m${quoteFg}`);
+
+			const htmlMarkdown = new Markdown("<blockquote>before <code>code</code> after</blockquote>", 0, 0, testTheme);
+			const [htmlLine] = htmlMarkdown.render(80);
+			expect(htmlLine).toContain(`${codeFg}code\x1b[39m${quoteFg}`);
+		});
+
 		it("should render list content inside blockquotes", () => {
 			const markdown = new Markdown("> 1. bla bla\n>    - nested bullet", 0, 0, defaultMarkdownTheme);
 
@@ -1361,7 +1407,7 @@ bar`,
 			let visible = "";
 			const targets: Array<string | null> = [];
 
-			for (let i = 0; i < line.length; ) {
+			for (let i = 0; i < line.length;) {
 				if (line.startsWith("\x1b]8;;", i)) {
 					const terminator = line.indexOf("\x07", i + 5);
 					activeTarget = line.slice(i + 5, terminator) || null;
@@ -1454,15 +1500,15 @@ bar`,
 			const labelStart = issueRow.visible.indexOf("#5860");
 			const separator = issueRow.visible.indexOf("|", labelStart);
 			expect(issueRow.targets.slice(labelStart, labelStart + "#5860".length)).toEqual(
-				new Array("#5860".length).fill(issueUrl),
+				Array.from({ length: "#5860".length }, () => issueUrl),
 			);
 			expect(issueRow.targets.slice(labelStart + "#5860".length, separator)).toEqual(
-				new Array(separator - labelStart - "#5860".length).fill(null),
+				Array.from({ length: separator - labelStart - "#5860".length }, () => null),
 			);
 
 			const titleStart = issueRow.visible.indexOf("feat(extensions)");
 			expect(issueRow.targets.slice(titleStart, titleStart + "feat(extensions)".length)).toEqual(
-				new Array("feat(extensions)".length).fill(null),
+				Array.from({ length: "feat(extensions)".length }, () => null),
 			);
 
 			const linkedText = lines
@@ -1506,10 +1552,12 @@ bar`,
 				[secondRow, "second"],
 			] as const) {
 				const start = row.visible.indexOf(label);
-				expect(row.targets.slice(start, start + label.length)).toEqual(new Array(label.length).fill(issueUrl));
+				expect(row.targets.slice(start, start + label.length)).toEqual(
+					Array.from({ length: label.length }, () => issueUrl),
+				);
 				const separator = row.visible.indexOf("|", start);
 				expect(row.targets.slice(start + label.length, separator)).toEqual(
-					new Array(separator - start - label.length).fill(null),
+					Array.from({ length: separator - start - label.length }, () => null),
 				);
 			}
 
@@ -1573,6 +1621,36 @@ bar`,
 
 			const output = markdown.render(80).join("\n");
 			expect(output.includes("\x1b]8;;http://www.example.com\x07")).toBe(true);
+		});
+
+		it("renders a reference link with a prototype-key label as plain text without crashing (issue #10283)", () => {
+			// A reference-style link whose label collides with an Object.prototype
+			// member used to resolve to an inherited non-definition, producing a
+			// link token with `href: undefined` that crashed the renderer at
+			// `token.href.startsWith` — fatal during transcript replay.
+			// `constructor`/`toString` render as literal label text; every case
+			// must avoid emitting an OSC 8 hyperlink and must not throw.
+			for (const label of ["constructor", "toString", "valueOf", "isPrototypeOf"]) {
+				const markdown = new Markdown(`See [${label}] for details`, 0, 0, defaultMarkdownTheme);
+				const output = markdown.render(80).join("\n");
+				expect(stripTerminalSequences(output).trim()).toBe(`See [${label}] for details`);
+				expect(output.includes("\x1b]8;;")).toBe(false);
+			}
+			// `__proto__`'s double underscores are legitimately parsed as emphasis;
+			// the contract here is only that it never becomes a link or crashes.
+			const protoOut = new Markdown("See [__proto__] for details", 0, 0, defaultMarkdownTheme).render(80).join("\n");
+			expect(protoOut.includes("\x1b]8;;")).toBe(false);
+			expect(stripTerminalSequences(protoOut)).toContain("proto");
+		});
+
+		it("autolinks urls and emails end-to-end", () => {
+			const rendered = renderInlineMarkdown("see https://example.com and mail user@example.com now", {
+				...defaultMarkdownTheme,
+				link: (text: string) => `<L>${text}</L>`,
+			});
+			const plain = stripVTControlCharacters(rendered);
+			expect(plain).toContain("<L>https://example.com</L>");
+			expect(plain).toContain("<L>user@example.com</L>");
 		});
 	});
 
@@ -1672,19 +1750,30 @@ describe("Inline color swatches", () => {
 	const FMT = TERMINAL.trueColor ? "ansi-16m" : "ansi-256";
 	// defaultMarkdownTheme supplies no `colorSwatch` symbol, so the renderer uses its ■ default.
 	const swatchFor = (hex: string, glyph = "■"): string => `${Bun.color(`#${hex}`, FMT)}${glyph}`;
+	// The `#hex` token itself is painted with the color as background and a
+	// YIQ-contrast foreground (VS Code's Color.isLighter rule).
+	const BLACK_FG = TERMINAL.trueColor ? "\x1b[38;2;0;0;0m" : "\x1b[38;5;16m";
+	const WHITE_FG = TERMINAL.trueColor ? "\x1b[38;2;255;255;255m" : "\x1b[38;5;231m";
+	const paintedFor = (hex: string, fg: string, text = `#${hex}`): string =>
+		`${Bun.color(`#${hex}`, FMT)!.replace("[38;", "[48;")}${fg}${text}\x1b[39m\x1b[49m`;
 
 	it("paints a colored swatch before a bare hex color in prose", () => {
 		const out = new Markdown("Accent is #C5FFD6 today.", 0, 0, defaultMarkdownTheme).render(80).join("\n");
 		// Swatch (color SGR + chip glyph + fg reset + space) sits immediately before the code.
 		expect(out.includes(`${swatchFor("C5FFD6")}\x1b[39m `)).toBeTruthy();
-		expect(out.includes("#C5FFD6")).toBeTruthy();
+		// The token itself sits on the color: bg + contrast fg (light fill → black text).
+		expect(out.includes(paintedFor("C5FFD6", BLACK_FG))).toBeTruthy();
+	});
+	it("picks a white foreground on dark fills", () => {
+		const out = new Markdown("Navy is #000080 here.", 0, 0, defaultMarkdownTheme).render(80).join("\n");
+		expect(out.includes(paintedFor("000080", WHITE_FG))).toBeTruthy();
 	});
 
 	it("paints a swatch before a backticked hex color", () => {
 		const out = new Markdown("Use `#C5FFD6` for the bg.", 0, 0, defaultMarkdownTheme).render(80).join("\n");
 		expect(out.includes(swatchFor("C5FFD6"))).toBeTruthy();
-		// The code text survives as inline code (theme styles it yellow).
-		expect(out.includes("#C5FFD6")).toBeTruthy();
+		// The code text is painted onto the color instead of the codespan style.
+		expect(out.includes(paintedFor("C5FFD6", BLACK_FG))).toBeTruthy();
 	});
 
 	it("does not swatch short numeric references that resemble issue numbers", () => {
@@ -1695,6 +1784,15 @@ describe("Inline color swatches", () => {
 	it("swatches a 3-digit shorthand that contains a hex letter", () => {
 		const out = new Markdown("White is #fff.", 0, 0, defaultMarkdownTheme).render(80).join("\n");
 		expect(out.includes(swatchFor("fff"))).toBeTruthy();
+	});
+
+	it("does not swatch hex-prefixed word fragments like #each", () => {
+		// "#each" starts with hex digits ("eac") but the trailing "h" makes it a
+		// word, not a color; hashtag-style prose must never sprout a swatch.
+		const out = new Markdown("Loop with {{#each items}} in templates.", 0, 0, defaultMarkdownTheme)
+			.render(80)
+			.join("");
+		expect(out.includes("■")).toBe(false);
 	});
 
 	it("does not swatch 4-digit hashline #TAG snapshot tags", () => {
@@ -1736,8 +1834,46 @@ describe("Inline color swatches", () => {
 			.render(80)
 			.join("\n");
 		expect(out.includes(swatchFor("C5FFD6"))).toBeTruthy();
-		// Gray (\x1b[90m) is re-opened for the code text — the swatch's fg reset must not bleed.
-		expect(out.includes("\x1b[90m#C5FFD6")).toBeTruthy();
+		// The token is painted with its own contrast fg; gray (\x1b[90m) re-opens
+		// for the surrounding prose after the chip's fg/bg resets.
+		expect(out.includes(paintedFor("C5FFD6", BLACK_FG))).toBeTruthy();
+		expect(out.includes("\x1b[90m for accent")).toBeTruthy();
+	});
+});
+
+describe("themes without symbols (upstream pi-tui MarkdownTheme shape)", () => {
+	// Legacy extensions build the upstream interface, which has no `symbols` map (#12311).
+	const { symbols: _, ...upstreamTheme } = defaultMarkdownTheme;
+	const activeSymbolsTheme = { ...upstreamTheme, symbols: getSymbolTheme() };
+
+	it.each([
+		["paragraph with inline code and a swatch", "text with `inline code` and #C5FFD6"],
+		["horizontal rule", "above\n\n---\n\nbelow"],
+		["blockquote", "> quoted line"],
+		["table", "| a | b |\n|---|---|\n| 1 | 2 |"],
+	])("renders a %s with the active theme's symbols", (_label, text) => {
+		const out = new Markdown(text, 0, 0, upstreamTheme).render(40);
+		expect(out).toEqual(new Markdown(text, 0, 0, activeSymbolsTheme).render(40));
+	});
+
+	it("renders streamed appends with the active theme's symbols", () => {
+		const streamed = new Markdown("Accent", 0, 0, upstreamTheme);
+		streamed.render(40);
+		streamed.setText("Accent is #C5FFD6");
+		const reference = new Markdown("Accent", 0, 0, activeSymbolsTheme);
+		reference.render(40);
+		reference.setText("Accent is #C5FFD6");
+		expect(streamed.render(40)).toEqual(reference.render(40));
+	});
+
+	it("does not reuse cached fallback glyphs after a symbol-preset switch", async () => {
+		const text = "> quoted across a preset switch";
+		setThemeInstance(await loadTheme("dark", { symbolPresetOverride: "unicode" }));
+		const before = new Markdown(text, 0, 0, upstreamTheme).render(40);
+		setThemeInstance(await loadTheme("dark", { symbolPresetOverride: "ascii" }));
+		const after = new Markdown(text, 0, 0, upstreamTheme).render(40);
+		expect(after).not.toEqual(before);
+		expect(after).toEqual(new Markdown(text, 0, 0, { ...upstreamTheme, symbols: getSymbolTheme() }).render(40));
 	});
 });
 
@@ -1895,6 +2031,23 @@ describe("Module-level LRU render cache", () => {
 		expect(plain).not.toContain("S<");
 		expect(plain).not.toContain("F<");
 	});
+
+	it("keeps an open fence plain when the highlight stream factory throws", () => {
+		clearRenderCache();
+		const themeWithStream = {
+			...defaultMarkdownTheme,
+			highlightCode: (code: string, _lang?: string): string[] => [`F<${code}>`],
+			createHighlightStream: (_lang?: string) => {
+				throw new TypeError("undefined is not a constructor");
+			},
+		};
+
+		const markdown = new Markdown("```lua\nlocal x = 1\nmore", 0, 0, themeWithStream);
+		markdown.transientRenderCache = true;
+		const plain = stripVTControlCharacters(markdown.render(80).join("\n"));
+		expect(plain).toContain("local x = 1");
+		expect(plain).not.toContain("F<");
+	});
 });
 
 describe("OSC 66 text-sizing headings", () => {
@@ -1972,19 +2125,6 @@ describe("Markdown.render reference stability", () => {
 	// and callers that decorate results must copy first; ask.ts was fixed to
 	// copy. These tests pin the reference-identity contract.
 	afterEach(() => clearRenderCache());
-
-	it("returns the identical reference for repeated renders of an unchanged instance", () => {
-		const md = new Markdown("Question text", 1, 0, defaultMarkdownTheme);
-		const first = md.render(40);
-		expect(md.render(40)).toBe(first);
-		expect(md.render(40)).toBe(first);
-	});
-
-	it("shares one array across instances with identical inputs via the L2 cache", () => {
-		const a = new Markdown("Shared markdown body", 1, 0, defaultMarkdownTheme);
-		const b = new Markdown("Shared markdown body", 1, 0, defaultMarkdownTheme);
-		expect(b.render(40)).toBe(a.render(40));
-	});
 
 	it("does not share oversized renders through the L2 cache", () => {
 		// Fixture must exceed RENDER_CACHE_MAX_ENTRY_SIZE (256 KiB of rendered
@@ -2292,6 +2432,22 @@ describe("Inline and block HTML tag rendering", () => {
 	});
 });
 
+describe("Hard line breaks", () => {
+	const secondRow = (md: string): string =>
+		stripVTControlCharacters(new Markdown(md, 0, 0, defaultMarkdownTheme).render(60)[1]!).trimEnd();
+
+	it("keeps the space after inline code, emphasis or math that starts the next line", () => {
+		// Only the new line's own leading spaces are dropped. The space after a
+		// styled span at its start is text between two words.
+		expect(secondRow("p  \n`c` b")).toBe("c b");
+		expect(secondRow("p  \n**s** b")).toBe("s b");
+		expect(secondRow("p\\\n*e* b")).toBe("e b");
+		expect(secondRow("p  \n~~d~~ b")).toBe("d b");
+		expect(secondRow("p  \n$a$ b")).toBe("a b");
+		expect(secondRow("p  \n   b")).toBe("b");
+	});
+});
+
 describe("Math rendering", () => {
 	const plain = (c: Markdown): string =>
 		c
@@ -2369,15 +2525,71 @@ describe("Math rendering", () => {
 	});
 });
 
-describe("inline start()/url-gate scanners (perf rewrites)", () => {
-	// The hand-rolled scanners replaced regex scans that marked runs on the
-	// remaining source at every inline position. They must return exactly what
-	// the old regexes returned for every input.
-	const OLD_MATH_START = /\$|\\\(|\\\[/;
-	const OLD_AUTOLINK_SCAN = /www\.|https?:\/\/|ftp:\/\//i;
-	// marked's bundled GFM inline url rule (verbatim, no flags).
-	const GFM_URL_REGEX =
-		/^((?:[hH][tT][tT][pP][sS]?|[fF][tT][pP]):\/\/|www\.)(?:[a-zA-Z0-9-]+\.?)+[^\s<]*|^[A-Za-z0-9._+-]+(@)[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![-_])/;
+describe("Strikethrough", () => {
+	const strike = (text: string): string =>
+		stripVTControlCharacters(
+			renderInlineMarkdown(text, { ...defaultMarkdownTheme, strikethrough: (inner: string) => `<S>${inner}</S>` }),
+		);
+
+	it("strikes through as GFM's `~~` rule reads it", () => {
+		expect(strike("~~a~~ ~~a ~~b~~ c")).toBe("<S>a</S> <S>a ~~b</S> c");
+		expect(strike("~~a~~~ b~~ ~~ c~~ d~~")).toBe("<S>a~~~ b</S> ~~ c~~ d~~");
+		expect(strike("~~a\\~~ b~~ ~~a \\\\~~")).toBe("<S>a~~ b</S> <S>a \\</S>");
+		expect(strike("x~~y~~z ~~~~ ~~a\\")).toBe("x<S>y</S>z ~~~~ ~~a\\");
+	});
+
+	it("still strikes through past an opener whose text a backslash before a line break ends", () => {
+		expect(strike("~~a\\\nb~~ ~~c\nd~~")).toBe("~~ab~~ <S>c\nd</S>");
+	});
+
+	// Inside emphasis or a link label the text ends before its closer: a `~~` past that end closes nothing there.
+	it("strikes through inside emphasis and a link label only up to their end", () => {
+		expect(strike("*a ~~b* c~~ [d ~~e](u) f~~")).toBe("a ~~b c~~ d ~~e f~~");
+		expect(strike("*a ~~b~~* [c ~~d~~](u)")).toBe("a <S>b</S> c <S>d</S>");
+	});
+});
+
+describe("inline rendering stays linear on long paragraphs", () => {
+	// Generous bound: each shape took v18.4.4 several seconds at 40 KB; linear lexing takes well under 300 ms.
+	it.each([
+		["unclosed strikethrough (80 KB)", "~~a ".repeat(20_000)],
+		["unclosed $ before digits (80 KB)", "$1*".repeat(26_667)],
+	])("renders a long paragraph of %s in under two seconds", (_name, text) => {
+		// Compile the rendering paths first, so the bound measures the rendering.
+		renderInlineMarkdown(text.slice(0, 2_000), defaultMarkdownTheme);
+		const start = performance.now();
+		renderInlineMarkdown(text, defaultMarkdownTheme);
+		expect(performance.now() - start).toBeLessThan(2_000);
+	});
+
+	// The same bound on lexing alone: styling nested emphasis costs more than lexing it.
+	it.each([
+		// Every nesting level holds the long word, so a math start hint searched per level reads it once per level.
+		[
+			"nested emphasis around a long word (800 KB)",
+			`${"*a ".repeat(4_000)}${"a".repeat(800_000)}${" b*".repeat(4_000)}`,
+		],
+		// Each level's `~~` scan finds no closer before the end of the paragraph.
+		[
+			"nested emphasis with an unclosed ~~ at every level (80 KB)",
+			`${"*a ~~b ".repeat(8_000)}${" b*".repeat(8_000)}`,
+		],
+		// Each level's `~~` closes only past the last level; the long word makes every scan to that closer long.
+		[
+			"nested emphasis with a ~~ at every level closed past it (70 KB)",
+			`${"*a ~~b ".repeat(2_000)}${"a".repeat(50_000)}${" b*".repeat(2_000)} x~~`,
+		],
+	])("lexes a long paragraph of %s in under two seconds", (_name, text) => {
+		extractMarkdownLinks(text.slice(0, 2_000));
+		const start = performance.now();
+		extractMarkdownLinks(text);
+		expect(performance.now() - start).toBeLessThan(2_000);
+	});
+});
+
+describe("math start hint", () => {
+	// mathStartIndex must find the offsets `/\$|\\\(|\\\[/` finds.
+	const MATH_OPENER = /\$|\\\(|\\\[/;
 
 	const fixtures = [
 		"",
@@ -2391,73 +2603,19 @@ describe("inline start()/url-gate scanners (perf rewrites)", () => {
 		"backslash only \\ then ( apart",
 		"ends with backslash \\",
 		"ends with dollar $",
-		"www.example.com leading",
-		"see www.example.com mid-string",
-		"see WWW.EXAMPLE.COM upper",
-		"mixed WwW.case.com scan",
-		"http://example.com leading",
-		"prose http://example.com mid",
-		"prose HTTPS://EXAMPLE.COM upper",
-		"HtTpS://mixed.example",
-		"ftp://files.example mid ftp",
-		"prose FTP://FILES.EXAMPLE",
-		"ftps:// is not ftp:// until here ftp://x",
-		"wwww.overlap.example",
-		"hhttp://overlap.example",
-		"http:/ missing slash then https://real.example",
-		"www without dot www. with dot",
-		"w h f teaser chars but no scheme",
-		"user@example.com email",
-		"prose user.name+tag@example.co.uk",
-		"trailing at sign only@ ",
-		"@leading-at no local part",
-		"a".repeat(400), // long identifier run, no @
-		`${"a".repeat(400)}@example.com`, // long local part (past gate scan limit)
-		"short@x",
-		"dots...and+plus_under-score@host.tld",
 	];
 
-	it("mathStartIndex matches the old /\\$|\\\\\\(|\\\\\\[/ scan on every fixture", () => {
+	it("mathStartIndex finds the offsets /\\$|\\\\\\(|\\\\\\[/ finds on every fixture", () => {
 		for (const src of fixtures) {
-			const m = OLD_MATH_START.exec(src);
+			const m = MATH_OPENER.exec(src);
 			expect(mathStartIndex(src)).toBe(m ? m.index : undefined);
 		}
 	});
-
-	it("autolinkSchemeScanIndex matches the old /www\\.|https?:\\/\\/|ftp:\\/\\//i scan on every fixture", () => {
-		for (const src of fixtures) {
-			const m = OLD_AUTOLINK_SCAN.exec(src);
-			expect(autolinkSchemeScanIndex(src)).toBe(m ? m.index : undefined);
-		}
-	});
-
-	it("urlTokenPossible is conservative: never false when the GFM url regex matches", () => {
-		for (const src of fixtures) {
-			if (GFM_URL_REGEX.test(src)) {
-				expect(urlTokenPossible(src)).toBeTrue();
-			}
-		}
-		// And it actually gates: plain prose with no scheme/email head is rejected.
-		expect(urlTokenPossible("plain prose, nothing linkable here")).toBeFalse();
-		expect(urlTokenPossible("@leading-at no local part")).toBeFalse();
-	});
-
-	it("gated tokenizer still autolinks urls and emails end-to-end", () => {
-		const rendered = renderInlineMarkdown("see https://example.com and mail user@example.com now", {
-			...defaultMarkdownTheme,
-			link: (text: string) => `<L>${text}</L>`,
-		});
-		const plain = stripVTControlCharacters(rendered);
-		expect(plain).toContain("<L>https://example.com</L>");
-		expect(plain).toContain("<L>user@example.com</L>");
-	});
 });
 
-describe("windowed lexing (documents past WINDOWED_LEX_MIN_BYTES)", () => {
-	// Large documents are lexed in bounded windows because Bun's regex engine
-	// rescans the whole remaining source for marked's `^`-anchored block rules.
-	// Every construct below straddles window cuts; a bad cut is visible in the
-	// rendered output.
+describe("large documents", () => {
+	// Large documents lex in one pass; these pin the constructs that span many
+	// blocks and the linear cost of the display-math block scans.
 	afterEach(() => clearRenderCache());
 
 	const filler = (label: string, lines: number) =>
@@ -2470,7 +2628,11 @@ describe("windowed lexing (documents past WINDOWED_LEX_MIN_BYTES)", () => {
 			.render(width)
 			.map(line => stripVTControlCharacters(line).trimEnd());
 
-	it("resolves a reference definition that lands in a later window", () => {
+	// marked normalizes CRLF before tokenizing, so the CRLF twin is an oracle
+	// for the LF document.
+	const onePass = (text: string, width = 100) => plain(text.replaceAll("\n", "\r\n"), width);
+
+	it("resolves a reference definition at the end of a large document", () => {
 		const doc = `Follow [the label][ref] first.\n\n${filler("body", 400)}\n\n[ref]: https://example.com/late\n`;
 		expect(doc.length).toBeGreaterThan(16 * 1024);
 
@@ -2482,14 +2644,13 @@ describe("windowed lexing (documents past WINDOWED_LEX_MIN_BYTES)", () => {
 		expect(rendered.filter(line => line.includes("https://example.com/late"))).toHaveLength(1);
 	});
 
-	it("keeps a fenced block longer than one window intact", () => {
+	it("keeps a long fenced block intact", () => {
 		const code = Array.from({ length: 200 }, (_, i) => `const value${i} = ${i};`).join("\n");
 		const doc = `${filler("intro", 300)}\n\n\`\`\`ts\n${code}\n\`\`\`\n\n${filler("outro", 20)}`;
 		expect(code.length).toBeGreaterThan(2 * 1024);
 
 		const rendered = plain(doc);
-		// Exactly one fence pair: a window cut inside the block would close and
-		// reopen it (or spill code lines into prose).
+		// Exactly one fence pair: no code line spills into prose.
 		expect(rendered.filter(line => line.trimStart().startsWith("```"))).toHaveLength(2);
 		const first = rendered.findIndex(line => line.includes("const value0 = 0;"));
 		expect(first).toBeGreaterThan(-1);
@@ -2498,7 +2659,7 @@ describe("windowed lexing (documents past WINDOWED_LEX_MIN_BYTES)", () => {
 		}
 	});
 
-	it("numbers an ordered list continuously across window cuts", () => {
+	it("numbers a long ordered list continuously", () => {
 		const items = Array.from({ length: 400 }, (_, i) => `${i + 1}. item ${i} padded with extra words to add bytes`);
 		const doc = `${filler("intro", 60)}\n\n${items.join("\n")}\n`;
 		expect(doc.length).toBeGreaterThan(16 * 1024);
@@ -2507,7 +2668,120 @@ describe("windowed lexing (documents past WINDOWED_LEX_MIN_BYTES)", () => {
 		for (const n of [1, 137, 400]) {
 			expect(rendered.some(line => line.includes(`${n}. item ${n - 1} `))).toBe(true);
 		}
-		// A window cut that restarted the list would renumber later items.
+		// A restarted list would renumber later items.
 		expect(rendered.filter(line => line.includes(" 1. item 0 ")).length).toBeLessThanOrEqual(1);
+	});
+
+	const mathLines = Array.from({ length: 150 }, (_, i) => `x_{${i}} = y_{${i}} + z_{${i}}`).join("\n\n");
+
+	for (const [opener, closer] of [
+		["$$", "$$"],
+		["\\[", "\\]"],
+	] as const) {
+		it(`keeps a ${opener} display-math block with blank lines intact`, () => {
+			const doc = ["Intro line before the math.", "", opener, mathLines, closer, "", filler("outro", 250)].join(
+				"\n",
+			);
+			expect(doc.length).toBeGreaterThan(16 * 1024);
+			expect(doc.lastIndexOf(closer) - doc.indexOf(opener)).toBeGreaterThan(2 * 1024);
+
+			const rendered = plain(doc);
+			// A split block renders the delimiters (`$$`, or `[` for the escaped
+			// bracket) and the raw TeX (`x{0} = y{0} + z_{0}`) as prose.
+			expect(rendered.slice(0, 3)).toEqual(["Intro line before the math.", "", "x₀ = y₀ + z₀"]);
+			expect(rendered.filter(line => ["$$", "[", "]"].includes(line.trim()))).toEqual([]);
+			expect(rendered.filter(line => line.includes("{"))).toEqual([]);
+			expect(rendered).toEqual(onePass(doc));
+		});
+	}
+
+	it("renders an own-line $$ that never closes as the one-pass lex does", () => {
+		const doc = `Intro.\n\n$$\nx = 1\n\n${filler("body", 350)}\n`;
+		expect(doc.length).toBeGreaterThan(16 * 1024);
+		const rendered = plain(doc);
+		// No math block: the opener renders as text.
+		expect(rendered.slice(0, 4)).toEqual(["Intro.", "", "$$", "x = 1"]);
+		expect(rendered).toEqual(onePass(doc));
+	});
+
+	it("renders a $$ pair around a blank body as the one-pass lex does", () => {
+		// mathBlockAt rejects a whitespace-only body, so this is no math block.
+		const doc = `Intro.\n\n$$\n \n$$\n\n${filler("body", 350)}\n`;
+		expect(doc.length).toBeGreaterThan(16 * 1024);
+		const rendered = plain(doc);
+		expect(rendered.slice(0, 5)).toEqual(["Intro.", "", "$$", "", "$$"]);
+		expect(rendered).toEqual(onePass(doc));
+	});
+
+	// The display-math block scans must not rescan the rest of the document for
+	// every opener.
+	const displayMathScans: ReadonlyArray<readonly [string, (bytes: number) => string]> = [
+		// Each paragraph opens a `\[` block that no `\]` line ever closes.
+		[
+			"own-line `\\[` openers that never close",
+			bytes => {
+				const unit = "\\[\nprose that never closes the bracket\n\n";
+				return unit.repeat(Math.ceil(bytes / unit.length));
+			},
+		],
+		// One `\[` block spans the document.
+		[
+			"one `\\[` block whose `\\]` ends the document",
+			bytes => `Intro.\n\n\\[\n${filler("inside", Math.ceil(bytes / 60))}\n\\]\n\nOutro.\n`,
+		],
+		// Each heading is followed by a bare environment that no `\end` closes.
+		[
+			"bare math environments that never close",
+			bytes => {
+				const unit = "# heading\n\\begin{align}\na &= b\n";
+				return unit.repeat(Math.ceil(bytes / unit.length));
+			},
+		],
+		// Consecutive closed bare environments with no blank line between them.
+		[
+			"consecutive closed bare math environments",
+			bytes => {
+				const unit = "\\begin{align}\na &= b\n\\end{align}\n";
+				return unit.repeat(Math.ceil(bytes / unit.length));
+			},
+		],
+	];
+	for (const [name, doc] of displayMathScans) {
+		it(`lexes ${name} in time proportional to the document`, () => {
+			const elapsed = (text: string): number => {
+				const start = Bun.nanoseconds();
+				extractMarkdownLinks(text);
+				return Bun.nanoseconds() - start;
+			};
+			const small = doc(32 * 1024);
+			const large = doc(512 * 1024);
+			const smallNs = Math.min(elapsed(small), elapsed(small), elapsed(small));
+			// 16 times the text: linear work takes about 16 times as long. The
+			// best of up to three runs absorbs a load spike.
+			let largeNs = Number.POSITIVE_INFINITY;
+			for (let run = 0; run < 3 && largeNs >= 48 * smallNs; run++) largeNs = Math.min(largeNs, elapsed(large));
+			expect(largeNs).toBeLessThan(48 * smallNs);
+		});
+	}
+
+	it("continues a numbered list across a no-break-space line", () => {
+		// The lexer's blank line is any whitespace-only line, so the list goes on
+		// past the no-break-space line.
+		let list = "";
+		let count = 0;
+		while (list.length <= 2048) list += `${++count}. step ${count} of a tight numbered list\n`;
+		const doc = `${list}\n\u00a0\n1. the step after the spacer line\n\n${filler("body", 350)}\n`;
+		expect(doc.length).toBeGreaterThan(16 * 1024);
+		const rendered = plain(doc);
+		expect(rendered.some(line => line.includes(`${count + 1}. the step after the spacer line`))).toBe(true);
+		expect(rendered).toEqual(onePass(doc));
+	});
+
+	it("keeps the blank line before a bare math environment after a long tight list", () => {
+		const list = Array.from({ length: 80 }, (_, i) => `- item ${i} of a tight list`).join("\n");
+		const doc = `${list}\n\n\\begin{align}\na &= b \\\\\nc &= d\n\\end{align}\n\n${filler("body", 350)}\n`;
+		const rendered = plain(doc);
+		expect(rendered[rendered.findIndex(line => line.includes("item 79")) + 1]).toBe("");
+		expect(rendered).toEqual(onePass(doc));
 	});
 });

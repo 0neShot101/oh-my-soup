@@ -28,8 +28,9 @@ import {
 	type SimpleStreamOptions,
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
+import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
+import { clampThinkingLevelForModel, getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import {
 	calculateCost,
 	getBundledModel,
@@ -89,6 +90,20 @@ export function clampThinkingLevel<TApi extends Api>(model: Model<TApi>, level: 
 }
 
 /**
+ * Enumerate the thinking levels a model supports, mirroring historical pi-ai's
+ * `getSupportedThinkingLevels` (`@earendil-works/pi-ai` `models.ts`). Upstream
+ * returns `["off"]` for non-reasoning models and, for reasoning models, `off`
+ * followed by each selectable effort in canonical order; OMP's baked
+ * `getSupportedEfforts` supplies that effort ladder directly. Legacy `/thinking`
+ * menus (e.g. `@companion-ai/feynman`) call this to list the levels a user may
+ * pick for the active model.
+ */
+export function getSupportedThinkingLevels<TApi extends Api>(model: Model<TApi>): (Effort | "off")[] {
+	if (!model.reasoning) return ["off"];
+	return ["off", ...getSupportedEfforts(model)];
+}
+
+/**
  * Provider-error classification patterns ported verbatim from historical pi-ai
  * (`@earendil-works/pi-ai` `utils/retry.ts`). Legacy extensions call
  * {@link isRetryableAssistantError} to decide whether to restart a failed
@@ -129,6 +144,20 @@ export { calculateCost, getBundledModel, getBundledModels, getBundledProviders, 
 export const getModel = getBundledModel;
 export const getModels = getBundledModels;
 
+const ANTHROPIC_MESSAGES_API = {
+	stream: streamAnthropic,
+	streamSimple: (model: Model<"anthropic-messages">, context: Context, options?: SimpleStreamOptions) =>
+		streamSimple(model, context, options),
+};
+
+/**
+ * Expose OMP's Anthropic transport through the legacy `/compat` provider
+ * factory used by extensions such as `pi-background-tasks`.
+ */
+export function anthropicMessagesApi() {
+	return ANTHROPIC_MESSAGES_API;
+}
+
 /**
  * Stream OpenAI Responses through the historical simple-options contract.
  *
@@ -154,12 +183,15 @@ export function streamSimpleOpenAIResponses(
  * legacy extensions importing it from the pi-ai root resolving through Bun's
  * static named-export check (e.g. `omp plugin install pi-blackhole`).
  *
- * This is the full set derived from an audit of the upstream root surface: the
- * error-classification predicate `isContextOverflow` (now under
- * `@oh-my-pi/pi-ai/error`) and the JSON-repair helpers that omp relocated to
- * `@oh-my-pi/pi-utils`. Upstream root symbols with no omp equivalent are
- * intentionally not shimmed — the package has diverged and there is nothing to
- * forward.
+ * The error-classification predicate `isContextOverflow` (now under
+ * `@oh-my-pi/pi-ai/error`) and the JSON-repair helpers (relocated to
+ * `@oh-my-pi/pi-utils`) still exist in the host graph and are re-exported.
+ * Upstream pi-ai 1.x additionally exposes a transcript-replay module
+ * (`src/utils/transcript.ts`, present since at least 1.0.2) that omp's fork
+ * predates and has no equivalent of anywhere; that family is ported verbatim
+ * in `legacy-pi-transcript.ts` (observed consumer:
+ * `pi-optchat` importing `getCurrentSystemMessage`).
  */
 export { isContextOverflow } from "@oh-my-pi/pi-ai/error";
 export { parseJsonWithRepair, parseStreamingJson, repairJson } from "@oh-my-pi/pi-utils";
+export * from "./legacy-pi-transcript";

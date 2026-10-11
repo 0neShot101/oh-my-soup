@@ -138,15 +138,12 @@ describe("issue #6276 — Amazon Bedrock guardrails", () => {
 		});
 	});
 	it("maps transport guardrails into the Bedrock provider options", async () => {
-		const controller = new AbortController();
-		controller.abort();
 		const { promise, resolve } = Promise.withResolvers<GuardrailPayload>();
 		const stream = streamSimple(model(), context, {
 			guardrailIdentifier: "arn:aws:bedrock:eu-west-1:123456789012:guardrail/abcd1234",
 			guardrailVersion: "7",
 			guardrailTrace: "enabled_full",
 			providerOptions: { bearerToken: "test-token" },
-			signal: controller.signal,
 			fetch: async () => new Response(new Uint8Array(), { status: 200 }),
 			onPayload: payload => {
 				resolve(payload as GuardrailPayload);
