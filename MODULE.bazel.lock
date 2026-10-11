@@ -503,7 +503,7 @@
           "REPO_MAPPING:rules_rust+,bazel_tools bazel_tools",
           "REPO_MAPPING:rules_rust+,rules_cc rules_cc+",
           "FILE:@@//Cargo.lock a8c6dafdc20a15b44aceeaf6d737735e749f0db93e07f29bce58dad82468e80f",
-          "FILE:@@//Cargo.toml 4a56ff2898853fbb5435e6cda784c199519c5a62fd93905a94fb4886a7e1309e",
+          "FILE:@@//Cargo.toml 7178d7451dd8ab1fde62ddfe3c8dddd48cf69e223e16e8fd108c72326c28ac81",
           "FILE:@@//crates/pi-ast/Cargo.toml 44803e08dbacc2ac0475effe76528a782ade7e5c2c1f5b5d6ff61856eb95d2f8",
           "FILE:@@//crates/pi-builtins/Cargo.toml 83d380c6a1beb6fac329ffa21e7b7ccc0fe46c6872f4e705b616c67c88cbe15c",
           "FILE:@@//crates/pi-vfs/Cargo.toml 8f02ad320d6c06f421ade554c7dedaa2e31debfa93df05f7442871ab60b3526c",
