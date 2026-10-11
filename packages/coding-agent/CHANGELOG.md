@@ -44,6 +44,7 @@
 
 - `omp update` on standalone binaries now downloads from Stencil's build service (build.stencil.so, overridable with `PI_BUILD_URL`) instead of GitHub releases, and fetches a small verified patch (about 6 MB instead of 200 MB) when updating from a recent version; compiled binaries also check it for the startup update notice
 - `install.sh` and `install.ps1` download the standalone binary from build.stencil.so and check its SHA-256 before installing; `--binary --ref` (`-Binary -Ref`) now takes a release tag such as `v18.8.9`. The Homebrew formula downloads from build.stencil.so too
+- YouTube fetches now ask yt-dlp for video metadata and English manual subtitles in a single process instead of two (plus a separate subtitle listing), so the common manual-caption path saves two process spawns; automatic captions still fall back to a second process and both the transcript and the metadata survive a failing subtitle transfer ([#15334](https://github.com/can1357/oh-my-pi/pull/15334) by [@yuzu-octopus](https://github.com/yuzu-octopus)).
 
 ## [18.8.9] - 2026-10-10
 

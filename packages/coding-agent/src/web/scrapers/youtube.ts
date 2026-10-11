@@ -206,7 +206,11 @@ export const handleYouTube: SpecialHandler = async (
 	let hasManualSubs = false;
 	let hasAutoSubs = false;
 
-	if (metaResult.ok && metaResult.stdout.trim()) {
+	// The combined spawn exits nonzero when only the subtitle transfer fails
+	// (yt-dlp prints --dump-json before it writes subtitle files), so the JSON
+	// is parsed independently of the exit code. Unusable stdout keeps the
+	// defaults, which also keeps both caption-availability flags false.
+	if (metaResult.stdout.trim()) {
 		try {
 			const meta = JSON.parse(metaResult.stdout) as {
 				title?: string;
