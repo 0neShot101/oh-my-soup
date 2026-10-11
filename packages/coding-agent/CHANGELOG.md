@@ -116,6 +116,7 @@
 - Fixed `RpcClient.stop()` occasionally waiting forever because the agent process was never signaled.
 - Fixed blank rows opening under the input after an `ask` dialog, command report or todo list closed in a session that had filled the screen; the transcript now refills the screen ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
 - Fixed blank rows appearing between the last paragraphs of a streamed answer when the turn ended ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
+- Fixed Eval `read("artifact://N")` returning an "Unbounded raw read blocked" notice instead of the text for artifacts over 50 KB from another session or when the session has no artifacts dir, in both JavaScript and Python cells.
 
 ## [18.9.2] - 2026-10-11
 
