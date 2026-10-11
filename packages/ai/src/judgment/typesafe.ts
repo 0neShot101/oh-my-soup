@@ -7,9 +7,9 @@
  * the request and answer wire shape, so one client serves both. Credentials
  * flow through {@link withAuth}, so a stored key rotates on 401/403 exactly
  * like chat providers; transient 429/5xx responses retry with bounded,
- * `retry-after`-aware backoff. Endpoints that cap the `questions` map (e.g.
- * self-hosted OpenJEV: HTTP 422 `at most 16 items`) get oversized requests
- * split into chunks under the learned cap; uncapped endpoints keep one request.
+ * `retry-after`-aware backoff. Endpoints that cap the `questions` map (the
+ * catalog's `judgment-questions-max`, e.g. OpenJEV at 16) get oversized
+ * requests split into parallel chunks under `maxQuestions`.
  *
  * Environment (mirrors the official SDK): `TYPESAFE_API_KEY` is resolved by
  * the auth registry (`rules/auth/typesafe.kdl`), `TYPESAFE_BASE_URL`
@@ -73,6 +73,8 @@ export interface TypeSafeJudgeOptions {
 	fetch?: FetchImpl;
 	/** Per-attempt timeout; defaults to {@link DEFAULT_TIMEOUT_MS}. */
 	timeoutMs?: number;
+	/** Most questions per request the endpoint accepts; larger requests are split. Unset: no cap. */
+	maxQuestions?: number;
 }
 
 /** Non-2xx response from the TypeSafe API. */
@@ -92,21 +94,6 @@ interface SystemOneResponse {
 	usage: { input_tokens?: number; output_tokens?: number; cost?: number };
 }
 
-/**
- * Per-request question caps learned from endpoints that rejected an oversized
- * map, keyed by base URL and model. Judges are rebuilt per attempt, so the
- * cap outlives the instance that learned it.
- */
-const questionCaps = new Map<string, number>();
-
-/** `at most N items` cap from a 422 rejecting the `questions` map size (pydantic validation). */
-function rejectedQuestionCap(error: unknown): number | undefined {
-	if (!(error instanceof TypeSafeApiError) || error.status !== 422) return undefined;
-	const match = /at most (\d+) items/.exec(error.message);
-	const cap = match ? Number(match[1]) : 0;
-	return cap > 0 ? cap : undefined;
-}
-
 /** Server hint wins (capped); otherwise exponential backoff from {@link BACKOFF_BASE_MS}. */
 function backoffMs(attempt: number, headers: Headers | undefined): number {
 	const hinted = headers === undefined ? undefined : getRetryAfterMsFromHeaders(headers);
@@ -124,6 +111,7 @@ export class TypeSafeJudge implements Judge {
 	readonly #headers: Record<string, string> | undefined;
 	readonly #fetch: FetchImpl;
 	readonly #timeoutMs: number;
+	readonly #maxQuestions: number | undefined;
 
 	constructor(options: TypeSafeJudgeOptions) {
 		this.#apiKey = options.apiKey;
@@ -134,36 +122,39 @@ export class TypeSafeJudge implements Judge {
 		this.#headers = options.headers;
 		this.#fetch = options.fetch ?? fetch;
 		this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+		this.#maxQuestions = options.maxQuestions;
 		this.label = `${this.provider}/${this.model}`;
 	}
 
 	async judge<Q extends Questions>(request: JudgmentRequest<Q>, options?: JudgeOptions): Promise<JudgmentResult<Q>> {
-		const capKey = `${this.baseUrl}\0${this.model}`;
 		const ids = Object.keys(request.questions);
-		const known = questionCaps.get(capKey);
-		if (known !== undefined && ids.length > known) return this.#judgeChunked(request, ids, known, options);
-		try {
-			return await this.#judgeOnce(request, options);
-		} catch (error) {
-			const cap = rejectedQuestionCap(error);
-			if (cap === undefined || ids.length <= cap) throw error;
-			questionCaps.set(capKey, cap);
-			return this.#judgeChunked(request, ids, cap, options);
-		}
+		const cap = this.#maxQuestions;
+		if (cap !== undefined && ids.length > cap) return this.#judgeChunked(request, ids, cap, options);
+		return this.#judgeOnce(request, options);
 	}
 
-	/** Answer `request` in requests of at most `cap` questions each; answers merge and usage sums. */
+	/**
+	 * Answer `request` in requests of at most `cap` questions each; answers merge and usage sums.
+	 * The first failing chunk aborts its in-flight siblings so a doomed judgment stops spending.
+	 */
 	async #judgeChunked<Q extends Questions>(
 		request: JudgmentRequest<Q>,
 		ids: string[],
 		cap: number,
 		options: JudgeOptions | undefined,
 	): Promise<JudgmentResult<Q>> {
+		const failed = new AbortController();
+		const signal = options?.signal ? AbortSignal.any([options.signal, failed.signal]) : failed.signal;
 		const parts: Promise<JudgmentResult>[] = [];
 		for (let start = 0; start < ids.length; start += cap) {
 			const questions: Questions = {};
 			for (const id of ids.slice(start, start + cap)) questions[id] = request.questions[id];
-			parts.push(this.#judgeOnce({ state: request.state, questions }, options));
+			parts.push(
+				this.#judgeOnce({ state: request.state, questions }, { ...options, signal }).catch(error => {
+					failed.abort(error);
+					throw error;
+				}),
+			);
 		}
 		const results = await Promise.all(parts);
 		const answers: Record<string, Answer> = {};

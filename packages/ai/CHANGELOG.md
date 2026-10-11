@@ -6,8 +6,9 @@
 
 - Improved Anthropic prompt-cache breakpoint selection in long conversations to pick cache anchors in a single backward walk, removing the per-request index arrays that grew with conversation length ([#15219](https://github.com/can1357/oh-my-pi/pull/15219) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 ### Fixed
+### Added
 
-- Fixed `TypeSafeJudge` failing on System One endpoints that cap questions per request (HTTP 422 `at most N items`, e.g. OpenJEV); oversized requests are now split under that endpoint's cap, while uncapped endpoints keep one request ([#15368](https://github.com/can1357/oh-my-pi/pull/15368) by [@H4vC](https://github.com/H4vC))
+- Added `maxQuestions` to `TypeSafeJudge`: requests with more questions are split into parallel chunks and their answers and usage merged, for System One endpoints that cap the `questions` map ([#15368](https://github.com/can1357/oh-my-pi/pull/15368) by [@H4vC](https://github.com/H4vC))
 
 ## [18.9.1] - 2026-10-11
 

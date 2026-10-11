@@ -1,0 +1,11 @@
+// Self-hosted OpenJEV gateways validate the System One `questions` map at 16
+// items and answer HTTP 422 (`at most 16 items`) before judging anything, so
+// the judge splits larger requests for them. Scoped by adapter, not provider
+// name: OpenJEV is never a catalog provider, only a user-configured judge row.
+// residue: OpenJEV has no taxonomy class; its model ids carry the name.
+// https://github.com/can1357/oh-my-pi/issues/15081
+on-api "typesafe" "openrouter-decisions" {
+	models "*openjev*" {
+		judgment-questions-max 16
+	}
+}

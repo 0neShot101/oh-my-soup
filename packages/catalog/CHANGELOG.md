@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the `judgment-questions-max` catalog axis and `resolveJudgmentQuestionsMax`, capping System One judgment requests at 16 questions for OpenJEV models ([#15368](https://github.com/can1357/oh-my-pi/pull/15368) by [@H4vC](https://github.com/H4vC))
+
 ## [18.9.1] - 2026-10-11
 
 ### Added
