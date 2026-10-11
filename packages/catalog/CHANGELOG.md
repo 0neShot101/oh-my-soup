@@ -4,17 +4,8 @@
 
 ### Added
 
-- Added the `supports-thinking-binding-controls` Bedrock Converse compat axis and enabled it by default for Bedrock Claude Fable 5.1+ ([#15316](https://github.com/can1357/oh-my-pi/pull/15316) by [@harshaygadekar](https://github.com/harshaygadekar))
-- Enabled `supports-prompt-cache-key` for the `mistral` provider so openai-completions requests to `api.mistral.ai` carry the session's `prompt_cache_key`, increasing cache hits and reducing billed uncached input tokens on Mistral models ([#15079](https://github.com/can1357/oh-my-pi/pull/15079) by [@richardotomislav](https://github.com/richardotomislav))
-- Added `max-image-dimension` and `max-image-payload-bytes` compat axes so an Anthropic-compatible host whose image limits differ from the canonical API can override them instead of inheriting 8000px and 10 MB ([#10633](https://github.com/can1357/oh-my-pi/pull/10633) by [@aktanazat](https://github.com/aktanazat)).
-- Added OpenCode Zen's `jev-1.13` and `jev-1.13-free` judge models, routed to the System One judgment API (kind `judge`) instead of chat completions ([#14446](https://github.com/can1357/oh-my-pi/pull/14446) by [@jpds](https://github.com/jpds)).
-- Added the `session-header` compat axis; the `litellm` provider declares `x-litellm-session-id`, which carries the conversation session id independent of prompt caching ([#15096](https://github.com/can1357/oh-my-pi/pull/15096) by [@occ](https://github.com/occ))
-- Added Factory Droid Claude Haiku 5.5 and Mistral Large 4 ([#15116](https://github.com/can1357/oh-my-pi/pull/15116) by [@will-bogusz](https://github.com/will-bogusz))
-- Added the `portable-reasoning` rule: a model family declares that its reasoning may move natively between hosts serving the same model (same class, family and revision), and a host can opt out. Declared for Kimi K3, DeepSeek V4, GLM 5+ and MiniMax M3; Cursor's K3 turns opt out ([#15123](https://github.com/can1357/oh-my-pi/pull/15123) by [@will-bogusz](https://github.com/will-bogusz)).
+- Added the `supports-thinking-binding-controls` axis to Bedrock Converse models (on by default) so a rule or `models.yml` override can turn off Claude thinking-binding controls on hosts that reject them ([#15316](https://github.com/can1357/oh-my-pi/pull/15316) by [@harshaygadekar](https://github.com/harshaygadekar))
 
-### Changed
-
-- Changed Factory Droid to match droid 0.237: thinking Off for Claude and GPT, Azure stale-thinking recovery, EU regions for Opus, Fable and Gemini Flash, GPT-6.1 Sol routes, ungated GPT-6 Luna and DeepSeek V4.1 Flash ([#15116](https://github.com/can1357/oh-my-pi/pull/15116) by [@will-bogusz](https://github.com/will-bogusz))
 ## [18.9.0] - 2026-10-11
 
 ### Fixed

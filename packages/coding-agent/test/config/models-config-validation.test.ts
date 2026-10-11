@@ -38,26 +38,30 @@ describe("validateProviderConfiguration (models-config auth)", () => {
 			),
 		).not.toThrow();
 	});
+});
 
-	test("schema accepts Bedrock compat.supportsThinkingBindingControls override", () => {
-		const schema = getModelsConfigSchema();
-		expect(() =>
-			schema.assert({
-				providers: {
-					"amazon-bedrock": {
-						models: [
-							{
-								id: "us.anthropic.claude-fable-5-1",
-								api: "bedrock-converse-stream",
-								compat: {
-									supportsThinkingBindingControls: false,
-								},
-							},
-						],
-					},
+describe("ModelsConfigSchema Bedrock compat overrides", () => {
+	test("rejects a non-boolean supportsThinkingBindingControls override instead of passing the typo through", () => {
+		// A truthy string would keep the binding controls on for a gateway the user meant to opt out.
+		const checked = ModelsConfigSchema({
+			providers: {
+				"amazon-bedrock": {
+					models: [
+						{
+							id: "us.anthropic.claude-fable-5-1",
+							api: "bedrock-converse-stream",
+							compat: { supportsThinkingBindingControls: "false" },
+						},
+					],
 				},
-			}),
-		).not.toThrow();
+			},
+		});
+		if (!(checked instanceof OmpErrors)) throw new Error("expected the schema to reject a string value");
+		expect(checked.map(error => `${error.path.join(".")}: ${error.problem}`)).toEqual([
+			expect.stringMatching(
+				/^providers\.amazon-bedrock\.models\.0\.compat\.supportsThinkingBindingControls: must be boolean/,
+			),
+		]);
 	});
 });
 

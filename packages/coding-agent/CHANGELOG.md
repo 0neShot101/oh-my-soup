@@ -2,24 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `supportsThinkingBindingControls` to Bedrock `compat` in `models.yml`, so a Bedrock gateway or region that rejects Claude thinking-binding controls can turn them off ([#15316](https://github.com/can1357/oh-my-pi/pull/15316) by [@harshaygadekar](https://github.com/harshaygadekar))
+
 ## [18.9.0] - 2026-10-11
 
 ### Added
 
-- Added `browser.targets()` to the browser tool, which lists the user's own pages `app.target` can adopt (inside Tern its browser blocks, with the relay your Chrome tabs) so agents can pick one instead of guessing
-- Added `supportsThinkingBindingControls` to `BedrockCompatSchema` so Bedrock thinking-binding controls can be opted out in `models.yml` ([#15316](https://github.com/can1357/oh-my-pi/pull/15316) by [@harshaygadekar](https://github.com/harshaygadekar))
-- Added `ctx.annotations` so extensions can submit or collect `/annotate` feedback on text and diffs ([#15260](https://github.com/can1357/oh-my-pi/pull/15260) by [@Shadorain](https://github.com/Shadorain)).
-- Added **Extra Context Files** to `/settings` → **Context** so custom instruction filenames can be configured without editing YAML ([#15252](https://github.com/can1357/oh-my-pi/pull/15252) by [@Shadorain](https://github.com/Shadorain)).
-- Added composer predictions (`composer.predictions`, off by default): after a turn completes, omp asks the session's model for your likely next message and shows it as ghost text in the empty composer; Tab or Right inserts it, typing anything else dismisses it. Each prediction is an extra billed request after every completed turn, as the setting's description says; it runs as cheaply as the model allows without losing the prompt cache (lowest effort on Claude models that take per-message effort changes and on GPT-6 models, the session's thinking elsewhere), and its usage counts toward session totals and `/stats` ([#15137](https://github.com/can1357/oh-my-pi/pull/15137) by [@wolfiesch](https://github.com/wolfiesch))
-- Expose native job status and child agent identity alongside the job ID in structured `async-result` metadata for extensions, without changing rendering or cancellation delivery policy ([#10928](https://github.com/can1357/oh-my-pi/pull/10928) by [@joebenberry-afk](https://github.com/joebenberry-afk)).
-- `tui.autoGraph: smart` now asks the judge what only meaning decides — the row label and naming columns, grouping, shading, ordering and reference row, which way each measure is better, what competes, the row a table is about, and which computed takeaway titles the chart — at most 25 questions per table, each used only above its confidence gate
-- `queue_update` events and the `get_state` queue snapshot now carry a `liveSteered` count: the leading `steering` entries are live steering already sent into the streaming response, which `remove_queued_message` cannot reach (refs #13798) ([#14821](https://github.com/can1357/oh-my-pi/pull/14821) by [@jchanghong023](https://github.com/jchanghong023)).
-- Added `retry.fallbackOn` so fallback chains can switch models only when the provider is out of quota (`usage-limit`) or only on other errors (`except-usage-limit`); the default `any` keeps today's behaviour ([#15125](https://github.com/can1357/oh-my-pi/pull/15125) by [@will-bogusz](https://github.com/will-bogusz))
-- Added `omp usage reset`, which lists every Codex and Claude account's saved rate-limit resets by credential id (`--json` adds credit ids and expiries), and `omp usage reset <provider>/<credential id>`, which spends one without a session, from scripts and auth-broker clients too ([#15132](https://github.com/can1357/oh-my-pi/pull/15132) by [@will-bogusz](https://github.com/will-bogusz))
-- Added saved-reset expiry warnings for accounts with real usage: `omp usage` highlights Codex and Claude resets expiring within 7 days and lists those due within 24 hours with whether an interactive session will spend them and the `/usage reset` target, and the TUI warns once per conversation ([#15134](https://github.com/can1357/oh-my-pi/pull/15134) by [@will-bogusz](https://github.com/will-bogusz))
-- On macOS the `computer` tool keeps the display awake while the agent acts, and says when the screen is locked or the display asleep: in `capabilities()`, on screenshots, on errors and at the top of the run result, instead of passing off lock-screen or failed captures ([#15188](https://github.com/can1357/oh-my-pi/pull/15188) by [@will-bogusz](https://github.com/will-bogusz))
-- Inside Tern, `browser.open({ app: { target } })` drives a browser block the user already has open (matched by block id or URL/title substring; no match lists the window's blocks) instead of opening a picture-in-picture; closing the tab hands the block back without closing it
-- Inside Tern, the browser open result says when the page is not on screen (the user hid pictures in picture, or an older Tern shows them only in omp's tab), so the agent can tell the user where to look
 - Added browser target discovery and control, allowing agents to list the user's available pages and operate an already-open Tern browser block instead of opening a new view.
 - Added the `ctx.annotations` extension API for submitting and collecting `/annotate` feedback on text and diffs.
 - Added configurable Extra Context Files under `/settings` → Context, allowing custom instruction filenames without editing YAML.

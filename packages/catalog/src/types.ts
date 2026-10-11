@@ -830,8 +830,11 @@ export interface BedrockCompat {
 	 */
 	supportsForcedToolChoice?: boolean;
 	/**
-	 * Whether the endpoint accepts thinking binding controls (block_binding and the
-	 * thinking-binding-controls beta) on models with prefixBinding enabled.
+	 * Whether the endpoint accepts thinking-binding controls (`thinking.block_binding`,
+	 * the `thinking-binding-controls-2026-08-01` beta and the `/input_transformations`
+	 * response path) on prefix-bound models. Only consulted when
+	 * `thinking.prefixBinding` is set; `false` omits the controls while keeping the
+	 * local prefix-binding safeguards. Default: true.
 	 */
 	supportsThinkingBindingControls?: boolean;
 }
@@ -849,6 +852,8 @@ export interface ResolvedBedrockCompat {
 	/** See {@link BedrockCompat.supportsSamplingParams}. */
 	supportsSamplingParams?: boolean;
 	supportsForcedToolChoice: boolean;
+	/** See {@link BedrockCompat.supportsThinkingBindingControls}. */
+	supportsThinkingBindingControls: boolean;
 	/**
 	 * Stream-watchdog idle-timeout fallback in ms for hosts with no keepalive
 	 * events; 0 disables the idle watchdog. Undefined defers to
@@ -856,7 +861,6 @@ export interface ResolvedBedrockCompat {
 	 * `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS` alias, then the 300s default.
 	 */
 	streamIdleTimeoutMs?: number;
-	supportsThinkingBindingControls?: boolean;
 }
 
 /**
