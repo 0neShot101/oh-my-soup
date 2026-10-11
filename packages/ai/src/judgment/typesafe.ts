@@ -7,7 +7,9 @@
  * the request and answer wire shape, so one client serves both. Credentials
  * flow through {@link withAuth}, so a stored key rotates on 401/403 exactly
  * like chat providers; transient 429/5xx responses retry with bounded,
- * `retry-after`-aware backoff.
+ * `retry-after`-aware backoff. Endpoints that cap the `questions` map (the
+ * catalog's `judgment-questions-max`, e.g. OpenJEV at 16) get oversized
+ * requests split into parallel chunks under `maxQuestions`.
  *
  * Environment (mirrors the official SDK): `TYPESAFE_API_KEY` is resolved by
  * the auth registry (`rules/auth/typesafe.kdl`), `TYPESAFE_BASE_URL`
@@ -71,6 +73,8 @@ export interface TypeSafeJudgeOptions {
 	fetch?: FetchImpl;
 	/** Per-attempt timeout; defaults to {@link DEFAULT_TIMEOUT_MS}. */
 	timeoutMs?: number;
+	/** Most questions per request the endpoint accepts; larger requests are split. Unset: no cap. */
+	maxQuestions?: number;
 }
 
 /** Non-2xx response from the TypeSafe API. */
@@ -107,6 +111,7 @@ export class TypeSafeJudge implements Judge {
 	readonly #headers: Record<string, string> | undefined;
 	readonly #fetch: FetchImpl;
 	readonly #timeoutMs: number;
+	readonly #maxQuestions: number | undefined;
 
 	constructor(options: TypeSafeJudgeOptions) {
 		this.#apiKey = options.apiKey;
@@ -117,10 +122,64 @@ export class TypeSafeJudge implements Judge {
 		this.#headers = options.headers;
 		this.#fetch = options.fetch ?? fetch;
 		this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+		this.#maxQuestions = options.maxQuestions;
 		this.label = `${this.provider}/${this.model}`;
 	}
 
 	async judge<Q extends Questions>(request: JudgmentRequest<Q>, options?: JudgeOptions): Promise<JudgmentResult<Q>> {
+		const ids = Object.keys(request.questions);
+		const cap = this.#maxQuestions;
+		if (cap !== undefined && ids.length > cap) return this.#judgeChunked(request, ids, cap, options);
+		return this.#judgeOnce(request, options);
+	}
+
+	/**
+	 * Answer `request` in requests of at most `cap` questions each; answers merge and usage sums.
+	 * The first failing chunk aborts its in-flight siblings so a doomed judgment stops spending.
+	 */
+	async #judgeChunked<Q extends Questions>(
+		request: JudgmentRequest<Q>,
+		ids: string[],
+		cap: number,
+		options: JudgeOptions | undefined,
+	): Promise<JudgmentResult<Q>> {
+		const failed = new AbortController();
+		const signal = options?.signal ? AbortSignal.any([options.signal, failed.signal]) : failed.signal;
+		const parts: Promise<JudgmentResult>[] = [];
+		for (let start = 0; start < ids.length; start += cap) {
+			const questions: Questions = {};
+			for (const id of ids.slice(start, start + cap)) questions[id] = request.questions[id];
+			parts.push(
+				this.#judgeOnce({ state: request.state, questions }, { ...options, signal }).catch(error => {
+					failed.abort(error);
+					throw error;
+				}),
+			);
+		}
+		const results = await Promise.all(parts);
+		const answers: Record<string, Answer> = {};
+		let input = 0;
+		let output = 0;
+		let cost = 0;
+		for (const result of results) {
+			Object.assign(answers, result.answers);
+			input += result.usage.input;
+			output += result.usage.output;
+			cost += result.usage.cost.total;
+		}
+		return {
+			api: this.api,
+			provider: this.provider,
+			model: results[0].model,
+			answers: answers as JudgmentResult<Q>["answers"],
+			usage: tokenUsage(input, output, cost),
+		};
+	}
+
+	async #judgeOnce<Q extends Questions>(
+		request: JudgmentRequest<Q>,
+		options: JudgeOptions | undefined,
+	): Promise<JudgmentResult<Q>> {
 		const body = JSON.stringify({ state: request.state, model: this.model, questions: request.questions });
 		const signal = options?.signal;
 		const response = await withAuth(
