@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added native TSP rendering inside tmux when the hosting Tern terminal marks the session with `@tern-tsp`: the hello goes out without the DA1 sentinel and waits up to 1 s for a reply, and the pane's `allow-set-title` is turned off while TSP runs and restored when it ends. tmux sessions without `@tern-tsp` never probe, even with `PI_TUI_NATIVE=1`.
+
 ### Fixed
 
 - Improved responsiveness when placing assistant text after tool calls in long transcripts ([#12178](https://github.com/can1357/oh-my-pi/issues/12178), [#14344](https://github.com/can1357/oh-my-pi/pull/14344) by [@F0Rextasy](https://github.com/F0Rextasy), [#15353](https://github.com/can1357/oh-my-pi/pull/15353) by [@iliaal](https://github.com/iliaal)).
