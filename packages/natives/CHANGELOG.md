@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `IpcServer`, `IpcConnection`, and `ipcEndpoint`: a local IPC transport over Unix sockets and Windows named pipes with owner-only access, single-instance binding, stale-endpoint takeover, and newline framing.
+
 ## [18.9.2] - 2026-10-11
 
 ### Fixed
