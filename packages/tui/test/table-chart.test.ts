@@ -395,6 +395,43 @@ describe("planChart", () => {
 		expect(planChart(analyze(markdown))?.kind).toBe(kind);
 	});
 
+	// Regression: a `Share` column restating the amounts won over them, so crate tables drew a share bar of
+	// a dozen slivers (or bars of percents) instead of the amounts building to their total.
+	it("builds amounts beside their shares up to the total once there are more parts than a share bar holds", () => {
+		const crate = (name: string, lines: number) =>
+			`| ${name} | ${lines.toLocaleString("en-US")} | ${((100 * lines) / 885_126).toFixed(1)}% |`;
+		const rows = [
+			["tern", 239_737],
+			["platform", 64_359],
+			["term", 58_506],
+			["ui", 51_870],
+			["mesh", 37_376],
+			["editor", 37_254],
+			["kit", 30_017],
+			["surface", 29_053],
+			["39 other crates", 336_954],
+		] as const;
+		const crates = analyze(
+			`| Crate | Lines of Rust | Share |\n|---|---:|---:|\n${rows.map(([name, lines]) => crate(name, lines)).join("\n")}\n| **Total** | **885,126** | **100%** |`,
+		);
+		const plan = planChart(crates)!;
+		expect(plan.kind).toBe("waterfall");
+		expect(crates.columns[plan.series[0]!]!.header).toBe("Lines of Rust");
+		// Few parts keep their one share bar.
+		expect(
+			planChart(
+				analyze(
+					"| Model | Spend | Share |\n|---|---:|---:|\n| a | $10,426 | 45.9% |\n| b | $8,077 | 35.6% |\n| c | $3,770 | 16.6% |\n| d | $437 | 1.9% |\n| **Total** | **$22,710** | **100%** |",
+				),
+			)?.kind,
+		).toBe("share");
+		// A pick of a share bar over more parts than it holds ranks them as bars.
+		const long = analyze(
+			`| Crate | Share |\n|---|---:|\n${Array.from({ length: 14 }, (_, at) => `| c${at} | ${at < 2 ? 30 : 40 / 12}% |`).join("\n")}`,
+		);
+		expect(buildChart(long, { kind: "share", label: 0, series: [1], transpose: false })?.kind).toBe("bar");
+	});
+
 	it("draws nothing for prose tables or two values", () => {
 		expect(planChart(analyze(PROSE))).toBeUndefined();
 		expect(planChart(analyze(FINDINGS))).toBeUndefined();

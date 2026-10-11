@@ -32,6 +32,7 @@ import {
 	isTransition,
 	ladderColumns,
 	leadingMeasures,
+	MAX_SHARE_SEGMENTS,
 	namingColumns,
 	opposedColumns,
 	outcomeColumns,
@@ -566,6 +567,8 @@ export function planFromAnswers(
 	let choice: KindChoice =
 		kind?.type === "choice" && isOption(QUESTIONS.kind.criteria, kind.choice) ? kind.choice : guess.kind;
 	if (choice === "none") return null;
+	// A share bar holds few parts: past them the local guess draws the parts (a waterfall to their total, or bars).
+	if (choice === "share" && table.rows.length > MAX_SHARE_SEGMENTS) choice = guess.kind;
 	const picks = answers.label;
 	const named = picks?.type === "choice" ? labelOptions(table, guess).get(picks.choice) : undefined;
 	const label = named ?? (guess.label === undefined ? undefined : table.columns[guess.label]);

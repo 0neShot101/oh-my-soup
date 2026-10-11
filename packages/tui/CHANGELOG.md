@@ -13,6 +13,7 @@
 
 ### Changed
 
+- Improved table-chart planning to prefer waterfall charts over share bars for complex data sets and enforce segment limits for share-chart legibility
 - Reduced the time required to rebuild long sessions on resume, particularly sessions with repeated wait polls or todo updates.
 - Output summaries now identify the first and last lines omitted by column limits, and truncation notices point to the `:raw` selector for retrieving complete lines.
 

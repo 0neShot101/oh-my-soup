@@ -907,7 +907,11 @@ function guessShape(table: TableAnalysis): ChartPlan | undefined {
 	// Outcome counts (`ok | fail`, `Pass | Fail | Skip`) are parts of each row's attempts even without a total column.
 	const outcomes = outcomeColumns(measures);
 	if (outcomes) return plan("stacked", outcomes);
-	const flow = guessFlow(table, label, measures);
+	// Amounts beside their shares of the whole (`Lines | Share`) split into more parts than one share bar holds
+	// build up as the amounts: a waterfall prints each step's share itself.
+	const flowing =
+		rows.length > MAX_SHARE_PARTS ? measures.map(column => amountBehind(table, column) ?? column) : measures;
+	const flow = guessFlow(table, label, flowing);
 	if (flow)
 		return {
 			...plan(flow.kind, [flow.column]),
@@ -963,7 +967,11 @@ function guessShape(table: TableAnalysis): ChartPlan | undefined {
 		if (delta) return plan("diverging", [delta]);
 	}
 	const share = measures.find(column => column.dim === "percent" && !column.scores);
-	if (share && rows.length <= 10 && (measures.length === 1 || (measures.length === 2 && dims.size === 2))) {
+	if (
+		share &&
+		rows.length <= MAX_SHARE_SEGMENTS &&
+		(measures.length === 1 || (measures.length === 2 && dims.size === 2))
+	) {
 		const values = columnValues(share, rows);
 		const sum = values.reduce((total, value) => total + value, 0);
 		if (values.every(value => value >= 0) && sum >= 97 && sum <= 103) return plan("share", [share]);
@@ -987,6 +995,20 @@ function guessShape(table: TableAnalysis): ChartPlan | undefined {
 const METRIC_HEADER = /^(?:metrics?|measures?|stats?|statistics?|quantit(?:y|ies))$/i;
 /** Most parts a count column may split its total into and still draw as one bar. */
 const MAX_SHARE_PARTS = 6;
+/** Most segments one share bar keeps legible; more parts read as bars (a planner's `share` pick included). */
+export const MAX_SHARE_SEGMENTS = 10;
+
+/**
+ * The amount column a share column restates (`Lines of Rust` behind `Share`, dropped from the measures in
+ * favor of its shares), when it is an amount that builds up; else `undefined`.
+ */
+function amountBehind(table: TableAnalysis, share: TableColumn): TableColumn | undefined {
+	if (share.dim !== "percent" || share.scores) return undefined;
+	return table.columns.find(
+		column => column.restates === share.index && column.dim !== undefined && FLOW_DIMS[column.dim],
+	);
+}
+
 /** Relative slack between a total row and its parts' sum where either is written as an estimate (`~3900`). */
 const APPROX_SUM = 0.02;
 /** Headers that only say a column counts something (`count`, `n`, `#`). */
@@ -1091,7 +1113,16 @@ function guessFlow(
 			if (size) return { kind: "timeline", column: size, offsets: offsets.index };
 		}
 	// A running column beside its steps (`Time | Cumulative`) restates them, within the precision written.
-	const steps = measures.filter(column => !measures.some(other => other !== column && endsOf(column, other, rows)));
+	let steps = measures.filter(column => !measures.some(other => other !== column && endsOf(column, other, rows)));
+	// Beside counts of things (`Files`), the leading amount that builds up (`Lines`, `$`, bytes) is the run — when
+	// no other column builds up beside it and a total row vouches for it below.
+	const led = steps.length > 1;
+	if (led) {
+		const [lead, ...rest] = steps;
+		// A few parts beside their shares (`Tokens | Share`) read as one share bar.
+		const shared = rows.length <= MAX_SHARE_PARTS && rest.some(other => other.dim === "percent");
+		steps = !shared && buildsUp(lead!) && lead!.dim !== "duration" && !rest.some(buildsUp) ? [lead!] : [];
+	}
 	if (steps.length !== 1) return undefined;
 	const column = steps[0]!;
 	const running =
@@ -1106,7 +1137,7 @@ function guessFlow(
 	const totalRow = table.totals.find(row => flowCell(column, row));
 	const sums = totalRow !== undefined && addsUp(cells as NumberCell[], flowCell(column, totalRow)!);
 	// A total the rows miss is a subset or overlapping parts, not one run.
-	if (totalRow !== undefined && !sums) return undefined;
+	if ((totalRow !== undefined || led) && !sums) return undefined;
 	const last = rows.at(-1)!;
 	// A cap stands above every step it caps (`Hard cap` $9.50 over `Video` $5.10).
 	const capped =
@@ -1136,13 +1167,19 @@ function guessFlow(
 		return STEP_HEADER.test(label.header) || sums || running ? { kind: "timeline", column } : undefined;
 	}
 	// Amounts that build up: money, sizes, and counts of a quantity (tokens, lines), not of things (issues, PRs).
-	if (column.dim === "count" && !AMOUNT_HEADER.test(column.header)) return undefined;
+	if (!buildsUp(column)) return undefined;
 	// Listed parts alone (`Bucket | Amount`) in descending order (one rise in eight steps allowed) are a
 	// ranking: bars read it.
 	const rises = values.filter((value, at) => at > 0 && value > values[at - 1]!).length;
 	const parts = !negative && PART_HEADER.test(label.header) && rises * RANKED_RISES > values.length - 1;
 	if (!(sums || capped || running || parts)) return undefined;
 	return { kind: "waterfall", column, ...(capped && { limit: last }) };
+}
+
+/** `column` holds amounts that add up along one axis: money, sizes, times, and counts of a quantity (tokens, lines). */
+function buildsUp(column: TableColumn): boolean {
+	if (!column.dim || !FLOW_DIMS[column.dim]) return false;
+	return column.dim !== "count" || AMOUNT_HEADER.test(column.header);
 }
 
 /**
@@ -4204,7 +4241,8 @@ function fitKind(kind: ChartKind, series: readonly ChartSeries[], hasX: boolean)
 	// Intervals band by unit, each band on its own axis ({@link buildChart} checks they are mostly intervals).
 	if (kind === "range") return kind;
 	// A share draws one series ({@link buildChart} keeps the first): a `%` column beside its counts restates them.
-	if (kind === "share") return kind;
+	// Past {@link MAX_SHARE_SEGMENTS} parts its slivers stop reading; bars rank them instead.
+	if (kind === "share") return (series[0]?.points.length ?? 0) <= MAX_SHARE_SEGMENTS ? kind : "bar";
 	if (new Set(series.map(entry => `${entry.dim}:${entry.unit}`)).size > 1) return "multiples";
 	// A ladder without quantiles to read ({@link buildChart} draws real ones before fitting) compares as dots.
 	if (kind === "ladder") return fitKind("dots", series, hasX);
