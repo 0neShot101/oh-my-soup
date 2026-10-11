@@ -318,6 +318,7 @@ import {
 	setSymbolPreset,
 	startMacOSAppearanceReprobeFallback,
 	theme,
+	warmHighlighter,
 } from "@oh-my-pi/pi-tui/theme";
 import { getSlashCommandTypeIcon } from "@oh-my-pi/pi-tui/theme/tui-adapters";
 import type {
@@ -2344,6 +2345,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		// callback requestRender(true) queued above (immediates are FIFO) — the
 		// spawn syscall never lands in the same loop turn ahead of the first paint.
 		setImmediate(() => {
+			// Resumed sessions paint their restored transcript (code blocks, diffs)
+			// right after init; warm the native syntax set (~60ms, ~24 MiB) off-thread
+			// so that paint does not build it on the JS thread. Fresh sessions skip it
+			// and pay the cost lazily on the first highlight, if any.
+			if (this.session.messages.length > 0) void warmHighlighter();
 			if (!$env.PI_NO_TITLE && !this.sessionManager.getSessionName()) {
 				this.#inputController.prewarmTinyTitleModel();
 			}
