@@ -79,10 +79,10 @@ interface ToolCallOriginScope {
  * Record one assistant turn's tool-call ids into the origin-scope sets.
  *
  * Called from the normalization map (`transformMessages`) in document order, on
- * the SAME post-transform content that message emits, so the two sets end up
- * identical to what a separate full-transcript walk would have collected — but
- * every assistant message is visited once instead of twice. Ordering is inert
- * (both sets are only read via `.has`), yet is preserved anyway.
+ * the SAME post-transform content that message emits, so the two sets cover
+ * every assistant turn exactly once and hold the ids the request will carry.
+ * Both sets are only read via `.has`, so ordering is inert; document order is
+ * preserved anyway.
  */
 function recordToolCallOriginScope(
 	msg: AssistantMessage,
@@ -171,21 +171,35 @@ interface IndexedToolResult {
  *
  * Called from the dedup pass, once per tool result message, at the position the
  * message occupies in that pass's output array — so the entries and their order
- * are exactly what a separate walk over the finished array would have produced.
- * The key is the id that survived the pass (a `_dup` rewrite changes it), which
- * is what the consumers downstream must pair against.
+ * describe the transcript the request will actually carry.
+ * The caller passes the pairing key for the id that survived the pass (a `_dup`
+ * rewrite changes it), which is what the consumers downstream must pair against.
  */
 function indexToolResult(
 	msg: ToolResultMessage,
 	index: number,
-	originScope: ToolCallOriginScope,
+	key: string,
 	realToolResultsById: Map<string, IndexedToolResult[]>,
 ): void {
 	const entry: IndexedToolResult = { index, msg, consumed: false };
-	const key = toolCallPairingKey(msg.toolCallId, originScope);
 	const entries = realToolResultsById.get(key);
 	if (entries) entries.push(entry);
 	else realToolResultsById.set(key, [entry]);
+}
+
+/**
+ * Outputs of {@link deduplicateToolCallIds}.
+ *
+ * Both indexes describe the pass's OWN output — a `_dup` rewrite changes ids — so
+ * callers read them only after the pass completes, and no caller can hand in a
+ * pre-filled container.
+ */
+interface DeduplicatedToolCallIds {
+	messages: Message[];
+	/** Every real tool result filed at its position, keyed by pairing key. */
+	realToolResultsById: Map<string, IndexedToolResult[]>;
+	/** Pairing key of every `tool_use` id the pass left standing. */
+	validToolUseIds: Set<string>;
 }
 
 function deduplicateToolCallIds(
@@ -193,11 +207,11 @@ function deduplicateToolCallIds(
 	originScope: ToolCallOriginScope,
 	maxToolCallIdLength: number,
 	duplicateSuffixPrefix: string,
-	realToolResultsById: Map<string, IndexedToolResult[]>,
-	validToolUseIds: Set<string>,
-): Message[] {
+): DeduplicatedToolCallIds {
 	const seenToolCallIds = new Map<string, number>();
 	const pendingToolResultRewrites = new Map<string, PendingToolResultRewrite[]>();
+	const realToolResultsById = new Map<string, IndexedToolResult[]>();
+	const validToolUseIds = new Set<string>();
 
 	const enqueueToolResultRewrite = (id: string, rewrite: PendingToolResultRewrite): void => {
 		const rewrites = pendingToolResultRewrites.get(id);
@@ -208,7 +222,7 @@ function deduplicateToolCallIds(
 		pendingToolResultRewrites.set(id, [rewrite]);
 	};
 
-	return messages.map((msg, index) => {
+	const transformed = messages.map((msg, index) => {
 		if (msg.role === "toolResult") {
 			// Pair on the call_ component: a composite result id
 			// (`call_X|fc_Y`) must find the rewrite enqueued under its assistant
@@ -218,7 +232,7 @@ function deduplicateToolCallIds(
 			const key = toolCallPairingKey(msg.toolCallId, originScope);
 			const rewrites = pendingToolResultRewrites.get(key);
 			if (!rewrites || rewrites.length === 0) {
-				indexToolResult(msg, index, originScope, realToolResultsById);
+				indexToolResult(msg, index, key, realToolResultsById);
 				return msg;
 			}
 
@@ -226,25 +240,24 @@ function deduplicateToolCallIds(
 			if (rewrites.length === 0) pendingToolResultRewrites.delete(key);
 			if (rewrite) {
 				const rewritten = { ...msg, toolCallId: rewrite.replacementId };
-				indexToolResult(rewritten, index, originScope, realToolResultsById);
+				indexToolResult(
+					rewritten,
+					index,
+					toolCallPairingKey(rewritten.toolCallId, originScope),
+					realToolResultsById,
+				);
 				return rewritten;
 			}
-			indexToolResult(msg, index, originScope, realToolResultsById);
+			indexToolResult(msg, index, key, realToolResultsById);
 			return msg;
 		}
 
 		if (msg.role !== "assistant") return msg;
 
-		// Ids this turn has already touched; used to scope the "drop carried-over
-		// pending rewrites" semantics to the FIRST occurrence per turn so multiple
-		// blocks of the same id within one turn still accumulate as duplicates.
-		//
-		// Lazily materialized: the turn's first tool-call block always misses an
-		// empty-set `.has`, so it needs no set at all — a one-call turn (the common
-		// case) allocates nothing, and a turn only pays for the Set from its second
-		// DISTINCT id onward. The touched view is `firstToolCallKey` plus
-		// `idsTouchedInTurn`, which is exactly what the eager Set held.
-		let firstToolCallKey: string | undefined;
+		// Ids this turn has already touched; scopes the "drop carried-over pending
+		// rewrites" step to an id's FIRST occurrence per turn, so multiple blocks
+		// of the same id within one turn still accumulate as duplicates. Empty
+		// sets always miss `.has`, so turns with no tool call allocate nothing.
 		let idsTouchedInTurn: Set<string> | undefined;
 		let contentChanged = false;
 		const content = msg.content.map(block => {
@@ -264,10 +277,7 @@ function deduplicateToolCallIds(
 			// "No result provided" for it, and the upcoming real result(id) must
 			// route to one of THIS turn's calls. Without this guard the older
 			// `_dup` id would steal the next result.
-			if (firstToolCallKey === undefined) {
-				firstToolCallKey = blockKey;
-				pendingToolResultRewrites.delete(blockKey);
-			} else if (blockKey !== firstToolCallKey && !idsTouchedInTurn?.has(blockKey)) {
+			if (!idsTouchedInTurn?.has(blockKey)) {
 				(idsTouchedInTurn ??= new Set()).add(blockKey);
 				pendingToolResultRewrites.delete(blockKey);
 			}
@@ -312,6 +322,8 @@ function deduplicateToolCallIds(
 		if (!contentChanged) return msg;
 		return { ...msg, content };
 	});
+
+	return { messages: transformed, realToolResultsById, validToolUseIds };
 }
 
 const MAX_TOOL_CALL_NAME_LENGTH = 128;
@@ -1120,12 +1132,11 @@ export function transformMessages<TApi extends Api>(
 				transformedContent[transformedContent.length - 1] = { ...finalBlock, text: finalBlock.text.trimEnd() };
 			}
 
-			// Record this turn's tool-call ids into the origin scope off the SAME
-			// post-transform content this map emits, in document order — the walk a
-			// separate `collectToolCallOriginScope` pass used to do over the finished
-			// array. Assistant turns are visited in order and only once, and the map
-			// itself never reads `originScope`, so the sets are complete (and never
-			// partially built) by the time dedup consults them.
+			// Record this turn's tool-call ids into the origin scope. Origin scope
+			// must be complete before dedup reads it: filled here off the SAME
+			// post-transform content this map emits, in document order, and never
+			// read inside the map — so by the time the dedup pass consults it the
+			// sets hold every assistant id, never a partial build.
 			recordToolCallOriginScope(assistantMsg, transformedContent, responsesComponents, opaqueCompositeCallIds);
 
 			return {
@@ -1138,30 +1149,31 @@ export function transformMessages<TApi extends Api>(
 	// Per-concrete-id origin classification — the only scope `toolCallPairingKey`
 	// consults to decide whether a pipe-bearing id is a canonicalizable Responses
 	// composite or an opaque Chat Completions token that pairs by raw equality.
-	// The map above already filled both sets; this only names the pair.
+	// The normalization map above fills both; naming the pair is all this does.
 	const originScope: ToolCallOriginScope = { responsesComponents, opaqueCompositeCallIds };
-	// All real tool results, keyed by id, in document order. One id can map to
-	// more than one result: compaction can fold an assistant `tool_use` into a
-	// summary string while its `tool_result` survives, and a later turn may reuse
-	// the id. Filed by the dedup pass itself, at each result's position in that
-	// pass's output array, so `takeRealToolResult` below still pulls the earliest
-	// unconsumed result positioned AFTER the call's assistant turn (an orphaned
-	// earlier result is never pulled forward onto a later call).
-	const realToolResultsById = new Map<string, IndexedToolResult[]>();
-	// Anthropic rejects `tool_result` blocks whose `tool_use_id` does not appear in a prior
-	// `tool_use` block. After handoff/compaction folds an assistant turn into a summary
-	// string, the user-side `toolResult` for that turn can survive while the originating
-	// `tool_use` disappears — leaving an orphan that triggers HTTP 400. Track the set of
-	// `tool_use` ids that survive transformation so the second pass can drop orphans cleanly.
-	// Also filled by the dedup pass, off its own post-dedup content.
-	const validToolUseIds = new Set<string>();
-	const transformed = deduplicateToolCallIds(
+	// All real tool results, keyed by pairing key, in document order. One id can
+	// map to more than one result: compaction can fold an assistant `tool_use`
+	// into a summary string while its `tool_result` survives, and a later turn may
+	// reuse the id. The dedup pass files them at each result's position in its own
+	// output array, so `takeRealToolResult` below pulls the earliest unconsumed
+	// result positioned AFTER the call's assistant turn (an orphaned earlier
+	// result is never pulled forward onto a later call).
+	//
+	// The set carries the `tool_use` pairing keys the dedup pass left standing.
+	// Anthropic rejects `tool_result` blocks whose `tool_use_id` does not appear in
+	// a prior `tool_use` block. After handoff/compaction folds an assistant turn
+	// into a summary string, the user-side `toolResult` for that turn can survive
+	// while the originating `tool_use` disappears — leaving an orphan that
+	// triggers HTTP 400, which the second pass drops as unreplayable.
+	const {
+		messages: transformed,
+		realToolResultsById,
+		validToolUseIds,
+	} = deduplicateToolCallIds(
 		normalizedMessages,
 		originScope,
 		maxNormalizedToolCallIdLength,
 		duplicateToolCallIdSuffixPrefix,
-		realToolResultsById,
-		validToolUseIds,
 	);
 	const takeRealToolResult = (id: string, afterIndex: number): ToolResultMessage | undefined => {
 		const entries = realToolResultsById.get(toolCallPairingKey(id, originScope));

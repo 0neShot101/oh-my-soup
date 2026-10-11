@@ -90,12 +90,12 @@ describe("deduplicateToolCallIds with composite Responses ids", () => {
 		expect(resultIds).toEqual(callIds);
 	});
 
-	it("accumulates same-turn repeats of one id (lazy touched-set path)", () => {
+	it("suffixes same-turn repeats of one id and pairs them 1:1 with their results in order", () => {
 		// One assistant turn emitting the SAME id twice: the second block must
 		// still be suffixed (`_dup1`) and the second real result must rewrite onto
-		// it. The per-turn "already touched" bookkeeping is what restricts the
-		// "drop carried-over pending rewrites" step to an id's FIRST occurrence in
-		// a turn; without it the second block would drop the first block's queued
+		// it. The per-turn first-occurrence rule is what restricts the "drop
+		// carried-over pending rewrites" step to an id's FIRST occurrence in a
+		// turn; without it the second block would drop the first block's queued
 		// rewrite, the first real result would rewrite onto the `_dup1` call and
 		// the second would keep the base id — caller/result pairing inverted.
 		const dupId = "call_same";
@@ -120,9 +120,7 @@ describe("deduplicateToolCallIds with composite Responses ids", () => {
 		expect(results[0]!.content).toEqual([{ type: "text", text: "first" }]);
 		expect(results[1]!.content).toEqual([{ type: "text", text: "second" }]);
 		// No synthetic back-fill: both real results found their call.
-		expect(results.some(r => r.content.some(p => p.type === "text" && p.text === "No result provided"))).toBe(
-			false,
-		);
+		expect(results.some(r => r.content.some(p => p.type === "text" && p.text === "No result provided"))).toBe(false);
 	});
 
 	it("keeps distinct ids independent when one turn interleaves repeats", () => {
