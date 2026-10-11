@@ -258,7 +258,11 @@ describe("eval js read() URI delegation", () => {
 		expect(await vm.runInContext(`read("artifact://7", { offset: 2, limit: 2 })`, sandbox)).toBe(
 			`${"w".repeat(60_000)}\nrow 0`,
 		);
+		expect(await vm.runInContext(`read("artifact://7", { offset: 3 })`, sandbox)).toBe(
+			`${Array.from({ length: 3000 }, (_, i) => `row ${i}`).join("\n")}\n`,
+		);
 		expect(calls).toEqual([
+			{ name: "read", args: { path: "artifact://7:raw:1-1" } },
 			{ name: "read", args: { path: "artifact://7:raw:1-1" } },
 			{ name: "read", args: { path: "artifact://7:raw:1-1" } },
 		]);

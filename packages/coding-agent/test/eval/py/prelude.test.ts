@@ -132,7 +132,9 @@ describe("python prelude", () => {
 			},
 		});
 		try {
+			// No inherited artifacts root (an Eval cell running these tests has one); tests that want one pass it.
 			const result = await runPrelude(code, {
+				PI_EVAL_LOCAL_ROOTS: "{}",
 				...env,
 				PI_TOOL_BRIDGE_URL: server.url.toString(),
 				PI_TOOL_BRIDGE_TOKEN: "test-token",
@@ -175,6 +177,7 @@ describe("python prelude", () => {
 			[
 				`open(${JSON.stringify(out)}, "w", newline="").write(read("artifact://7"))`,
 				`print(repr(read("artifact://7", offset=3, limit=2)))`,
+				`print(read("artifact://7", offset=3) == "".join(f"row {i}\\n" for i in range(3000)))`,
 			].join("\n"),
 			{ PI_EVAL_LOCAL_ROOTS: JSON.stringify({ artifact: tmp.join("own") }) },
 			artifactReadBridge(tmp.path(), tmp.join("owner")),
@@ -182,8 +185,9 @@ describe("python prelude", () => {
 
 		expect(stderr).toBe("");
 		expect(await Bun.file(out).text()).toBe(largeArtifact);
-		expect(stdout).toBe("'row 0\\nrow 1\\n'\n");
+		expect(stdout).toBe("'row 0\\nrow 1\\n'\nTrue\n");
 		expect(requests).toMatchObject([
+			{ name: "read", args: { path: "artifact://7:raw:1-1" } },
 			{ name: "read", args: { path: "artifact://7:raw:1-1" } },
 			{ name: "read", args: { path: "artifact://7:raw:1-1" } },
 		]);
