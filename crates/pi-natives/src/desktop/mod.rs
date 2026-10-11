@@ -671,7 +671,8 @@ impl Worker {
 	}
 
 	/// Holds the display awake for an activity request whose caller is still
-	/// waiting; returns whether it did.
+	/// waiting; returns whether it was, i.e. whether the request counts as
+	/// activity for the grace period.
 	fn hold_display_awake(&mut self, token: &OperationToken) -> bool {
 		let backend = self.backend.as_mut().ok();
 		self
