@@ -251,10 +251,6 @@ export interface Component {
 	 */
 	render(width: number): readonly string[];
 
-	/** Inline decision panels must keep displaced settled transcript rows in
-	 * native scrollback even when mounted inside a transient editor container. */
-	readonly retireDisplacedTranscript?: boolean;
-
 	/**
 	 * Describe the component semantically for a Tern Surface Protocol
 	 * terminal (see `native/node.ts`). Called instead of `render()` when the
@@ -1363,6 +1359,22 @@ export class TUI extends Container {
 			return { top: 0, length: 0 };
 		}
 		return { top: this.#providerViewportTop - this.#providerViewportPadTop, length: this.#providerWindow.length };
+	}
+
+	/**
+	 * Rows of native history the last paint left on screen above a mutable
+	 * viewport that reached the bottom row, or `undefined` when that paint left
+	 * rows free below it (or none happened, or a destructive reset will repaint
+	 * from row zero). Rows above a bottom-reaching viewport may already sit in
+	 * native scrollback, which a later shrink cannot pull back down.
+	 */
+	getFilledHistoryRows(): number | undefined {
+		if (!this.#hasEverRendered || this.#clearScrollbackOnNextRender) return undefined;
+		const height = this.terminal.rows;
+		if (this.#providerWindow.length === 0 || this.#providerViewportTop + this.#providerWindow.length < height) {
+			return undefined;
+		}
+		return Math.min(this.#providerViewportTop, height);
 	}
 
 	/**

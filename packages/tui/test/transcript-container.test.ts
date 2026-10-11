@@ -168,6 +168,60 @@ const finalAnswer: AssistantMessage = {
 
 const frame = { tick: 0, now: 0 };
 
+/** Greedy word wrap, so the same content takes a different row count at each width. */
+function wrapWords(words: readonly string[], width: number): string[] {
+	const rows: string[] = [];
+	let row = "";
+	for (const word of words) {
+		if (row.length > 0 && row.length + 1 + word.length > width) {
+			rows.push(row);
+			row = word;
+		} else {
+			row = row.length > 0 ? `${row} ${word}` : word;
+		}
+	}
+	if (row.length > 0) rows.push(row);
+	return rows;
+}
+
+describe("TranscriptContainer row split", () => {
+	const words = Array.from({ length: 120 }, (_, i) => `w${i}${"x".repeat(i % 5)}`);
+	const prose: Component = { render: width => wrapWords(words, width) };
+
+	it("commits only the rows of a straddling block that left the screen", () => {
+		const transcript = new TranscriptContainer();
+		transcript.addChild(prose);
+		transcript.addChild(new Block(["tail"], true));
+		const rows = wrapWords(words, 40);
+		// Room 10: the tail and its separator leave 8 rows of the prose live.
+		const batch = transcript.peekFinalizedBatch(40, 10)!;
+		expect(batch.rows).toEqual(rows.slice(0, rows.length - 8));
+		transcript.acknowledgeFinalizedBatch(batch.id);
+		expect(transcript.renderViewport(40, 10, frame)).toEqual([...rows.slice(rows.length - 8), "", "tail"]);
+		expect(transcript.blockStates()).toEqual(["settled", "settled"]);
+	});
+
+	it("resumes a split block at the same content after a width change, repeating at most one row", () => {
+		const transcript = new TranscriptContainer();
+		transcript.addChild(prose);
+		transcript.addChild(new Block(["tail"], true));
+		const head = transcript.peekFinalizedBatch(40, 10)!;
+		transcript.acknowledgeFinalizedBatch(head.id);
+		const committed = head.rows.join(" ").split(" ");
+		// A preserve-mode resize keeps the 40-column rows in scrollback; the rest
+		// retires at 25 columns.
+		const rest = transcript.peekFlushBatch(25)!.rows.filter(row => row !== "");
+		const resumed = rest.join(" ").split(" ");
+		expect(resumed.at(-1)).toBe("tail");
+		const restart = words.indexOf(resumed[0]!);
+		// No word is lost, and only the seam row's committed words repeat.
+		expect(restart).toBeLessThanOrEqual(committed.length);
+		expect(resumed.slice(0, -1)).toEqual(words.slice(restart));
+		expect(committed.length - restart).toBeLessThan(wrapWords(words, 25)[0]!.split(" ").length);
+		expect(committed).toEqual(words.slice(0, committed.length));
+	});
+});
+
 describe("TranscriptContainer", () => {
 	it("preserves retirement while externally reordered and replaced live children settle", () => {
 		const transcript = new TranscriptContainer();

@@ -96,12 +96,32 @@ interface TranscriptEntry {
 	 * state for emitted-row slicing but never emits another mid-stream row.
 	 */
 	stableFrozen: boolean;
+	/**
+	 * Head rows of a settled block already in native history while the rest
+	 * stays live: pressure commits only the rows that left the screen, so no
+	 * committed row is ever still visible above the viewport.
+	 */
+	split: RowSplit | undefined;
+}
+
+/**
+ * A committed physical row prefix of one block. `rows` counts trimmed render
+ * rows at `width` (any emitted stable prefix included); `ink` is their
+ * non-blank cell count, which re-locates the seam at another width without a
+ * replay, since rewrapping moves cells between rows but never drops them.
+ */
+interface RowSplit {
+	readonly rows: number;
+	readonly width: number;
+	readonly ink: number;
+	readonly rowsByWidth: Map<number, number>;
 }
 
 type RetirementPolicy = "pressure" | "flush";
 type Offered =
 	| { batch: HistoryBatch; kind: "append"; entry: number; emittedEnd: number }
-	| { batch: HistoryBatch; kind: "commit"; end: number }
+	/** Whole blocks `[frontier, end)`, then optionally the head rows of block `end`. */
+	| { batch: HistoryBatch; kind: "commit"; end: number; split?: RowSplit }
 	| { batch: HistoryBatch; kind: "replay" };
 
 /** Rows a progressive-append retirement offers, and the stable count they bring the head to. */
@@ -138,6 +158,13 @@ function blockMode(component: Component): TranscriptBlockMode {
 
 function isPlainBlank(line: string): boolean {
 	return !/\S/.test(line);
+}
+
+/** Non-blank cells of `rows`; wrapping a block at another width preserves this total. */
+function inkOf(rows: readonly string[]): number {
+	let ink = 0;
+	for (const row of rows) ink += Bun.stripANSI(row).replace(/\s/g, "").length;
+	return ink;
 }
 
 /** Whether `prefix` matches `rows` byte-for-byte from the top. */
@@ -226,6 +253,7 @@ export class TranscriptContainer extends Container {
 			stableRowCountByWidth: new Map(),
 			emitted: 0,
 			stableFrozen: false,
+			split: undefined,
 		});
 		// `children` is public and may be edited externally; re-check the whole
 		// list once instead of trusting positions. Insert-after-anchor callers
@@ -300,13 +328,16 @@ export class TranscriptContainer extends Container {
 	 */
 	resetStableEmission(): void {
 		this.#syncEntries();
-		if (this.#offered?.kind === "append") this.#offered = undefined;
+		if (this.#offered?.kind === "append" || (this.#offered?.kind === "commit" && this.#offered.split)) {
+			this.#offered = undefined;
+		}
 		for (const entry of this.#entries) {
 			entry.emitted = 0;
 			entry.stableRows = EMPTY_STABLE_ROWS;
 			entry.renderedStableByWidth = new Map();
 			entry.stableRowCountByWidth = new Map();
 			entry.stableFrozen = false;
+			entry.split = undefined;
 			if (entry.mode === "appendOnly") {
 				(entry.component as Component & AppendOnlyTranscriptBlock).resetTranscriptStableRows?.();
 			}
@@ -329,8 +360,8 @@ export class TranscriptContainer extends Container {
 		const index = this.#entries.findLastIndex(entry => entry.component === component);
 		if (index < 0) return -1;
 		const entry = this.#entries[index]!;
-		if (entry.state === "committed" || entry.emitted > 0) return -1;
-		if (this.#offered?.kind === "commit" && index < this.#offered.end) return -1;
+		if (entry.state === "committed" || entry.emitted > 0 || entry.split !== undefined) return -1;
+		if (this.#offered?.kind === "commit" && index < this.#offered.end + (this.#offered.split ? 1 : 0)) return -1;
 		if (this.#offered?.kind === "append" && index === this.#offered.entry) return -1;
 		return index;
 	}
@@ -646,6 +677,12 @@ export class TranscriptContainer extends Container {
 			rows = after.slice(before.length);
 		} else if (offered.kind === "commit") {
 			rows = this.#renderRange(this.#frontier, offered.end, width, true).rows;
+			const head = offered.split ? this.#entries[offered.end] : undefined;
+			if (head !== undefined && offered.split !== undefined) {
+				const start = this.#emittedRowCount(head, width);
+				const end = this.#splitRowCount(head, offered.split, width);
+				rows = [...rows, ...renderForScrollback(() => this.#renderEntry(head, width)).slice(start, end)];
+			}
 		} else {
 			rows = this.#renderReplay(width);
 		}
@@ -674,6 +711,7 @@ export class TranscriptContainer extends Container {
 			head?.mode === "appendOnly" &&
 			!head.stableFrozen &&
 			head.state !== "committed" &&
+			head.split === undefined &&
 			head.emitted < head.stableRows.length
 				? head
 				: undefined;
@@ -739,9 +777,26 @@ export class TranscriptContainer extends Container {
 			limit = Math.max(limit, this.#frontier + (this.#liveCount() - (MAX_LIVE_BLOCKS - 1)));
 		}
 		if (policy === "flush") limit = this.#entries.length;
+		// The block straddling the top edge commits only the rows that left the
+		// screen; the rest stays live, so a later shrink of the chrome or the
+		// tail refills the screen from live rows instead of opening a band no
+		// frame can fill (rows still on screen cannot return from scrollback).
+		let split: { index: number; rows: readonly string[]; split: RowSplit } | undefined;
+		if (policy === "pressure" && keep > 0 && limit === this.#frontier + keep) {
+			const boundary = live[keep - 1]!;
+			const visible = room - tailRows - (tailRows > 0 ? 1 : 0);
+			if (boundary.entry.state === "settled" && visible > 0) {
+				const offer = this.#splitOffer(boundary.entry, width, visible);
+				if (offer !== undefined) {
+					split = { index: boundary.index, ...offer };
+					limit = boundary.index;
+				}
+			}
+		}
 		let end = this.#frontier;
 		while (end < limit && end < this.#entries.length && this.#entries[end]!.state === "settled") end++;
-		if (end === this.#frontier) {
+		if (split !== undefined && end !== split.index) split = undefined;
+		if (end === this.#frontier && split === undefined) {
 			if (policy === "pressure") this.#notePinnedFrontier();
 			return undefined;
 		}
@@ -761,13 +816,36 @@ export class TranscriptContainer extends Container {
 		} finally {
 			popLoopPhase();
 		}
+		if (split !== undefined && retirement.end !== split.index) split = undefined;
 		const batch: HistoryBatch = {
 			id: this.#nextBatchId++,
-			rows: retirement.rows,
+			rows: split === undefined ? retirement.rows : [...retirement.rows, ...split.rows],
 			kind: "append",
 		};
-		this.#offered = { batch, end: retirement.end, kind: "commit" };
+		this.#offered = { batch, end: retirement.end, kind: "commit", split: split?.split };
 		return batch;
+	}
+
+	/**
+	 * The head rows of settled `entry` beyond its committed prefix that leave
+	 * `visible` rows live, or undefined when nothing would remain committed
+	 * past that prefix or the scrollback render would not line up row for row.
+	 */
+	#splitOffer(
+		entry: TranscriptEntry,
+		width: number,
+		visible: number,
+	): { rows: readonly string[]; split: RowSplit } | undefined {
+		const measured = this.#measuredRows(entry, width);
+		const start = this.#emittedRowCount(entry, width);
+		const total = measured.length - visible;
+		if (total <= start) return undefined;
+		const scrollback = renderForScrollback(() => this.#renderEntry(entry, width));
+		if (scrollback.length !== measured.length) return undefined;
+		return {
+			rows: scrollback.slice(start, total),
+			split: { rows: total, width, ink: inkOf(measured.slice(0, total)), rowsByWidth: new Map() },
+		};
 	}
 
 	/** Acknowledges exactly the most recently offered append, commit, or replay transaction. */
@@ -786,6 +864,8 @@ export class TranscriptContainer extends Container {
 				this.#retireEntry(this.#entries[index]!);
 			}
 			this.#frontier = offered.end;
+			const head = offered.split ? this.#entries[offered.end] : undefined;
+			if (head !== undefined) head.split = offered.split;
 		} else {
 			this.#releaseCommittedRenderCaches();
 		}
@@ -928,19 +1008,61 @@ export class TranscriptContainer extends Container {
 	}
 
 	/**
-	 * Length-only variant of `#renderStablePrefix`: answers the projected
-	 * emitted row count without re-rendering the prefix. The container only
-	 * needs the length for slicing; the render call it replaced existed
-	 * purely to read `.length` off the result.
+	 * Rows of `entry` at `width` already in native history or in the
+	 * unacknowledged offer: the row split when one is pending or committed,
+	 * else its emitted stable prefix.
 	 */
 	#projectedEmittedRowCount(entry: TranscriptEntry, index: number, width: number): number {
 		const offered = this.#offered;
-		const count = offered?.kind === "append" && offered.entry === index ? offered.emittedEnd : entry.emitted;
+		if (offered?.kind === "commit" && offered.split !== undefined && offered.end === index) {
+			return this.#splitRowCount(entry, offered.split, width);
+		}
+		if (offered?.kind === "append" && offered.entry === index && entry.split === undefined) {
+			return this.#stablePrefixRowCount(entry, offered.emittedEnd, width);
+		}
+		return this.#emittedRowCount(entry, width);
+	}
+
+	/** Rows of `entry` at `width` already acknowledged into native history. */
+	#emittedRowCount(entry: TranscriptEntry, width: number): number {
+		if (entry.split !== undefined) return this.#splitRowCount(entry, entry.split, width);
+		return this.#stablePrefixRowCount(entry, entry.emitted, width);
+	}
+
+	/**
+	 * Length-only variant of `#renderStablePrefix`: answers the emitted row
+	 * count without re-rendering the prefix when this width already recorded it.
+	 */
+	#stablePrefixRowCount(entry: TranscriptEntry, count: number, width: number): number {
 		if (count === 0) return 0;
 		const perCount = entry.stableRowCountByWidth.get(width);
 		const memo = perCount?.get(Math.min(count, entry.stableRows.length));
 		if (memo !== undefined) return memo;
 		return this.#renderStablePrefix(entry, count, width).length;
+	}
+
+	/**
+	 * Rows `split` covers at `width`: exact at the width it was taken, else the
+	 * longest render prefix holding no more ink than was committed. A seam that
+	 * falls inside a row at the new width leaves that row live, repeating its
+	 * already-committed cells rather than dropping uncommitted ones.
+	 */
+	#splitRowCount(entry: TranscriptEntry, split: RowSplit, width: number): number {
+		if (width === split.width) return split.rows;
+		let count = split.rowsByWidth.get(width);
+		if (count === undefined) {
+			const rendered = this.#measuredRows(entry, width);
+			let ink = 0;
+			count = 0;
+			while (count < rendered.length) {
+				const next = ink + inkOf([rendered[count]!]);
+				if (next > split.ink) break;
+				ink = next;
+				count++;
+			}
+			split.rowsByWidth.set(width, count);
+		}
+		return count;
 	}
 
 	/**
@@ -1055,7 +1177,7 @@ export class TranscriptContainer extends Container {
 			const rendered = renderForScrollback(() =>
 				index === start ? this.#renderEntry(entry, width) : trimBlankEdges(entry.component.render(width)),
 			);
-			const emittedRows = index === start ? this.#renderStablePrefix(entry, entry.emitted, width).length : 0;
+			const emittedRows = index === start ? this.#emittedRowCount(entry, width) : 0;
 			const block = rendered.slice(emittedRows);
 			reached = index + 1;
 			if (block.length > 0) {
@@ -1071,7 +1193,11 @@ export class TranscriptContainer extends Container {
 	#renderReplay(width: number): readonly string[] {
 		const rows = Array.from(this.#renderRange(0, this.#frontier, width, true).rows);
 		const head = this.#entries[this.#frontier];
-		if (head?.mode === "appendOnly" && head.emitted > 0) {
+		if (head?.split !== undefined) {
+			this.#setAllocation(head.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
+			const committed = this.#splitRowCount(head, head.split, width);
+			rows.push(...renderForScrollback(() => this.#renderEntry(head, width)).slice(0, committed));
+		} else if (head?.mode === "appendOnly" && head.emitted > 0) {
 			this.#setAllocation(head.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
 			this.#renderEntry(head, width);
 			rows.push(...this.#renderStablePrefix(head, head.emitted, width));
@@ -1082,10 +1208,15 @@ export class TranscriptContainer extends Container {
 	#completeFullyEmittedHeads(width: number): void {
 		while (this.#frontier < this.#entries.length) {
 			const entry = this.#entries[this.#frontier]!;
-			if (entry.mode !== "appendOnly" || entry.state !== "settled") return;
-			const rendered = this.#measuredRows(entry, width);
-			if (entry.emitted !== entry.stableRows.length) return;
-			if (this.#renderStablePrefix(entry, entry.emitted, width).length !== rendered.length) return;
+			if (entry.state !== "settled") return;
+			if (entry.split !== undefined) {
+				if (this.#splitRowCount(entry, entry.split, width) < this.#measuredRows(entry, width).length) return;
+			} else {
+				if (entry.mode !== "appendOnly") return;
+				const rendered = this.#measuredRows(entry, width);
+				if (entry.emitted !== entry.stableRows.length) return;
+				if (this.#renderStablePrefix(entry, entry.emitted, width).length !== rendered.length) return;
+			}
 			this.#retireEntry(entry);
 			this.#frontier++;
 		}
@@ -1094,6 +1225,7 @@ export class TranscriptContainer extends Container {
 	#retireEntry(entry: TranscriptEntry): void {
 		entry.state = "committed";
 		entry.emitted = 0;
+		entry.split = undefined;
 		entry.stableRows = EMPTY_STABLE_ROWS;
 		entry.renderedStableByWidth = new Map();
 		entry.stableRowCountByWidth = new Map();
@@ -1124,7 +1256,8 @@ export class TranscriptContainer extends Container {
 
 	#startReplay(): void {
 		const head = this.#entries[this.#frontier];
-		this.#replayPending = this.#frontier > 0 || (head?.mode === "appendOnly" && head.emitted > 0);
+		this.#replayPending =
+			this.#frontier > 0 || head?.split !== undefined || (head?.mode === "appendOnly" && head.emitted > 0);
 		this.#replayRequested = false;
 	}
 
@@ -1295,6 +1428,7 @@ export class TranscriptContainer extends Container {
 					stableRowCountByWidth: new Map(),
 					emitted: 0,
 					stableFrozen: false,
+					split: undefined,
 				},
 		);
 		this.#frontier = this.#entries.findIndex(entry => entry.state !== "committed");
