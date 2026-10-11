@@ -29,7 +29,7 @@ import { BLOB_HASH_RE, BLOB_STAGING_RE, blobStagingPath } from "../session/blob-
 import { listSessionsReadOnly, type SessionInfo, type SessionStatus } from "../session/session-listing";
 import { parseTerminalBreadcrumb } from "../session/session-paths";
 import { readSessionHeaderId } from "../session/session-loader";
-import { FileSessionStorage, tryAcquireSessionLease } from "../session/session-storage";
+import { FileSessionStorage, SESSION_STAGING_RE, tryAcquireSessionLease } from "../session/session-storage";
 import {
 	cfgGcArchive,
 	cfgGcBlobs,
@@ -47,6 +47,7 @@ const BLOB_REF_RE = /\bblob:sha256:([a-f0-9]{64})\b/gi;
 const JSONL_GLOB = new Bun.Glob("**/*.jsonl");
 const JSONL_GZ_GLOB = new Bun.Glob("**/*.jsonl.gz");
 const JSONL_BACKUP_GLOB = new Bun.Glob("**/*.jsonl.*.bak");
+const SESSION_STAGING_GLOB = new Bun.Glob("**/.*.jsonl.*.tmp");
 const ACTIVE_STATUSES: ReadonlySet<SessionStatus> = new Set(["pending", "interrupted", "unknown"]);
 const DAY_MS = 86_400_000;
 const GC_WRITE_GRACE_MS = 5 * 60_000;
@@ -99,6 +100,10 @@ export interface ArchiveGcResult {
 	historyRowsDeleted: number;
 	statsRowsDeleted: number;
 	ftsRebuilt: boolean;
+	/** Session staging temps past the write grace, left by a killed or crashed writer. */
+	wouldDeleteTemps: number;
+	deletedTemps: number;
+	tempBytes: number;
 	errors: string[];
 }
 
@@ -1670,6 +1675,63 @@ async function cleanupStatsRowsForArchivedSessions(
 	}
 }
 
+/**
+ * Staging temps ({@link SESSION_STAGING_RE}) of `.jsonl` transcripts under
+ * `sessionsRoot`, plus those beside exact session files recorded elsewhere
+ * (`--session` paths, collab replicas).
+ */
+async function collectSessionStagingFiles(sessionsRoot: string, exactSessionFiles: string[]): Promise<string[]> {
+	const files = new Map<string, string>();
+	try {
+		for await (const name of SESSION_STAGING_GLOB.scan({ cwd: sessionsRoot, dot: true })) {
+			if (!SESSION_STAGING_RE.exec(path.basename(name))?.[1]?.endsWith(SESSION_SUFFIX)) continue;
+			const file = path.join(sessionsRoot, name);
+			files.set(normalizePathForComparison(file), file);
+		}
+	} catch (error) {
+		if (codeOf(error) !== "ENOENT") throw error;
+	}
+	for (const sessionFile of exactSessionFiles) {
+		const target = path.basename(sessionFile);
+		for (const file of await listFilesIfPresent(path.dirname(sessionFile))) {
+			if (SESSION_STAGING_RE.exec(path.basename(file))?.[1] === target) {
+				files.set(normalizePathForComparison(file), file);
+			}
+		}
+	}
+	return [...files.values()];
+}
+
+/**
+ * Count, and with `--apply` delete, session staging temps past the write
+ * grace. A live publish renames its temp away within milliseconds, so an
+ * older one was left by a killed or crashed writer and nothing will claim it.
+ */
+async function sweepSessionStagingFiles(
+	options: ResolvedGcOptions,
+	sessionsRoot: string,
+	result: ArchiveGcResult,
+): Promise<void> {
+	const exactSessionFiles = [
+		...(await collectRegisteredSessionFiles(getCustomSessionFilesDir(options.agentDir))),
+		...(await collectBreadcrumbSessionFiles(getTerminalSessionsDir(options.agentDir))),
+	];
+	const deleteBeforeMs = Date.now() - GC_WRITE_GRACE_MS;
+	for (const file of await collectSessionStagingFiles(sessionsRoot, exactSessionFiles)) {
+		const stat = await statIfPresent(file);
+		if (!stat?.isFile() || stat.mtimeMs > deleteBeforeMs) continue;
+		result.wouldDeleteTemps += 1;
+		result.tempBytes += stat.size;
+		if (!options.apply) continue;
+		try {
+			await fs.unlink(file);
+			result.deletedTemps += 1;
+		} catch (error) {
+			if (codeOf(error) !== "ENOENT") result.errors.push(`${file}: ${errorMessage(error)}`);
+		}
+	}
+}
+
 async function runArchiveGc(options: ResolvedGcOptions, archiveRoot: string): Promise<ArchiveGcResult> {
 	const sessionsRoot = getSessionsDir(options.agentDir);
 	const sessions = await listActiveSessions(sessionsRoot);
@@ -1684,6 +1746,9 @@ async function runArchiveGc(options: ResolvedGcOptions, archiveRoot: string): Pr
 		historyRowsDeleted: 0,
 		statsRowsDeleted: 0,
 		ftsRebuilt: false,
+		wouldDeleteTemps: 0,
+		deletedTemps: 0,
+		tempBytes: 0,
 		errors: [],
 	};
 	const candidates: ArchiveCandidate[] = [];
@@ -1725,6 +1790,8 @@ async function runArchiveGc(options: ResolvedGcOptions, archiveRoot: string): Pr
 	}
 
 	result.wouldArchive = candidates.length;
+	// Before archiving moves transcripts away from the temps staged beside them.
+	await sweepSessionStagingFiles(options, sessionsRoot, result);
 	if (!options.apply) return result;
 
 	const archivedSessionIds: string[] = [];
@@ -2001,6 +2068,11 @@ function renderText(result: GcResult): string {
 			`sessions: ${result.archive.archived}/${result.archive.wouldArchive} archived, ${result.archive.historyRowsDeleted} history rows and ${result.archive.statsRowsDeleted} stats rows removed`,
 		);
 		if (result.archive.skippedActive > 0) lines.push(`sessions skipped active: ${result.archive.skippedActive}`);
+		if (result.archive.wouldDeleteTemps > 0) {
+			lines.push(
+				`session staging temps: ${result.archive.deletedTemps}/${result.archive.wouldDeleteTemps} files, ${formatBytes(result.archive.tempBytes)}`,
+			);
+		}
 		if (result.archive.errors.length > 0) lines.push(`session errors: ${result.archive.errors.length}`);
 	}
 	if (result.wal) {

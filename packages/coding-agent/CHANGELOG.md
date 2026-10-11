@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `omp gc --apply` leaving full-size session rewrite temps (`.<name>.jsonl.<snowflake>.tmp`) behind after a writer was killed mid-save; the sessions phase now reclaims them past the write grace ([#15350](https://github.com/can1357/oh-my-pi/issues/15350))
+
 ## [18.9.0] - 2026-10-11
 
 ### Added

@@ -10,7 +10,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { BlobStore, blobStagingPath } from "@oh-my-pi/pi-coding-agent/session/blob-store";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import { FileSessionStorage, sessionStagingPath } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import {
 	getAgentDir,
 	getBlobsDir,
@@ -774,6 +774,42 @@ describe("runGcCommand history checkpoint", () => {
 			writer.close();
 		}
 	}, 10_000);
+});
+
+describe("runGcCommand session staging sweep", () => {
+	test("removes rewrite temps abandoned by killed writers, keeping in-flight and unrelated ones", async () => {
+		const live = await writeSession(root, "project", "live", "pending");
+		const abandoned = sessionStagingPath(live);
+		const inFlight = sessionStagingPath(live);
+		// Subagent transcripts nest inside the parent's artifacts directory.
+		const nestedAbandoned = sessionStagingPath(path.join(live.slice(0, -".jsonl".length), "0-sub.jsonl"));
+		// An extensionless `--session` transcript outside the sessions tree, known only to the registry.
+		const externalDir = path.join(root, "external-sessions");
+		const externalFile = path.join(externalDir, "work");
+		await Bun.write(externalFile, "{}\n");
+		await Bun.write(path.join(getCustomSessionFilesDir(root), "session-1"), externalFile);
+		const externalAbandoned = sessionStagingPath(externalFile);
+		const unrelated = path.join(externalDir, ".notes.0123456789abcdef.tmp");
+		for (const file of [abandoned, nestedAbandoned, externalAbandoned, unrelated]) {
+			await Bun.write(file, "partial");
+			await agePath(file);
+		}
+		await Bun.write(inFlight, "partial");
+		const flags = { agentDir: root, archive: true };
+
+		const dryRun = await runGcCommand({ flags });
+		expect(dryRun.archive).toMatchObject({ wouldDeleteTemps: 3, deletedTemps: 0, tempBytes: 21 });
+		expect(await Bun.file(abandoned).exists()).toBe(true);
+
+		const applied = await runGcCommand({ flags: { ...flags, apply: true } });
+		expect(applied.archive).toMatchObject({ wouldDeleteTemps: 3, deletedTemps: 3, errors: [] });
+		for (const removed of [abandoned, nestedAbandoned, externalAbandoned]) {
+			expect(await Bun.file(removed).exists()).toBe(false);
+		}
+		for (const kept of [live, inFlight, externalFile, unrelated]) {
+			expect(await Bun.file(kept).exists()).toBe(true);
+		}
+	});
 });
 
 describe("runGcCommand cold-session archive", () => {
