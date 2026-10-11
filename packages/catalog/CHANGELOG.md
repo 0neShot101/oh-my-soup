@@ -17,6 +17,7 @@
 
 ### Fixed
 
+- Fixed Groq rejecting requests omp built for it: Kimi tool-call turns no longer carry `reasoning_content` (400 "property 'reasoning_content' is unsupported"), and Qwen is driven by `reasoning_effort` with `none` as its off value instead of `enable_thinking` (400 "property 'enable_thinking' is unsupported"); Qwen 3.8 offers low/medium/high
 - Fixed GLM-5.3-FlashX on Zhipu Coding Plan missing bundled context, image, and thinking-level metadata ([#15314](https://github.com/can1357/oh-my-pi/issues/15314)).
 - Fixed `openrouterDecisionsBaseUrl` deriving a malformed OpenRouter Decisions root when the chat `baseUrl` has a trailing slash (such as `.../api/v1/`); it now strips trailing slashes before mapping `/v1` to `/alpha`, and is exported so provider-wide `baseUrl` overrides can reuse it ([#14848](https://github.com/can1357/oh-my-pi/pull/14848) by [@jerryfane](https://github.com/jerryfane))
 - Fixed GPT-6.1 Sol Ultrafast usage being priced at the Standard rate; it now applies OpenAI's published premium: 6x on the OpenAI API and 8x included usage on Codex ([#15000](https://github.com/can1357/oh-my-pi/pull/15000) by [@eggpeat](https://github.com/eggpeat)).
