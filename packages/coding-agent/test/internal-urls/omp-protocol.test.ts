@@ -1,9 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
-
-/** Repo `docs/` tree a source checkout reads the corpus from (see `docs-index`). */
-const DOCS_ROOT = path.resolve(import.meta.dir, "../../../../docs");
+import { getDocsDiskRoot } from "@oh-my-pi/pi-coding-agent/internal-urls/docs-index";
 
 describe("OmpProtocolHandler", () => {
 	it("treats omp://docs as the documentation root", async () => {
@@ -22,15 +20,18 @@ describe("OmpProtocolHandler", () => {
 		expect(prefixed.content).toContain("# read");
 	});
 
-	it("locates a doc to the file a source checkout reads it from", async () => {
+	it("locates a doc to the file the active corpus was read from", async () => {
 		const router = InternalUrlRouter.instance();
-		const onDisk = path.resolve(DOCS_ROOT, "tools/read.md");
+		// A source checkout reads docs from disk; a bundled or embedded corpus
+		// (e.g. after `gen:bundle`) has no file and must never link.
+		const root = getDocsDiskRoot();
+		const onDisk = root === null ? undefined : path.join(root, "tools", "read.md");
 
 		// Both renderer entry points (sync read cards, async markdown links) must
 		// agree on the file, or a link opens a doc `read` never resolved.
 		expect(router.locateSync("omp://tools/read.md")).toBe(onDisk);
 		expect(router.locateSync("omp://docs/tools/read.md:1-20")).toBe(onDisk);
-		expect(await router.locate("omp://tools/read.md")).toBe(onDisk);
+		expect(await router.locate("omp://tools/read.md")).toBe(onDisk ?? null);
 	});
 
 	it("never locates a URL that names no doc on disk", async () => {
