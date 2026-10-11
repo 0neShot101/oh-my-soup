@@ -268,6 +268,32 @@ describe("anthropic head caching (general API-key path)", () => {
 		expect(findCachedMessageIndices(withTools)).toEqual([28, 64]);
 	});
 
+	it("bounds the stable prefix at the oldest of several per-call marks", async () => {
+		// 40 turns with per-call marks after turns 32 and 36. Only the prefix
+		// before the OLDEST mark repeats next request, so decimation counts and
+		// the sub-prefix anchor must both come from turns 1-32, not 1-36.
+		const messages: Message[] = [];
+		for (let i = 1; i <= 40; i++) {
+			messages.push({ role: "user", content: `user ${i}`, timestamp: i * 2 });
+			messages.push(assistantMessage(`assistant ${i}`, i * 2 + 1));
+		}
+		const mark = (timestamp: number): Message => {
+			const message: Message = { role: "developer", content: "per-call context", timestamp };
+			markPerCallContextMessage(message);
+			return message;
+		};
+		// After assistant 36 (index 71) first, so the earlier splice index holds.
+		messages.splice(72, 0, mark(98));
+		messages.splice(64, 0, mark(99));
+
+		const body = await captureWireBody(undefined, { ...CONTEXT, systemPrompt: [], tools: [], messages });
+		expect(countCacheBreakpoints(body)).toBeLessThanOrEqual(4);
+		// 28 = user 15 and 58 = user 30 (decimation inside turns 1-32); 63 =
+		// assistant 32, the newest message before the oldest mark; 81 = the
+		// rolling tail anchor.
+		expect(findCachedMessageIndices(body)).toEqual([28, 58, 63, 81]);
+	});
+
 	it("adds no breakpoints when caching is disabled", async () => {
 		const body = await captureWireBody("none");
 		expect(countCacheBreakpoints(body)).toBe(0);

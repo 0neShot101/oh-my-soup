@@ -4487,9 +4487,10 @@ function applyPromptCaching(params: MessageCreateParamsStreaming, cacheControl?:
 	// and the conversational-turn count under it. The first per-call/turn-scoped
 	// message from the start is the last mark this walk sees (so `markIndex` ends
 	// up as that boundary), and the turn counter — reset on every mark — ends up
-	// counting exactly the turns a mark would have excluded. Nothing is
-	// materialized: the checkpoint search below walks the same history backwards
-	// and stops as soon as the breakpoint budget is spent.
+	// counting exactly the conversational turns before the first mark (the range
+	// the old forward scan covered). Nothing is materialized: the checkpoint
+	// search below walks the same history backwards and stops as soon as the
+	// breakpoint budget is spent.
 	let markIndex = -1;
 	let stableUserTurns = 0;
 	// Collect up to 2 trailing candidates from the message tail, skipping
