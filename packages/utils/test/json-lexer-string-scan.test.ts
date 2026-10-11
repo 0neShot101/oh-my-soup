@@ -18,6 +18,22 @@ function lexCost(unit: string, units: number, runs: number): number {
 	return best;
 }
 
+/** `indexOf` calls made while running `fn`, by searched needle. */
+function countSearches(fn: () => void): string[] {
+	const indexOf = vi.spyOn(String.prototype, "indexOf");
+	fn();
+	const needles = indexOf.mock.calls.map(args => String(args[0]));
+	indexOf.mockRestore();
+	return needles;
+}
+
+/**
+ * Contract: `JsonLexer.string()` scans a string in linear time whatever its
+ * escape density, and decodes it exactly. Streaming tool-call arguments are
+ * re-lexed on every growth step, so a superlinear scan on escape-heavy
+ * payloads (Windows paths, escaped code) or on objects with many sibling
+ * strings turns each partial parse into a stall.
+ */
 describe("JsonLexer string scan", () => {
 	it.each([
 		["`", 0x60],
@@ -40,28 +56,19 @@ describe("JsonLexer string scan", () => {
 	it("does not re-search the remaining input once per adjacent escape", () => {
 		const escapes = 4096;
 		const src = `"${"\\\\".repeat(escapes)}${"x".repeat(64)}"`;
-		const indexOf = vi.spyOn(String.prototype, "indexOf");
-		const progress = new JsonLexer(src, "strict").string(QUOTE);
-		const searches = indexOf.mock.calls.length;
-		indexOf.mockRestore();
+		let progress: unknown;
+		const searches = countSearches(() => {
+			progress = new JsonLexer(src, "strict").string(QUOTE);
+		});
 
-		expect(searches).toBeLessThan(16);
+		expect(searches.length).toBeLessThan(16);
 		expect(progress).toEqual({
 			value: `${"\\".repeat(escapes)}${"x".repeat(64)}`,
 			complete: true,
 			stableLen: escapes + 64,
 		});
 	});
-});
 
-/**
- * Contract: `JsonLexer.string()` scans a string in linear time whatever its
- * escape density, and decodes it exactly. Streaming tool-call arguments are
- * re-lexed on every growth step, so a superlinear scan on escape-heavy
- * payloads (Windows paths, escaped code) turns each partial parse into a
- * stall.
- */
-describe("JsonLexer string scan", () => {
 	it("keeps escape-dense strings linear", () => {
 		// Equal total work at two sizes: 64 lexes of 2K units vs 8 lexes of 16K.
 		// A linear scan costs about the same (ratio ~1); one that re-searches the
@@ -76,27 +83,41 @@ describe("JsonLexer string scan", () => {
 		expect(progress.value).toBe("a\\".repeat(4));
 	});
 
-	it("avoids bulk searches for short ordinary runs between escapes", () => {
-		const value = `${"a".repeat(31)}\n`.repeat(128);
-		const src = JSON.stringify(value);
-		const indexOf = vi.spyOn(String.prototype, "indexOf");
-		const progress = new JsonLexer(src, "strict").string(QUOTE);
-		const searches = indexOf.mock.calls.length;
-		indexOf.mockRestore();
-
-		expect(searches).toBeLessThan(16);
-		expect(progress.value).toBe(value);
-	});
-
 	it("does not re-search a distant closing quote after every mixed escape", () => {
 		const src = `"${`${"a".repeat(64)}\\n`.repeat(4096)}${"x".repeat(64)}"`;
-		const indexOf = vi.spyOn(String.prototype, "indexOf");
-		const progress = new JsonLexer(src, "strict").string(QUOTE);
-		const quoteSearches = indexOf.mock.calls.filter(args => args[0] === '"').length;
-		indexOf.mockRestore();
+		let value: unknown;
+		const searches = countSearches(() => {
+			value = new JsonLexer(src, "strict").string(QUOTE).value;
+		});
 
-		expect(quoteSearches).toBeLessThan(16);
-		expect(progress.value).toBe(JSON.parse(src));
+		expect(searches.filter(needle => needle === '"').length).toBeLessThan(16);
+		expect(value).toBe(JSON.parse(src));
+	});
+
+	it("shares one backslash search across escape-free sibling strings", () => {
+		// Without a backslash, each string's search runs to the end of the
+		// document; repeating it per sibling string is quadratic in the object.
+		const entries = Array.from({ length: 512 }, (_, k) => [`key${k}`, `value number ${k}`] as const);
+		const json = JSON.stringify(Object.fromEntries(entries));
+		// Drop the closing `}` so the lexer parses it, not the JSON.parse fast path.
+		const partial = json.slice(0, -1);
+		let parsed: unknown;
+		const searches = countSearches(() => {
+			parsed = parseStreamingJson(partial);
+		});
+
+		expect(searches.filter(needle => needle === "\\").length).toBeLessThan(4);
+		expect(parsed).toEqual(Object.fromEntries(entries));
+	});
+
+	it("re-searches backslashes when the cursor moves before the cached range", () => {
+		const first = '"a\\nb"';
+		const src = `${first} "${"x".repeat(64)}"`;
+		const lexer = new JsonLexer(src, "strict", first.length + 1);
+		expect(lexer.string(QUOTE).value).toBe("x".repeat(64));
+
+		lexer.pos = 0;
+		expect(lexer.string(QUOTE)).toEqual({ value: "a\nb", complete: true, stableLen: 3 });
 	});
 
 	it("decodes long mixed runs of text and escapes", () => {
@@ -112,7 +133,8 @@ describe("JsonLexer string scan", () => {
 			stableLen: prefix.length,
 			complete: false,
 		});
-		expect(parseStreamingJson<{ text: string }>(`{"text":"${prefix}\\uD83D\\uDE00"}`)).toEqual({
+		// No closing `"}`: complete JSON would take the JSON.parse fast path.
+		expect(parseStreamingJson<{ text: string }>(`{"text":"${prefix}\\uD83D\\uDE00`)).toEqual({
 			text: `${prefix}😀`,
 		});
 	});

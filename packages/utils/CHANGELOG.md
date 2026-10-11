@@ -4,7 +4,11 @@
 
 ### Changed
 
-- Sped up streaming JSON scanning for long ordinary tool-argument strings while limiting bulk-scan overhead between escapes ([#14297](https://github.com/can1357/oh-my-pi/pull/14297) by [@abilliontokens](https://github.com/abilliontokens), [#15273](https://github.com/can1357/oh-my-pi/pull/15273) by [@iliaal](https://github.com/iliaal)).
+- Sped up streaming JSON parsing of tool arguments with many string values: the scan no longer re-searches the rest of the payload for a backslash once per string (about 2.2x faster on a 24 KB object of 300 short-string entries) ([#15273](https://github.com/can1357/oh-my-pi/pull/15273) by [@iliaal](https://github.com/iliaal)).
+
+### Fixed
+
+- Fixed `JsonLexer.string()` running past a closing delimiter other than `"` or `'` (such as a backtick) in strings longer than 32 characters ([#15273](https://github.com/can1357/oh-my-pi/pull/15273) by [@iliaal](https://github.com/iliaal)).
 
 ## [18.9.0] - 2026-10-11
 
