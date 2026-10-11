@@ -9,17 +9,32 @@
  * TUI's local guess everywhere else. An on-device judge only picks the kind
  * (keyword answers), keeping the rest of the guess.
  */
-import type { Answer, ChoiceQuestion, JudgmentState, Questions } from "@oh-my-pi/pi-ai";
 import {
+	type Answer,
+	type ChoiceQuestion,
+	type JudgmentState,
+	judgeQuestions,
+	type Questions,
+	renderQuestion,
+} from "@oh-my-pi/pi-ai";
+import {
+	buildChart,
 	type ChartKind,
 	type ChartPlan,
 	dotsFit,
+	drawnNames,
+	findTarget,
 	guessMeaning,
 	guessNaming,
 	guessShading,
+	histogramColumns,
 	isConditionPair,
+	isTransition,
+	ladderColumns,
 	leadingMeasures,
+	MAX_SHARE_SEGMENTS,
 	namingColumns,
+	opposedColumns,
 	outcomeColumns,
 	type Polarity,
 	proseLed,
@@ -27,28 +42,17 @@ import {
 	type RowOrder,
 	rangeColumns,
 	rowsAreMetrics,
-	type Shading,
+	stageColumns,
+	tableLadders,
 	tableTakeaways,
 } from "@oh-my-pi/pi-tui/charts/chart-plan";
 import { isMonotonic, isNumber, type TableAnalysis, type TableColumn } from "@oh-my-pi/pi-tui/charts/table-data";
 import type { TableChartRequest } from "@oh-my-pi/pi-tui/chat/table-chart";
-import { prompt } from "@oh-my-pi/pi-utils";
 import type { ChainJudge } from "../judgment";
-import columnQuestionTemplate from "../prompts/system/auto-graph-column-question.md" with { type: "text" };
-import focusQuestionInstructions from "../prompts/system/auto-graph-focus-question.md" with { type: "text" };
-import groupQuestionTemplate from "../prompts/system/auto-graph-group-question.md" with { type: "text" };
-import kindQuestionInstructions from "../prompts/system/auto-graph-kind-question.md" with { type: "text" };
-import labelQuestionInstructions from "../prompts/system/auto-graph-label-question.md" with { type: "text" };
-import nameQuestionTemplate from "../prompts/system/auto-graph-name-question.md" with { type: "text" };
-import orderQuestionTemplate from "../prompts/system/auto-graph-order-question.md" with { type: "text" };
-import pairQuestionTemplate from "../prompts/system/auto-graph-pair-question.md" with { type: "text" };
-import polarityQuestionTemplate from "../prompts/system/auto-graph-polarity-question.md" with { type: "text" };
-import referenceQuestionTemplate from "../prompts/system/auto-graph-reference-question.md" with { type: "text" };
-import rivalsQuestionInstructions from "../prompts/system/auto-graph-rivals-question.md" with { type: "text" };
-import rowPolarityQuestionTemplate from "../prompts/system/auto-graph-row-polarity-question.md" with { type: "text" };
-import shadingQuestionInstructions from "../prompts/system/auto-graph-shading-question.md" with { type: "text" };
-import titleQuestionInstructions from "../prompts/system/auto-graph-title-question.md" with { type: "text" };
-import transposeQuestionInstructions from "../prompts/system/auto-graph-transpose-question.md" with { type: "text" };
+import questionFile from "../prompts/judge/auto-graph.json" with { type: "json" };
+
+/** The planner's judge questions; {@link judgeRequest} renders their templates per table. */
+const QUESTIONS = judgeQuestions(questionFile);
 
 /** A pick slower than this gives way to the local guess, so the answer's chart never waits on a stuck judge. */
 const PICK_TIMEOUT_MS = 15_000;
@@ -65,7 +69,7 @@ export async function pickTableChart(request: TableChartRequest, judge: ChainJud
 			// Keyword answers only carry the kind; the rest of the guess stands.
 			const { answers } = await candidate.judge({ state, questions: { kind: kindQuestion(request) } }, options);
 			const choice = answers.kind.choice;
-			if (!isOption(KIND_CRITERIA, choice)) return request.guess;
+			if (!isOption(QUESTIONS.kind.criteria, choice)) return request.guess;
 			return choice === "none" ? null : { ...request.guess, kind: choice };
 		}
 		const { answers } = await candidate.judge({ state, questions }, options);
@@ -76,11 +80,7 @@ export async function pickTableChart(request: TableChartRequest, judge: ChainJud
 /** The kind question for `request`: every kind its data can draw ({@link kindCriteria}), and `none`. */
 function kindQuestion({ table, guess }: TableChartRequest): ChoiceQuestion {
 	const candidates = table.measures.filter(column => column.index !== guess.label);
-	return {
-		type: "choice",
-		instructions: prompt.render(kindQuestionInstructions),
-		criteria: kindCriteria(table, guess, candidates),
-	};
+	return { ...QUESTIONS.kind, criteria: kindCriteria(table, guess, candidates) };
 }
 
 /** Whether `value` is one of `criteria`'s option labels. */
@@ -89,41 +89,6 @@ function isOption<L extends string>(criteria: Record<L, unknown>, value: string)
 }
 
 type KindChoice = ChartKind | "none";
-const KIND_CRITERIA: Record<KindChoice, string> = {
-	bar: "One numeric measure compared across categories.",
-	paired:
-		"One quantity under two conditions per category, drawn as a dumbbell: before/after, baseline vs. variant, old vs. new.",
-	grouped:
-		"Two to four same-unit measures per category, side by side, that are different quantities, not one before/after.",
-	stacked:
-		"Columns that are parts of one whole per category (cached + uncached tokens, error/warn/info counts), as one segmented bar each.",
-	line: "Values over an ordered axis: time, runs, versions, sizes, steps.",
-	heatmap: "A matrix of same-unit values where the pattern across rows and columns matters.",
-	multiples: "Measures in different units, or rows that are different metrics, each needing its own scale.",
-	share: "Parts of one whole: shares summing to 100% or to a total.",
-	diverging: "Signed changes or deltas around zero.",
-	scatter: "Two continuous measures per item, looking for a relationship.",
-	change:
-		"Before/after (or baseline vs. variants) values of metrics in different units, compared as factors: 48× less time, +27% icons.",
-	progress: "Scores out of a total (12/12, 154/160) or completion rates, as bars filling toward 100%.",
-	timeline:
-		"Rows laid end to end on one axis: durations of a run's consecutive steps, or parts at their offsets (a buffer layout).",
-	waterfall: "Amounts of one unit building up row by row to their total or toward a cap: where a sum comes from.",
-	dots: "Three to six same-unit series per category as colored dots on one shared axis (log when values span decades): prices per tier, timings per config.",
-	range: "Values written as low–high ranges (5.7–9.6 ms, $4.4k–6.1k), as floating intervals; an estimate column inside them marks each.",
-	none: "Identifiers, settings, or too few comparable values: a chart adds nothing.",
-};
-const SHADING_CRITERIA: Record<Shading, string> = {
-	shared: "Every cell is the same measure on a similar scale; any two cells compare.",
-	series: "The columns are different quantities; compare within each column.",
-	row: "The columns are one measure under different conditions and the rows differ widely in size; compare each row.",
-};
-type OrderChoice = "table" | RowOrder["direction"];
-const ORDER_CRITERIA: Record<OrderChoice, string> = {
-	table: "Keep the table's row order: it is deliberate or already ranked.",
-	descending: "Rank independent items largest first.",
-	ascending: "Rank independent items smallest first: smaller is better.",
-};
 /**
  * Probability a shading pick needs to override the local guess: a hesitant
  * `series` would trade a heatmap of one measure for bars (t055 scores at 0.66).
@@ -142,7 +107,17 @@ const MAX_REFERENCE_CHOICES = 8;
 /** Longest naming value offered as a reference row; longer cells describe rather than name. */
 const MAX_REFERENCE_CHARS = 48;
 /** Kinds that keep a row order of their own (an x axis, factors in table order, parts of a whole). */
-const OWN_FRAME: ReadonlySet<KindChoice> = new Set(["line", "scatter", "change", "stacked", "timeline", "waterfall"]);
+const OWN_FRAME: ReadonlySet<KindChoice> = new Set([
+	"line",
+	"scatter",
+	"change",
+	"stacked",
+	"timeline",
+	"waterfall",
+	"slope",
+	"bullet",
+	"histogram",
+]);
 /**
  * Kinds that lay rows out as one run of steps, from one column: offered to the
  * judge only where the local guess found one ({@link KIND_GATES}).
@@ -153,18 +128,6 @@ const REFERENCED: ReadonlySet<ChartKind> = new Set(["bar", "multiples", "heatmap
 const MAX_TABLE_CHARS = 4000;
 /** Most questions one table is asked; earlier groups' questions come first, semantics' fill the rest ({@link SEMANTIC_PRIORITY}). */
 const MAX_QUESTIONS = 25;
-type PolarityChoice = Polarity | "neutral";
-const POLARITY_CRITERIA: Record<PolarityChoice, string> = {
-	higher: "A larger value is better.",
-	lower: "A smaller value is better.",
-	neutral: "Neither: it describes, counts or identifies.",
-};
-type RivalsChoice = Rivals | "neither";
-const RIVALS_CRITERIA: Record<RivalsChoice, string> = {
-	rows: "The rows are alternatives: mark the best row of each column.",
-	columns: "The numeric columns are alternatives: mark the best column of each row.",
-	neither: "Parts, steps, files, categories, a before/after, or items described rather than ranked.",
-};
 /** The choice meaning no row is the focus, or no takeaway titles the chart. */
 const NONE = "none";
 /** Both readings of what competes: the title candidates include either's outcome, whatever the judge answers on rivals. */
@@ -187,15 +150,39 @@ const SURE_FOCUS = 0.75;
 const AGREED_FOCUS = 0.4;
 /** Judge confidence at which its title pick (a striking fact, or none) overrides the local guess's. */
 const SURE_TITLE = 0.4;
+/**
+ * Probability an unsure judge must still give a striking fact for it to title the chart over the local
+ * order's first striking fact (t039: `Every plan improved` at 0.38 over a sweep at 0.07).
+ */
+const RANKED_TITLE = 0.2;
 /** Judge confidence a plain fact (a top value, a share) needs to title a chart: it mostly restates the marks. */
 const SURE_PLAIN_TITLE = 0.75;
 /**
  * Order in which semantics' questions fill what {@link MAX_QUESTIONS} leaves:
  * the title (most visible), what competes (gates every best mark), the
  * plotted measures' polarity (best marks and tones), the focus row, and the
- * metric rows' polarity (factor tones the units mostly decide already).
+ * metric rows' polarity (factor tones the units mostly decide already). The
+ * polarity of a before/after move (`move`) follows the title: it tones every
+ * row of a dumbbell or slope, whose condition headers (`Baseline | Iter130`)
+ * leave the per-column polarity questions without a measure to judge.
  */
-const SEMANTIC_PRIORITY = ["title", "rivals", "p", "focus", "q"] as const;
+const SEMANTIC_PRIORITY = ["title", "move", "rivals", "p", "focus", "q"] as const;
+/**
+ * Kinds comparing each row's values apart, which a table mostly of quantiles draws better as ladders;
+ * small multiples (other measures beside them) and `none` stand.
+ */
+const LADDERABLE: ReadonlySet<KindChoice> = new Set([
+	"bar",
+	"paired",
+	"grouped",
+	"dots",
+	"heatmap",
+	"change",
+	"range",
+	"ladder",
+]);
+/** Kinds that compare rows one by one, which counts over ordered bins draw better as a histogram. */
+const BINNABLE: ReadonlySet<KindChoice> = new Set(["bar", "paired", "grouped", "line", "dots", "histogram"]);
 /** Kinds a table of parts summing to a whole draws better as stacked bars. */
 const STACKABLE: ReadonlySet<KindChoice> = new Set([
 	"bar",
@@ -241,6 +228,12 @@ function stackable(table: TableAnalysis, series: readonly number[]): TableColumn
  * - `timeline`, `waterfall`: the local guess found that run of steps ({@link FLOWS}).
  * - `range`: candidates hold mostly `a–b` intervals ({@link rangeColumns}).
  * - `dots`: three or more same-unit candidates fit a dot plot ({@link dotsFit}).
+ * - `slope`: candidates hold one quantity at three or four stages ({@link stageColumns}).
+ * - `butterfly`: candidates hold a pair of opposing amounts ({@link opposedColumns}).
+ * - `bullet`: a column of targets beside the measure held to them ({@link findTarget}).
+ * - `ladder`: most of the table is quantiles of one measurement, rising by rank ({@link tableLadders}).
+ * - `histogram`: the rows are ordered bins and every candidate counts them ({@link histogramColumns}).
+ * - `stat`: the local guess found two conditions compared on a few metrics; a pick draws the guess's.
  */
 const KIND_GATES: Partial<
 	Record<KindChoice, (table: TableAnalysis, guess: ChartPlan, candidates: readonly TableColumn[]) => boolean>
@@ -254,18 +247,47 @@ const KIND_GATES: Partial<
 				column.dim === "currency" || column.dim === "rate" ? `${column.dim}:${column.unit}` : `${column.dim}`,
 			).values(),
 		].some(columns => dotsFit(columns, table.rows)),
+	slope: (table, _, candidates) => stageColumns(candidates, table.rows) !== undefined,
+	butterfly: (_, __, candidates) => opposedColumns(candidates) !== undefined,
+	bullet: table => findTarget(table) !== undefined,
+	ladder: (table, guess) => tableLadders(table, guess.label) !== undefined,
+	histogram: (table, _, candidates) => histogramColumns(table, candidates) !== undefined,
+	stat: (_, guess) => guess.kind === "stat",
 };
 
-/** The kind options for a table: every kind {@link KIND_GATES} lets through, in {@link KIND_CRITERIA} order. */
+/**
+ * The columns holding one quantity before and after (or across stages) whose
+ * direction the `move` question asks: the guess's slope stages, its dumbbell
+ * pair when the headers give it a direction ({@link isTransition}), its one
+ * column of `a → b` cells, or stages among the candidates a judge may plot as
+ * a slope. `undefined` when the table holds no such move.
+ */
+function moveColumns(table: TableAnalysis, guess: ChartPlan): TableColumn[] | undefined {
+	const plotted = guess.series.map(index => table.columns[index]!);
+	const [first, second] = plotted;
+	if (guess.kind === "slope") return plotted;
+	if (
+		guess.kind === "paired" &&
+		first &&
+		(second ? isTransition(first.header, second.header) : first.arrowShare >= 0.6)
+	)
+		return plotted.slice(0, 2);
+	return stageColumns(
+		table.measures.filter(column => column.index !== guess.label),
+		table.rows,
+	);
+}
+
+/** The kind options for a table: every kind {@link KIND_GATES} lets through, in the kind question's order. */
 function kindCriteria(
 	table: TableAnalysis,
 	guess: ChartPlan,
 	candidates: readonly TableColumn[],
-): Record<string, string> {
-	const offered: Record<string, string> = {};
-	for (const kind in KIND_CRITERIA) {
-		if (isOption(KIND_CRITERIA, kind) && (KIND_GATES[kind]?.(table, guess, candidates) ?? true))
-			offered[kind] = KIND_CRITERIA[kind];
+): Record<string, string | null> {
+	const all = QUESTIONS.kind.criteria;
+	const offered: Record<string, string | null> = {};
+	for (const kind in all) {
+		if (isOption(all, kind) && (KIND_GATES[kind]?.(table, guess, candidates) ?? true)) offered[kind] = all[kind];
 	}
 	return offered;
 }
@@ -319,62 +341,32 @@ export function judgeRequest(request: TableChartRequest): { state: JudgmentState
 	const candidates = table.measures.filter(column => column.index !== guess.label);
 	const label = guess.label === undefined ? undefined : table.columns[guess.label];
 	const namers = label ? namingColumns(table, label) : [];
-	const questions: Questions = {
-		kind: kindQuestion(request),
-		transpose: { type: "noul", instructions: prompt.render(transposeQuestionInstructions) },
-	};
-	if (heatCapable(table, guess, candidates))
-		questions.shading = {
-			type: "choice",
-			instructions: prompt.render(shadingQuestionInstructions),
-			criteria: SHADING_CRITERIA,
-		};
+	const questions: Questions = { kind: kindQuestion(request), transpose: QUESTIONS.transpose };
+	if (heatCapable(table, guess, candidates)) questions.shading = QUESTIONS.shading;
 	const lead = rankable(table, guess);
-	if (lead)
-		questions.order = {
-			type: "choice",
-			instructions: prompt.render(orderQuestionTemplate, { column: lead.header }),
-			criteria: ORDER_CRITERIA,
-		};
+	if (lead) questions.order = renderQuestion(QUESTIONS.order, { column: lead.header });
 	const reference = referenceCandidates(table, guess);
-	if (reference)
-		questions.reference = {
-			type: "choice",
-			instructions: prompt.render(referenceQuestionTemplate, {
-				column: reference.column.header,
-				repeats: reference.repeats,
-			}),
-			criteria: Object.fromEntries([...reference.values, "none"].map(value => [value, null])),
-		};
+	if (reference) {
+		const { column, values, repeats } = reference;
+		const question = renderQuestion(QUESTIONS.reference, { column: column.header, repeats });
+		const rows = Object.fromEntries(values.map(value => [value, null]));
+		questions.reference = { ...question, criteria: { ...rows, ...question.criteria } };
+	}
 	const options = labelOptions(table, guess);
 	if (options.size)
 		questions.label = {
-			type: "choice",
-			instructions: prompt.render(labelQuestionInstructions),
+			...QUESTIONS.label,
 			criteria: Object.fromEntries([...options.keys()].map(name => [name, null])),
 		};
 	const pair = pairCandidates(table, guess, candidates);
-	if (pair)
-		questions.pair = {
-			type: "noul",
-			instructions: prompt.render(pairQuestionTemplate, { first: pair[0].header, second: pair[1].header }),
-		};
+	if (pair) questions.pair = renderQuestion(QUESTIONS.pair, { first: pair[0].header, second: pair[1].header });
 	for (const column of candidates)
-		questions[`c${column.index}`] = {
-			type: "noul",
-			instructions: prompt.render(columnQuestionTemplate, { column: column.header }),
-		};
+		questions[`c${column.index}`] = renderQuestion(QUESTIONS.column, { column: column.header });
 	const groupers = label && namers.length ? [label, ...namers] : [];
 	for (const column of namers)
-		questions[`n${column.index}`] = {
-			type: "noul",
-			instructions: prompt.render(nameQuestionTemplate, { column: column.header, label: label?.header }),
-		};
+		questions[`n${column.index}`] = renderQuestion(QUESTIONS.name, { column: column.header, label: label?.header });
 	for (const column of groupers)
-		questions[`g${column.index}`] = {
-			type: "noul",
-			instructions: prompt.render(groupQuestionTemplate, { column: column.header }),
-		};
+		questions[`g${column.index}`] = renderQuestion(QUESTIONS.group, { column: column.header });
 	for (const [id, question] of semanticQuestions(request)) {
 		if (Object.keys(questions).length >= MAX_QUESTIONS) break;
 		questions[id] = question;
@@ -398,18 +390,24 @@ function semanticQuestions({ table, guess }: TableChartRequest): [string, Questi
 	const label = guess.label === undefined ? undefined : table.columns[guess.label];
 	for (const kind of SEMANTIC_PRIORITY) {
 		if (kind === "title") {
-			const facts = tableTakeaways(table, guess, CONTESTS);
+			const facts = tableTakeaways(table, guess, CONTESTS, "table");
 			if (facts.length === 0) continue;
 			const criteria: Record<string, string | null> = {};
 			for (const fact of facts) criteria[fact.key] = fact.text;
-			criteria[NONE] = "No title: none of these is the table's point.";
-			asked.push(["title", { type: "choice", instructions: prompt.render(titleQuestionInstructions), criteria }]);
+			asked.push(["title", { ...QUESTIONS.title, criteria: { ...criteria, ...QUESTIONS.title.criteria } }]);
+		} else if (kind === "move") {
+			const columns = moveColumns(table, guess);
+			if (columns)
+				asked.push([
+					"move",
+					renderQuestion(QUESTIONS.move, {
+						columns: columns.map(column => column.header),
+						arrow: columns.length === 1,
+					}),
+				]);
 		} else if (kind === "rivals") {
 			if (table.rows.length < MIN_CONTEST_ROWS) continue;
-			asked.push([
-				"rivals",
-				{ type: "choice", instructions: prompt.render(rivalsQuestionInstructions), criteria: RIVALS_CRITERIA },
-			]);
+			asked.push(["rivals", QUESTIONS.rivals]);
 		} else if (kind === "p") {
 			// The columns the chart may plot: the guess's series first, then the other candidates the judge may pick.
 			const plotted = [
@@ -417,31 +415,19 @@ function semanticQuestions({ table, guess }: TableChartRequest): [string, Questi
 				...table.measures.filter(column => column.index !== guess.label && !guess.series.includes(column.index)),
 			].filter(column => column.role === "measure");
 			for (const column of plotted.slice(0, MAX_POLARITY_QUESTIONS))
-				asked.push([
-					`p${column.index}`,
-					{
-						type: "choice",
-						instructions: prompt.render(polarityQuestionTemplate, { column: column.header }),
-						criteria: POLARITY_CRITERIA,
-					},
-				]);
+				asked.push([`p${column.index}`, renderQuestion(QUESTIONS.polarity, { column: column.header })]);
 		} else if (kind === "focus") {
 			const names = rowNames(table, guess);
 			if (names.size < MIN_CONTEST_ROWS || names.size > MAX_FOCUS_ROWS) continue;
 			const criteria: Record<string, string | null> = {};
 			for (const name of names.keys()) criteria[name] = null;
-			criteria[NONE] = "No single row stands out.";
-			asked.push(["focus", { type: "choice", instructions: prompt.render(focusQuestionInstructions), criteria }]);
+			asked.push(["focus", { ...QUESTIONS.focus, criteria: { ...criteria, ...QUESTIONS.focus.criteria } }]);
 		} else if (label && rowsAreMetrics(table, guess) && table.rows.length <= MAX_ROW_POLARITY) {
-			for (const row of table.rows)
-				asked.push([
-					`q${row}`,
-					{
-						type: "choice",
-						instructions: prompt.render(rowPolarityQuestionTemplate, { row: label.cells[row]!.text }),
-						criteria: POLARITY_CRITERIA,
-					},
-				]);
+			// Metric rows share the measures' polarity labels.
+			for (const row of table.rows) {
+				const question = renderQuestion(QUESTIONS.rowPolarity, { row: label.cells[row]!.text });
+				asked.push([`q${row}`, { ...question, criteria: QUESTIONS.polarity.criteria }]);
+			}
 		}
 	}
 	return asked;
@@ -481,18 +467,25 @@ function judgedMeaning(
 	const local = guessMeaning(table, plan);
 	const polarity: Record<number, Polarity> = { ...local.polarity };
 	for (const index of plan.series) {
-		const answer = sureChoice(answers[`p${index}`], SURE_POLARITY, POLARITY_CRITERIA);
+		const answer = sureChoice(answers[`p${index}`], SURE_POLARITY, QUESTIONS.polarity.criteria);
 		if (answer === "neutral") delete polarity[index];
 		else if (answer) polarity[index] = answer;
 	}
+	// The move's direction tones each stage it was asked about that the plan still plots.
+	const move = sureChoice(answers.move, SURE_POLARITY, QUESTIONS.move.criteria);
+	for (const column of move ? (moveColumns(table, guess) ?? []) : []) {
+		if (!plan.series.includes(column.index)) continue;
+		if (move === "neutral") delete polarity[column.index];
+		else if (move) polarity[column.index] = move;
+	}
 	const rowPolarity: Record<number, Polarity> = { ...local.rowPolarity };
 	for (const row of table.rows) {
-		const answer = sureChoice(answers[`q${row}`], SURE_POLARITY, POLARITY_CRITERIA);
+		const answer = sureChoice(answers[`q${row}`], SURE_POLARITY, QUESTIONS.polarity.criteria);
 		if (answer === "neutral") delete rowPolarity[row];
 		else if (answer) rowPolarity[row] = answer;
 	}
 	// Best marks claim a contest: only one the judge is sure of overrides the label-header guess.
-	const contest = sureChoice(answers.rivals, SURE_RIVALS, RIVALS_CRITERIA);
+	const contest = sureChoice(answers.rivals, SURE_RIVALS, QUESTIONS.rivals.criteria);
 	const rivals = contest === undefined ? local.rivals : contest === "neither" ? undefined : contest;
 	// A focus row the judge is sure of, or one the table singles out too.
 	const said = answers.focus;
@@ -508,19 +501,42 @@ function judgedMeaning(
 	const facts = tableTakeaways(table, meant);
 	let key = facts.find(fact => fact.striking)?.key;
 	const pick = answers.title;
-	const offered = pick?.type === "choice" ? tableTakeaways(table, guess, CONTESTS) : [];
+	// What the judged plan's chart can state: its own facts, and the guess's chart's where the judged chart
+	// draws every column the guess's does. The judge was offered more (measures side by side, {@link
+	// tableTakeaways}' `table` scope); a pick about a column the final chart leaves out titles nothing.
+	const drawable = tableTakeaways(table, meant, CONTESTS);
+	const shown = (chosen: ChartPlan) => {
+		const spec = buildChart(table, chosen);
+		return spec ? drawnNames(spec) : new Set<string>();
+	};
+	const meantNames = shown(meant);
+	const borrowed =
+		pick?.type === "choice" && [...shown(guess)].every(name => meantNames.has(name))
+			? tableTakeaways(table, guess, CONTESTS)
+			: [];
+	const statable = [...drawable, ...borrowed];
+	const offered =
+		pick?.type === "choice"
+			? tableTakeaways(table, guess, CONTESTS, "table").filter(fact =>
+					statable.some(other => other.key === fact.key),
+				)
+			: [];
 	if (pick?.type === "choice") {
 		const fact = offered.find(fact => fact.key === pick.choice);
 		const odds = pick.probabilities[pick.choice] ?? 0;
-		if (odds >= (fact?.striking === false ? SURE_PLAIN_TITLE : SURE_TITLE)) key = fact?.key;
+		// Unsure, the judge still ranks the striking facts: its likeliest one beats the local order's first
+		// (and no title, where it leans that way more).
+		const chance = (option: string | undefined) => (option === undefined ? 0 : (pick.probabilities[option] ?? 0));
+		const ranked = offered.filter(fact => fact.striking).sort((a, b) => chance(b.key) - chance(a.key))[0];
+		if (fact && odds >= (fact.striking ? SURE_TITLE : SURE_PLAIN_TITLE)) key = fact.key;
+		else if (pick.choice === NONE && odds >= SURE_TITLE) key = undefined;
+		else if (ranked && chance(ranked.key) >= RANKED_TITLE && chance(ranked.key) > Math.max(chance(key), chance(NONE)))
+			key = ranked.key;
 	}
-	// Worded with the judged polarities (`improved`, not `fell`) where the fact still holds under them, else as offered.
+	// Worded with the judged polarities (`improved`, not `fell`) where the fact still holds under them, and over
+	// the drawn measures only (`best on recall and prec`, not the offered `… and cost`).
 	const restated = (fact: { key: string }) => fact.key === key;
-	const title =
-		key === undefined
-			? undefined
-			: (facts.find(restated) ?? tableTakeaways(table, meant, CONTESTS).find(restated) ?? offered.find(restated))
-					?.text;
+	const title = key === undefined ? undefined : (facts.find(restated) ?? statable.find(restated))?.text;
 	return { ...meant, title };
 }
 
@@ -548,8 +564,11 @@ export function planFromAnswers(
 		return answer?.type === "noul" ? answer.noul : 0;
 	};
 	const kind = answers.kind;
-	let choice: KindChoice = kind?.type === "choice" && isOption(KIND_CRITERIA, kind.choice) ? kind.choice : guess.kind;
+	let choice: KindChoice =
+		kind?.type === "choice" && isOption(QUESTIONS.kind.criteria, kind.choice) ? kind.choice : guess.kind;
 	if (choice === "none") return null;
+	// A share bar holds few parts: past them the local guess draws the parts (a waterfall to their total, or bars).
+	if (choice === "share" && table.rows.length > MAX_SHARE_SEGMENTS) choice = guess.kind;
 	const picks = answers.label;
 	const named = picks?.type === "choice" ? labelOptions(table, guess).get(picks.choice) : undefined;
 	const label = named ?? (guess.label === undefined ? undefined : table.columns[guess.label]);
@@ -571,6 +590,28 @@ export function planFromAnswers(
 	// Intervals are the chart: a `range` pick plots every interval column, whatever the column answers dropped.
 	const spans = choice === "range" ? rangeColumns(candidates, table.rows) : undefined;
 	if (spans) series = [...new Set([...spans.map(column => column.index), ...series])].sort((a, b) => a - b);
+	// A slope runs through the stages, a butterfly sets its opposing pair back to back: whatever the column answers kept.
+	const drawn =
+		choice === "slope"
+			? stageColumns(candidates, table.rows)
+			: choice === "butterfly"
+				? opposedColumns(candidates)
+				: undefined;
+	if (drawn) series = drawn.map(column => column.index);
+	// Quantiles are the chart: a table mostly of them draws its ladders whatever per-row comparison the
+	// judge picks (a dumbbell or bars of each quantile apart hide each row's spread), every quantile column.
+	const ladders = LADDERABLE.has(choice) ? tableLadders(table, label?.index) : undefined;
+	if (ladders) {
+		choice = "ladder";
+		series = ladderColumns(ladders);
+	}
+	// Counts over ordered bins are a distribution whatever per-row comparison the judge picks (a dumbbell
+	// of two shares per bin hides each one's shape); a `histogram` plots every count, in bin order.
+	const histogram = BINNABLE.has(choice) ? histogramColumns(table, candidates) : undefined;
+	if (histogram) {
+		choice = "histogram";
+		series = histogram.counts.map(column => column.index);
+	}
 	if (
 		series.length === 0 ||
 		proseLed(
@@ -625,6 +666,10 @@ export function planFromAnswers(
 	const arrows = series.filter(index => table.columns[index]!.arrowShare >= 0.6).length;
 	if (choice === "change" && !baselines && series.length >= 2 && arrows < 2 && !pairs)
 		choice = guess.kind === "change" ? "grouped" : guess.kind;
+	// Rows held to targets (offered only where a target column is found) draw its measure against them.
+	const held = choice === "bullet" ? findTarget(table) : undefined;
+	if (held) series = [held.measured.index];
+	else if (choice === "bullet") choice = guess.kind;
 	// A run of steps (offered only where the guess is one) draws the guess's column, offsets and cap.
 	let offsets: number | undefined;
 	let limit: number | undefined;
@@ -634,11 +679,15 @@ export function planFromAnswers(
 			({ offsets, limit } = guess);
 		} else choice = guess.kind;
 	}
+	// A comparison (offered only where the guess is one) draws the guess's conditions and metrics.
+	if (choice === "stat") series = guess.series;
 	// Qualifiers the judge accepts, kept only as far as they tell rows apart; the group
 	// is one of the naming columns. Another label than the guess's is named locally.
 	let naming: { qualifiers: readonly number[]; group: number | undefined } = { qualifiers: [], group: undefined };
-	if (label && label.index !== guess.label) naming = guessNaming(table, label);
-	else if (label) {
+	// A histogram's bins name its columns, whatever label the judge picked.
+	const bins = histogram?.bins ?? label;
+	if (bins && bins.index !== guess.label) naming = guessNaming(table, bins);
+	else if (label && !histogram) {
 		const accepted = namingColumns(table, label).filter(column => noul(`n${column.index}`) >= 0.5);
 		const { qualifiers } = guessNaming(table, label, accepted);
 		let group: number | undefined;
@@ -654,18 +703,21 @@ export function planFromAnswers(
 	}
 	return judgedMeaning(request, answers, {
 		kind: choice,
-		label: label?.index,
+		label: bins?.index,
 		qualifiers: naming.qualifiers,
 		group: naming.group,
 		series: choice === "scatter" ? series.slice(0, 2) : series,
 		transpose:
-			choice !== "change" &&
-			choice !== "stacked" &&
-			!FLOWS.has(choice) &&
-			noul("transpose") >= 0.5 &&
-			candidates.some(column => column.mixed),
+			choice === "stat"
+				? guess.transpose
+				: choice !== "change" &&
+					choice !== "stacked" &&
+					choice !== "bullet" &&
+					!FLOWS.has(choice) &&
+					noul("transpose") >= 0.5 &&
+					candidates.some(column => column.mixed),
 		shading:
-			sureChoice(answers.shading, SHADING_CONFIDENCE, SHADING_CRITERIA) ??
+			sureChoice(answers.shading, SHADING_CONFIDENCE, QUESTIONS.shading.criteria) ??
 			(guess.kind === "heatmap"
 				? guess.shading
 				: guessShading(
@@ -678,6 +730,7 @@ export function planFromAnswers(
 		baselines,
 		offsets,
 		limit,
+		target: held?.target.index,
 	});
 }
 
@@ -723,7 +776,7 @@ function judgedOrder(
 	choice: KindChoice,
 	series: readonly number[],
 ): RowOrder | undefined {
-	const direction = sureChoice(answer, RANK_CONFIDENCE, ORDER_CRITERIA);
+	const direction = sureChoice(answer, RANK_CONFIDENCE, QUESTIONS.order.criteria);
 	if (direction === undefined || direction === "table" || OWN_FRAME.has(choice)) return undefined;
 	const lead = request.guess.series[0];
 	const column = lead !== undefined && series.includes(lead) ? lead : series[0];
