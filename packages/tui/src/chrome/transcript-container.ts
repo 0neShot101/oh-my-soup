@@ -239,7 +239,10 @@ export class TranscriptContainer extends Container {
 	insertChildAt(component: Component, index: number): void {
 		this.addChild(component);
 		const from = this.children.length - 1;
-		if (index >= from) return;
+		if (index >= from) {
+			this.#entriesUnverified = false;
+			return;
+		}
 		const [moved] = this.children.splice(from, 1);
 		if (moved) this.children.splice(index, 0, moved);
 		const [entry] = this.#entries.splice(this.#entries.length - 1, 1);
