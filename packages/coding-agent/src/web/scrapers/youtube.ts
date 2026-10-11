@@ -257,8 +257,10 @@ export const handleYouTube: SpecialHandler = async (
 			}
 		}
 
-		// Fall back to auto-generated captions; manual and auto cannot share one
-		// process because both would write the same -o template path.
+		// Fall back to auto-generated captions in a second process: with both
+		// --write-sub and --write-auto-sub yt-dlp prefers manual per language, so a
+		// failed manual transfer would not fall back to auto, and the written file
+		// would no longer say which source it came from.
 		if (!transcript && hasAutoSubs) {
 			const autoResult = await ptree.exec(
 				[

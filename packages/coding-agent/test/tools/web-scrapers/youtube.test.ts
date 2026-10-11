@@ -219,8 +219,12 @@ interface FakeSpawn {
  */
 function fakeYtDlp(metadata: FakeSpawn, autoCaptions?: FakeSpawn): string[][] {
 	const calls: string[][] = [];
-	const finish = async (spawn: FakeSpawn, template: string) => {
-		if (spawn.subtitle) await Bun.write(`${template}.en.vtt`, spawn.subtitle);
+	const finish = async (spawn: FakeSpawn, args: string[]) => {
+		const template = args[args.indexOf("-o") + 1];
+		// --dump-json implies --simulate, which returns before yt-dlp writes subtitle files.
+		const writesSubs = args.includes("--write-sub") || args.includes("--write-auto-sub");
+		const simulates = args.includes("--dump-json") && !args.includes("--no-simulate");
+		if (spawn.subtitle && writesSubs && !simulates) await Bun.write(`${template}.en.vtt`, spawn.subtitle);
 		const ok = spawn.ok ?? false;
 		return { ok, stdout: spawn.stdout ?? "", stderr: spawn.stderr ?? "", exitCode: ok ? 0 : 1 };
 	};
@@ -228,9 +232,8 @@ function fakeYtDlp(metadata: FakeSpawn, autoCaptions?: FakeSpawn): string[][] {
 	vi.spyOn(ptree, "exec").mockImplementation((async (cmd: string[]) => {
 		const args = [...cmd];
 		calls.push(args);
-		const template = args[args.indexOf("-o") + 1];
-		if (args.includes("--dump-json")) return finish(metadata, template);
-		if (args.includes("--write-auto-sub") && autoCaptions) return finish(autoCaptions, template);
+		if (args.includes("--dump-json")) return finish(metadata, args);
+		if (args.includes("--write-auto-sub") && autoCaptions) return finish(autoCaptions, args);
 		throw new Error(`unexpected yt-dlp invocation: ${args.join(" ")}`);
 	}) as never);
 	return calls;
