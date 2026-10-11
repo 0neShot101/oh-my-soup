@@ -8,7 +8,7 @@
 ### Fixed
 ### Added
 
-- Added `maxQuestions` to `TypeSafeJudge`: requests with more questions are split into parallel chunks and their answers and usage merged, for System One endpoints that cap the `questions` map ([#15368](https://github.com/can1357/oh-my-pi/pull/15368) by [@H4vC](https://github.com/H4vC))
+- Added `maxQuestions` to `TypeSafeJudge`: requests with more questions are split into chunks, at most 4 in flight at once, and their answers and usage merged, for System One endpoints that cap the `questions` map; the auth-gateway System One route applies the catalog's cap too ([#15368](https://github.com/can1357/oh-my-pi/pull/15368), [#15373](https://github.com/can1357/oh-my-pi/pull/15373) by [@H4vC](https://github.com/H4vC))
 
 ## [18.9.1] - 2026-10-11
 

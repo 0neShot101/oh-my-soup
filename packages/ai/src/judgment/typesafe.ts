@@ -9,7 +9,8 @@
  * like chat providers; transient 429/5xx responses retry with bounded,
  * `retry-after`-aware backoff. Endpoints that cap the `questions` map (the
  * catalog's `judgment-questions-max`, e.g. OpenJEV at 16) get oversized
- * requests split into parallel chunks under `maxQuestions`.
+ * requests split into chunks under `maxQuestions`, at most
+ * {@link CHUNK_PARALLEL} in flight at once.
  *
  * Environment (mirrors the official SDK): `TYPESAFE_API_KEY` is resolved by
  * the auth registry (`rules/auth/typesafe.kdl`), `TYPESAFE_BASE_URL`
@@ -73,7 +74,10 @@ export interface TypeSafeJudgeOptions {
 	fetch?: FetchImpl;
 	/** Per-attempt timeout; defaults to {@link DEFAULT_TIMEOUT_MS}. */
 	timeoutMs?: number;
-	/** Most questions per request the endpoint accepts; larger requests are split. Unset: no cap. */
+	/**
+	 * Most questions per request the endpoint accepts, a positive integer; larger
+	 * requests are split. Unset: no cap.
+	 */
 	maxQuestions?: number;
 }
 
@@ -86,6 +90,8 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_ATTEMPTS = 3;
 const BACKOFF_BASE_MS = 500;
 const BACKOFF_MAX_MS = 5_000;
+/** Chunks of one split judgment in flight at once, so a split never bursts the endpoint unboundedly. */
+const CHUNK_PARALLEL = 4;
 
 interface SystemOneResponse {
 	model: string;
@@ -122,6 +128,9 @@ export class TypeSafeJudge implements Judge {
 		this.#headers = options.headers;
 		this.#fetch = options.fetch ?? fetch;
 		this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+		if (options.maxQuestions !== undefined && !(Number.isInteger(options.maxQuestions) && options.maxQuestions > 0)) {
+			throw new RangeError(`TypeSafeJudge maxQuestions must be a positive integer, got ${options.maxQuestions}`);
+		}
 		this.#maxQuestions = options.maxQuestions;
 		this.label = `${this.provider}/${this.model}`;
 	}
@@ -134,8 +143,9 @@ export class TypeSafeJudge implements Judge {
 	}
 
 	/**
-	 * Answer `request` in requests of at most `cap` questions each; answers merge and usage sums.
-	 * The first failing chunk aborts its in-flight siblings so a doomed judgment stops spending.
+	 * Answer `request` in requests of at most `cap` questions each, {@link CHUNK_PARALLEL} at a time;
+	 * answers merge and usage sums. The first failing chunk aborts its in-flight siblings and stops
+	 * dispatch, so a doomed judgment stops spending.
 	 */
 	async #judgeChunked<Q extends Questions>(
 		request: JudgmentRequest<Q>,
@@ -143,20 +153,30 @@ export class TypeSafeJudge implements Judge {
 		cap: number,
 		options: JudgeOptions | undefined,
 	): Promise<JudgmentResult<Q>> {
-		const failed = new AbortController();
-		const signal = options?.signal ? AbortSignal.any([options.signal, failed.signal]) : failed.signal;
-		const parts: Promise<JudgmentResult>[] = [];
+		const chunks: Questions[] = [];
 		for (let start = 0; start < ids.length; start += cap) {
 			const questions: Questions = {};
 			for (const id of ids.slice(start, start + cap)) questions[id] = request.questions[id];
-			parts.push(
-				this.#judgeOnce({ state: request.state, questions }, { ...options, signal }).catch(error => {
+			chunks.push(questions);
+		}
+		const failed = new AbortController();
+		const signal = options?.signal ? AbortSignal.any([options.signal, failed.signal]) : failed.signal;
+		const chunkOptions = { ...options, signal };
+		const results: JudgmentResult[] = [];
+		let next = 0;
+		const drain = async (): Promise<void> => {
+			while (next < chunks.length && !signal.aborted) {
+				const index = next++;
+				try {
+					results[index] = await this.#judgeOnce({ state: request.state, questions: chunks[index] }, chunkOptions);
+				} catch (error) {
 					failed.abort(error);
 					throw error;
-				}),
-			);
-		}
-		const results = await Promise.all(parts);
+				}
+			}
+		};
+		await Promise.all(Array.from({ length: Math.min(CHUNK_PARALLEL, chunks.length) }, drain));
+		signal.throwIfAborted();
 		const answers: Record<string, Answer> = {};
 		let input = 0;
 		let output = 0;

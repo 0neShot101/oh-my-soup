@@ -10,6 +10,7 @@
  * only, so the cost is priced from the catalog model for the response header
  * and the broker's observed-usage ledger.
  */
+import { resolveJudgmentQuestionsMax } from "@oh-my-pi/pi-catalog/compat/judgment-questions";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { logger } from "@oh-my-pi/pi-utils";
 import { classifyGatewayError } from "../../error/gateway";
@@ -90,6 +91,7 @@ export async function handleSystemOne(
 		model: model.id,
 		baseUrl: model.baseUrl,
 		fetch: bootOpts.fetch,
+		maxQuestions: resolveJudgmentQuestionsMax(model),
 	});
 
 	logger.info("auth-gateway request", {
