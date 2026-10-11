@@ -419,4 +419,53 @@ describe("TypeSafeJudge", () => {
 		await expect(judge.judge({ state: "s", questions })).rejects.toBeInstanceOf(TypeSafeApiError);
 		expect(aborted).toBe(2);
 	});
+
+	it("keeps at most four chunks of one split judgment in flight", async () => {
+		const questions = Object.fromEntries(
+			Array.from({ length: 10 }, (_, i) => [`q${i}`, { type: "noul", instructions: `Question ${i}?` }] as const),
+		);
+		// In flight = dispatched minus responses the judge has read. Fetches are held
+		// and released four at a time (or all once every chunk has arrived), so an
+		// unbounded dispatch would land a fifth fetch before any response is read.
+		let arrived = 0;
+		let consumed = 0;
+		let peak = 0;
+		const held: (() => void)[] = [];
+		const judge = new TypeSafeJudge({
+			apiKey: "k",
+			maxQuestions: 1,
+			fetch: async (_url, init) => {
+				arrived++;
+				peak = Math.max(peak, arrived - consumed);
+				const { promise, resolve } = Promise.withResolvers<void>();
+				held.push(resolve);
+				if (held.length === 4 || arrived === 10) for (const release of held.splice(0)) release();
+				await promise;
+				const ids = Object.keys(JSON.parse(String(init?.body)).questions);
+				const response = Response.json({
+					model: "openjev-4b",
+					answers: Object.fromEntries(ids.map(id => [id, { type: "noul", noul: 0.5 }])),
+					usage: { input_tokens: 1, output_tokens: 1 },
+				});
+				const read = response.json.bind(response);
+				Object.defineProperty(response, "json", {
+					value: () => {
+						consumed++;
+						return read();
+					},
+				});
+				return response;
+			},
+		});
+
+		const result = await judge.judge({ state: "s", questions });
+		expect(Object.keys(result.answers)).toHaveLength(10);
+		expect(peak).toBe(4);
+	});
+
+	it("rejects a non-positive or fractional maxQuestions", () => {
+		for (const maxQuestions of [0, -1, 1.5, Number.NaN]) {
+			expect(() => new TypeSafeJudge({ apiKey: "k", maxQuestions })).toThrow(RangeError);
+		}
+	});
 });

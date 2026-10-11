@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { startAuthGateway } from "@oh-my-pi/pi-ai/auth-gateway";
 import { AuthStorage } from "@oh-my-pi/pi-ai/auth-storage";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { FetchImpl } from "@oh-my-pi/pi-catalog/types";
 
@@ -26,24 +27,43 @@ interface Harness {
 	close: () => Promise<void>;
 }
 
-async function boot(respond: () => Response): Promise<Harness> {
+async function boot(respond: (init: RequestInit | undefined) => Response): Promise<Harness> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gw-systemone-"));
 	const storage = await AuthStorage.create(path.join(dir, "auth.db"));
 	storage.keys.setRuntime("typesafe", "ts-secret");
 	const jev = getBundledModel("typesafe", "jev-latest");
 	if (!jev) throw new Error("expected bundled typesafe/jev-latest");
 	const chat = createMockModel({ provider: "openrouter", id: "chat-only" });
+	// Self-hosted OpenJEV: the catalog caps its `questions` map at 16.
+	const openjev = buildModel({
+		id: "openjev-4b",
+		name: "openjev-4b",
+		api: "typesafe",
+		provider: "typesafe",
+		baseUrl: "http://localhost:8000",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 32_000,
+		maxTokens: 0,
+	});
 	const upstream: Harness["upstream"] = [];
 	const fetchStub: FetchImpl = async (input, init) => {
 		upstream.push({ url: String(input), init });
-		return respond();
+		return respond(init);
 	};
 	const handle = startAuthGateway({
 		bind: "127.0.0.1:0",
 		bearerTokens: ["gw-token"],
 		storage,
 		resolveModel: id =>
-			id === "jev-latest" || id === "typesafe/jev-latest" ? jev : id === "chat-only" ? chat : undefined,
+			id === "jev-latest" || id === "typesafe/jev-latest"
+				? jev
+				: id === "chat-only"
+					? chat
+					: id === "openjev-4b"
+						? openjev
+						: undefined,
 		version: "test",
 		fetch: fetchStub,
 	});
@@ -143,6 +163,27 @@ describe("auth-gateway POST /v1/systemone", () => {
 		expect(judgeOnChat.status).toBe(400);
 		expect(await judgeOnChat.json()).toMatchObject({ error: { message: expect.stringContaining("/v1/systemone") } });
 		expect(harness.upstream).toHaveLength(0);
+	});
+
+	it("splits judgments above the routed model's catalog question cap", async () => {
+		harness = await boot(init => {
+			const ids = Object.keys(JSON.parse(String(init?.body)).questions);
+			if (ids.length > 16) return new Response("too many questions", { status: 422 });
+			return Response.json({
+				model: "openjev-4b",
+				answers: Object.fromEntries(ids.map(id => [id, { type: "noul", noul: 0.5 }])),
+				usage: { input_tokens: 10, output_tokens: 1 },
+			});
+		});
+		const questions = Object.fromEntries(
+			Array.from({ length: 20 }, (_, i) => [`q${i}`, { type: "noul", instructions: `Question ${i}?` }]),
+		);
+		const response = await post(harness.url, "/v1/systemone", { model: "openjev-4b", state: "s", questions });
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as { answers: Record<string, unknown> };
+		expect(Object.keys(body.answers).sort()).toEqual(Object.keys(questions).sort());
+		const sizes = harness.upstream.map(call => Object.keys(JSON.parse(String(call.init?.body)).questions).length);
+		expect(sizes.sort((a, b) => b - a)).toEqual([16, 4]);
 	});
 
 	it("maps upstream failures onto TypeSafe's status codes", async () => {
