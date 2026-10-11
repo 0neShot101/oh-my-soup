@@ -260,6 +260,8 @@ describe("AgentSession eager todo enforcement", () => {
 		});
 		expect(observedCalls[0]?.messageTexts.filter(text => text.includes("list all work trees"))).toHaveLength(1);
 		expect(observedCalls[0]?.messageTexts[0]).not.toContain("list all work trees");
+		// The forced todo-only first turn is named as the exception to the todo tool's batching rule.
+		expect(observedCalls[0]?.messageTexts[0]).toContain("one exception to `todo` never taking a turn of its own");
 		// `always` renders the hard, forced reminder.
 		expect(session.formatSessionAsText()).not.toContain("<user-request>");
 	});
