@@ -187,7 +187,7 @@ export const SOFT_REQUEST_BUDGET: Record<string, number> = {
 export function resolveSoftRequestBudget(
 	agentName: string,
 	configuredBudget: number,
-	agentBudgets: Readonly<Record<string, number | null>>,
+	agentBudgets: Readonly<Record<string, number | null>> = {},
 ): number {
 	const agentBudget = agentBudgets[agentName];
 	if (typeof agentBudget === "number") return agentBudget;
