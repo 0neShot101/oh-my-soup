@@ -32,7 +32,7 @@
 
 ### Fixed
 
-- Fixed `apply_patch` edits rejecting a hunk without context lines when its text occurs more than once ("Found 2 occurrences"); like Codex, each hunk now takes the first match at or after the previous hunk. The `patch` edit mode keeps the uniqueness check
+- Fixed `apply_patch` edits rejecting a hunk without context lines when its text occurs more than once ("Found 2 occurrences"); like Codex, each hunk now takes the first match at or after the previous hunk. The `patch` edit mode keeps the uniqueness check ([#15340](https://github.com/can1357/oh-my-pi/pull/15340) by [@Ikaleio](https://github.com/Ikaleio))
 - Fixed an unconfigured `judge` role falling back to a Google Vertex Claude model (any `…@default` id) instead of your `tiny`, `smol`, and `default` models when no TypeSafe judge is available
 - Fixed `omp --resume -p` continuing stale todos after answering instead of printing the answer and exiting ([#15320](https://github.com/can1357/oh-my-pi/issues/15320)).
 - Fixed `/btw`, IRC, and composer-prediction requests missing the conversation's prompt cache on Codex, and on GPT-6 models after a thinking-level change
