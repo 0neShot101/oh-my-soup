@@ -32,10 +32,6 @@ It exists because most agent harnesses stop at "model + bash". The model here ge
 > [!NOTE]
 > Oh My Soup tracks [can1357/oh-my-pi](https://github.com/can1357/oh-my-pi) closely: `main` is upstream `main` plus the fork's own commits, re-applied after every sync. Everything below under [What this fork adds](#what-this-fork-adds) is what you get here and not upstream; everything else is shared. Changes that belong upstream should go to upstream.
 
-<p align="center">
-  <img src="https://omp.sh/captures/eval.webp" alt="Upstream OMP TUI running a Python pandas cell and a JavaScript reduce in one eval session">
-</p>
-
 ## What this fork adds
 
 Six extra built-in tools, a persistent terminal service, scheduled prompts, durable issue tracking and notes, one more provider, and a binaries-only release pipeline. Each item names the command, tool, or setting it ships as, so you can check it against `/help`, `read xd://`, or `oms --help`.
