@@ -64,9 +64,10 @@ pub struct PatchInput<'a> {
 	pub rename:      Option<&'a str>,
 	/// Full create content or update hunks.
 	pub diff:        Option<&'a str>,
-	/// Codex `apply_patch` placement: a hunk binds to its first match at or
-	/// after the previous hunk instead of rejecting a context-free hunk whose
-	/// lines occur more than once.
+	/// Codex `apply_patch` placement: a context-free hunk whose lines occur more
+	/// than once binds to its first exact or whitespace/unicode-normalized match
+	/// at or after the previous hunk instead of being rejected. Fuzzy matches
+	/// must still be unique.
 	pub first_match: bool,
 }
 
@@ -815,13 +816,17 @@ fn find_context_relative(
 		.find(|index| js_trim(lines[*index]) == pattern)
 }
 
+/// Applies a single context-free hunk at the character level. With
+/// `first_match`, repeated exact text yields `None` so the caller binds it to
+/// the first line-based match instead of rejecting it.
 fn character_match(
 	content: &str,
 	path: &str,
 	hunk: &DiffHunk,
 	threshold: f64,
 	allow_fuzzy: bool,
-) -> Result<(String, Vec<String>), EditError> {
+	first_match: bool,
+) -> Result<Option<(String, Vec<String>)>, EditError> {
 	let old_text = hunk.old_lines.join("\n");
 	let new_text = hunk.new_lines.join("\n");
 	let mut outcome = find_match(content, &old_text, &FindMatchOptions {
@@ -843,6 +848,9 @@ fn character_match(
 		}
 	}
 	if outcome.occurrences.is_some_and(|count| count > 1) {
+		if first_match {
+			return Ok(None);
+		}
 		let count = outcome.occurrences.unwrap();
 		let previews = outcome
 			.occurrence_previews
@@ -892,7 +900,7 @@ fn character_match(
 	result.push_str(&content[..found.start_index]);
 	result.push_str(&adjusted);
 	result.push_str(&content[found.start_index + found.actual_text.len()..]);
-	Ok((result, warnings))
+	Ok(Some((result, warnings)))
 }
 
 fn assert_partial_match(
@@ -1080,6 +1088,7 @@ fn compute_replacements(
 				allow_fuzzy,
 			);
 		}
+		let mut from_variant = false;
 		if result.index.is_none() || result.match_count.is_some_and(|count| count > 1) {
 			for variant in lazy_variants() {
 				if variant.old_lines.is_empty() {
@@ -1101,6 +1110,7 @@ fn compute_replacements(
 					pattern.clone_from(&variant.old_lines);
 					new_lines.clone_from(&variant.new_lines);
 					result = candidate;
+					from_variant = true;
 					break;
 				}
 			}
@@ -1221,7 +1231,24 @@ fn compute_replacements(
 				));
 			}
 		}
-		if !first_match
+		// apply_patch takes the first match at or after the previous hunk, like
+		// Codex's seek_sequence: only its exact and whitespace/unicode-normalized
+		// passes on the hunk's own lines. Looser strategies, narrowed variants
+		// and matches that wrapped behind the cursor still require a unique
+		// match.
+		let codex_first_match = first_match
+			&& !from_variant
+			&& found >= line_index
+			&& matches!(
+				result.strategy,
+				Some(
+					SequenceMatchStrategy::Exact
+						| SequenceMatchStrategy::TrimTrailing
+						| SequenceMatchStrategy::Trim
+						| SequenceMatchStrategy::Unicode
+				)
+			);
+		if !codex_first_match
 			&& hunk.change_context.is_none()
 			&& !hunk.has_context_lines
 			&& !hunk.is_end_of_file
@@ -1298,17 +1325,16 @@ fn apply_hunks(
 	first_match: bool,
 ) -> Result<(String, Vec<String>), EditError> {
 	let had_newline = content.ends_with('\n');
-	// The whole-content character match rejects repeated text; first-match
-	// placement stays line-based like Codex.
-	if hunks.len() == 1 && !first_match {
+	if hunks.len() == 1 {
 		let hunk = &hunks[0];
 		if hunk.change_context.is_none()
 			&& !hunk.has_context_lines
 			&& !hunk.old_lines.is_empty()
 			&& hunk.old_start_line.is_none()
 			&& !hunk.is_end_of_file
+			&& let Some((mut next, warnings)) =
+				character_match(content, path, hunk, threshold, allow_fuzzy, first_match)?
 		{
-			let (mut next, warnings) = character_match(content, path, hunk, threshold, allow_fuzzy)?;
 			if had_newline && !next.ends_with('\n') {
 				next.push('\n');
 			} else if !had_newline {
