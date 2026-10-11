@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Preserved execution of shell scripts without a shebang on the faster external-command launch path ([#14847](https://github.com/can1357/oh-my-pi/issues/14847), [#14858](https://github.com/can1357/oh-my-pi/pull/14858) by [@farnoy](https://github.com/farnoy), [#15271](https://github.com/can1357/oh-my-pi/pull/15271) by [@iliaal](https://github.com/iliaal)).
+- Fixed executable scripts without a `#!` line failing with "Exec format error" in the embedded shell ([#15271](https://github.com/can1357/oh-my-pi/pull/15271) by [@iliaal](https://github.com/iliaal)).
 
 ## [18.9.0] - 2026-10-11
 
