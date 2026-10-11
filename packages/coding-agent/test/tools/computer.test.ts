@@ -2313,7 +2313,8 @@ describe("expanded computer APIs", () => {
 				["Save"],
 			]);
 			expect(native.operations).toEqual(["menu:42:File/Save", "menu:42:File/Save"]);
-			const forms = 'requires a menu path of non-empty titles: "File", ["File", "Export…"] or "File", "Export…"';
+			const forms =
+				'requires a menu path of non-empty titles: one title ("File"), an array (["File", "Export…"]), or separate titles ("File", "Export…")';
 			for (const [call, got] of [
 				["select()", "no path"],
 				['select(["File"], "Save")', '[["File"],"Save"]'],

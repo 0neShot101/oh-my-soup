@@ -244,7 +244,7 @@ function menuPath(method: string, args: unknown[], options?: { allowEmpty?: bool
 		}
 	}
 	throw new ToolError(
-		`${method} requires a menu path of non-empty titles: "File", ["File", "Export…"] or "File", "Export…"; got ${got}`,
+		`${method} requires a menu path of non-empty titles: one title ("File"), an array (["File", "Export…"]), or separate titles ("File", "Export…"); got ${got}`,
 	);
 }
 
