@@ -106,16 +106,20 @@ interface TranscriptEntry {
 
 /**
  * A committed physical row prefix of one block. `rows` counts trimmed render
- * rows at `width` (any emitted stable prefix included); `text` is their
- * letters and digits in order, which re-locates the seam at another width
- * without a replay: rewrapping moves that text between rows, while per-row
- * decoration (quote bars, borders, bullets) is punctuation it ignores.
+ * rows at `width` (any emitted stable prefix included) and `hash` fingerprints
+ * them; `text` is their letters and digits in order. A settled block can still
+ * change (a tool pane expanding) or rewrap at another width without a replay,
+ * so every render re-locates the seam: the committed rows when they render
+ * unchanged, else by continuing `text` — per-row decoration (quote bars,
+ * borders, rules) is punctuation it ignores.
  */
 interface RowSplit {
 	readonly rows: number;
 	readonly width: number;
+	readonly hash: number | bigint;
 	readonly text: string;
-	readonly rowsByWidth: Map<number, number>;
+	/** Seam of the last render it was located in; renders are memoized per frame. */
+	located?: { readonly rendered: readonly string[]; readonly count: number };
 }
 
 type RetirementPolicy = "pressure" | "flush";
@@ -466,17 +470,21 @@ export class TranscriptContainer extends Container {
 
 	/**
 	 * One block's blank-trimmed render at its full-height allocation. Inside an
-	 * open frame the first measurement of each block is replayed to later ones.
+	 * open frame the first measurement of each block is replayed to later ones,
+	 * leaving whatever allocation the viewport has since rendered it at.
 	 */
 	#measuredRows(entry: TranscriptEntry, width: number): readonly string[] {
-		this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
-		if (this.#openFrame === undefined) return this.#renderEntry(entry, width);
+		if (this.#openFrame === undefined) {
+			this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
+			return this.#renderEntry(entry, width);
+		}
 		if (this.#frameRowsWidth !== width) {
 			this.#frameRows.clear();
 			this.#frameRowsWidth = width;
 		}
 		let rows = this.#frameRows.get(entry);
 		if (rows === undefined) {
+			this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
 			rows = this.#renderEntry(entry, width);
 			this.#frameRows.set(entry, rows);
 		}
@@ -845,7 +853,12 @@ export class TranscriptContainer extends Container {
 		if (scrollback.length !== measured.length) return undefined;
 		return {
 			rows: scrollback.slice(start, total),
-			split: { rows: total, width, text: contentOf(measured.slice(0, total)), rowsByWidth: new Map() },
+			split: {
+				rows: total,
+				width,
+				hash: Bun.hash(measured.slice(0, total).join("\n")),
+				text: contentOf(measured.slice(0, total)),
+			},
 		};
 	}
 
@@ -1043,26 +1056,32 @@ export class TranscriptContainer extends Container {
 	}
 
 	/**
-	 * Rows `split` covers at `width`: exact at the width it was taken, else the
-	 * longest render prefix whose content continues the committed text exactly.
-	 * A row the seam falls inside, or one whose decoration reads as content,
-	 * stays live: it can repeat already-committed text but never drop any.
+	 * Rows of `entry`'s current render at `width` that `split` committed: all
+	 * of them while they render unchanged, else the longest prefix whose
+	 * content continues the committed text exactly. A row the seam falls
+	 * inside, a row the block changed, or one whose decoration reads as
+	 * content stays live: it can repeat committed text but never drop any.
 	 */
 	#splitRowCount(entry: TranscriptEntry, split: RowSplit, width: number): number {
-		if (width === split.width) return split.rows;
-		let count = split.rowsByWidth.get(width);
-		if (count === undefined) {
-			const rendered = this.#measuredRows(entry, width);
+		const rendered = this.#measuredRows(entry, width);
+		if (split.located?.rendered === rendered) return split.located.count;
+		let count = 0;
+		if (
+			width === split.width &&
+			rendered.length >= split.rows &&
+			Bun.hash(rendered.slice(0, split.rows).join("\n")) === split.hash
+		) {
+			count = split.rows;
+		} else {
 			let consumed = 0;
-			count = 0;
 			while (count < rendered.length && consumed < split.text.length) {
 				const row = contentOf([rendered[count]!]);
 				if (!split.text.startsWith(row, consumed)) break;
 				consumed += row.length;
 				count++;
 			}
-			split.rowsByWidth.set(width, count);
 		}
+		split.located = { rendered, count };
 		return count;
 	}
 

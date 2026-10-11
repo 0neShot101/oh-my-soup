@@ -247,6 +247,25 @@ describe("TranscriptContainer row split", () => {
 		expect(content.endsWith(resumed)).toBe(true);
 		expect(content.length - resumed.length).toBeLessThanOrEqual(committed.length);
 	});
+
+	it("keeps rows a split block reveals at the same width, such as an expanded tool pane", () => {
+		// A settled output pane shows its tail behind a summary until expanded.
+		const lines = Array.from({ length: 30 }, (_, i) => `out${i}`);
+		let expanded = false;
+		const pane: Component = {
+			render: () => (expanded ? lines : ["… 20 earlier lines", ...lines.slice(20)]),
+		};
+		const transcript = new TranscriptContainer();
+		transcript.addChild(pane);
+		transcript.addChild(new Block(["tail"], true));
+		const head = transcript.peekFinalizedBatch(80, 6)!;
+		transcript.acknowledgeFinalizedBatch(head.id);
+		expect(head.rows).toEqual(["… 20 earlier lines", "out20", "out21", "out22", "out23", "out24", "out25"]);
+		// Ctrl+O: the pane re-renders with head rows that history never received.
+		expanded = true;
+		const rest = transcript.peekFlushBatch(80)!.rows;
+		expect(rest.filter(row => row.startsWith("out"))).toEqual(lines);
+	});
 });
 
 describe("TranscriptContainer", () => {

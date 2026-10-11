@@ -152,6 +152,23 @@ describe("composer inline shrink (#11007)", () => {
 		h.composer.stop();
 	});
 
+	it("lets a reset to an empty transcript shrink in place instead of pinning to the bottom", async () => {
+		const h = makeHarness();
+		await h.scheduler.settle(h.terminal);
+		// A new session: scrollback is cleared and nothing replays into it.
+		h.composer.setRuntimeChildren([new TranscriptContainer(), h.hud, h.editor]);
+		h.composer.ui.resetDisplay();
+		await h.scheduler.settle(h.terminal);
+		h.widget.rows = ROWS + 5;
+		h.composer.ui.requestRender();
+		await h.scheduler.settle(h.terminal);
+		h.widget.rows = 3;
+		h.composer.ui.requestRender();
+		await h.scheduler.settle(h.terminal);
+		expect(h.terminal.getViewport().findIndex(row => row.includes("EDITOR"))).toBe(3);
+		h.composer.stop();
+	});
+
 	it("refills the screen after an ask closes below a response taller than the screen", async () => {
 		const terminal = new VirtualTerminal(COLUMNS, ROWS);
 		const scheduler = new VirtualRenderScheduler();

@@ -634,6 +634,9 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#startHistoryReplay(): void {
 		this.#headerReplayPending = this.#headerRetired && (this.#retiredHeaderRows?.length ?? 0) > 0;
 		this.#historyReplayRequested = false;
+		// A replay follows a scrollback clear: history holds only what the
+		// replay itself commits, and an empty one commits nothing at all.
+		this.#historyCommitted = false;
 		for (const child of this.#runtimeChildren) {
 			if (child instanceof TranscriptContainer) child.beginReplay();
 		}
