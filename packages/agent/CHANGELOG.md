@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.9.0] - 2026-10-11
+
 ### Fixed
 
 - Fixed stale queue updates when queued steering is adopted, withdrawn, or added to the transcript, ensuring queue listeners consistently receive the latest state.

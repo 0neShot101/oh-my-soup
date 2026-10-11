@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.9.0] - 2026-10-11
+
 ### Added
 
 - Added opt-in JSON editing for free-form array settings while keeping credential values masked; settings editors now surface submission and validation errors.

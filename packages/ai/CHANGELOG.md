@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.9.0] - 2026-10-11
+
 ### Breaking Changes
 
 - Removed the `retainTextSignature` option from `consumeGoogleStream` and `streamGoogleGenAI`; Google routes now consistently preserve text reply signatures.

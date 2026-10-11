@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.9.0] - 2026-10-11
+
 ### Added
 
 - Exported `clipRecallContent` for applications that need to format content consistently with Mnemopi recall previews.

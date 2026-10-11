@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.9.0] - 2026-10-11
+
 ### Breaking Changes
 
 - Renamed `takeRecentLoopPhase()` to `takeLoopPhaseAttribution()`. The new API returns a `LoopPhaseAttribution` object (`{ label, ms }`) and reports a label only when it accounts for more time than unlabeled work within an armed measurement window.

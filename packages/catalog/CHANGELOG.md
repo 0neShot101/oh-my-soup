@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.9.0] - 2026-10-11
+
 ### Fixed
 
 - Fixed GLM-5.3-FlashX on Zhipu Coding Plan so bundled context, image, and reasoning-level capabilities are reported correctly.
