@@ -436,6 +436,7 @@ interface ModelSnapshot {
 		streamIdleTimeoutMs?: number;
 		streamRevision?: "possible";
 		supportsSamplingParams?: boolean;
+		supportsThinkingBindingControls?: boolean;
 	};
 }
 
