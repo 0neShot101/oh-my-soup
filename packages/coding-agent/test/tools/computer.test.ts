@@ -1337,14 +1337,12 @@ describe("computer worker round trips", () => {
 				{ session, toolCallId: `locked-run-${locked}`, signal: new AbortController().signal },
 			);
 			expect(native.clickCount).toBe(1);
-			const notes = result.content.filter(block => block.type === "text" && block.text.startsWith("Note: "));
 			if (locked) {
-				expect(result.content[0]).toMatchObject({
-					type: "text",
-					text: runNotice({ screenLocked: true, displayAsleep: false }),
-				});
+				expect(result.content).toEqual([
+					{ type: "text", text: runNotice({ screenLocked: true, displayAsleep: false }) },
+				]);
 			} else {
-				expect(notes).toEqual([]);
+				expect(result.content).toEqual([]);
 			}
 		}
 	});

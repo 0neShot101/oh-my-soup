@@ -61,11 +61,22 @@ const DISPLAY_AWAKE_GRACE: Duration = Duration::from_mins(5);
 struct DisplayAwake(Mutex<Option<DisplayAwakeHold>>);
 
 impl DisplayAwake {
-	fn hold(&self, start: impl FnOnce() -> Option<DisplayAwakeHold>) {
+	/// Takes the assertion for a request unless its caller has given up. The
+	/// token is checked under the lock, so a caller that cancels and then
+	/// releases is never followed by a hold for its request.
+	fn hold(
+		&self,
+		token: &OperationToken,
+		start: impl FnOnce() -> Option<DisplayAwakeHold>,
+	) -> bool {
 		let mut held = self.0.lock();
+		if token.check().is_err() {
+			return false;
+		}
 		if held.is_none() {
 			*held = start();
 		}
+		true
 	}
 
 	fn release(&self) {
@@ -659,17 +670,18 @@ impl Worker {
 		})
 	}
 
-	fn keep_display_awake(&mut self, awake: bool) {
-		if !awake {
-			self.display_awake.release();
-		} else if let Ok(backend) = self.backend.as_mut() {
-			self.display_awake.hold(|| backend.hold_display_awake());
-		}
+	/// Holds the display awake for an activity request whose caller is still
+	/// waiting; returns whether it did.
+	fn hold_display_awake(&mut self, token: &OperationToken) -> bool {
+		let backend = self.backend.as_mut().ok();
+		self
+			.display_awake
+			.hold(token, || backend.and_then(|backend| backend.hold_display_awake()))
 	}
 
-	/// Serves requests until close or disconnect. Each activity request holds
-	/// the display awake until `grace` passes with no further activity; the
-	/// hold is released before the loop returns.
+	/// Serves requests until close or disconnect. Each activity request whose
+	/// caller is still waiting holds the display awake until `grace` passes
+	/// with no further activity; the hold is released before the loop returns.
 	fn serve(mut self, rx: &flume::Receiver<QueuedRequest>, grace: Duration) {
 		let mut awake_until: Option<Instant> = None;
 		loop {
@@ -680,17 +692,14 @@ impl Worker {
 			let QueuedRequest { request, token } = match next {
 				Ok(queued) => queued,
 				Err(flume::RecvTimeoutError::Timeout) => {
-					self.keep_display_awake(false);
+					self.display_awake.release();
 					awake_until = None;
 					continue;
 				},
 				Err(flume::RecvTimeoutError::Disconnected) => break,
 			};
 			let close = request.is_close();
-			let activity = request.is_activity();
-			if activity {
-				self.keep_display_awake(true);
-			}
+			let activity = request.is_activity() && self.hold_display_awake(&token);
 			self.dispatch(request, &token);
 			if close {
 				break;
@@ -699,7 +708,7 @@ impl Worker {
 				awake_until = Some(Instant::now() + grace);
 			}
 		}
-		self.keep_display_awake(false);
+		self.display_awake.release();
 	}
 
 	fn execute(&mut self, request: &Request, token: &OperationToken) -> CoreResult<Response> {
@@ -1910,8 +1919,9 @@ mod capture_tests {
 		awake:                  Arc<Mutex<Vec<bool>>>,
 		/// Unlock the session on the next layout read, i.e. after the frame.
 		unlock_on_layout:       Arc<Mutex<bool>>,
-		/// Blocks every window listing until the sender drops.
-		hang_windows:           Option<flume::Receiver<()>>,
+		/// Each window listing signals the sender, then blocks until the
+		/// receiver's sender drops.
+		hang_windows:           Option<(flume::Sender<()>, flume::Receiver<()>)>,
 	}
 
 	impl FakeWaylandBackend {
@@ -2053,7 +2063,8 @@ mod capture_tests {
 		}
 
 		fn windows(&mut self) -> CoreResult<Vec<DesktopWindow>> {
-			if let Some(hang) = &self.hang_windows {
+			if let Some((entered, hang)) = &self.hang_windows {
+				let _ = entered.send(());
 				let _ = hang.recv();
 			}
 			*self.window_queries.lock() += 1;
@@ -2290,6 +2301,16 @@ mod capture_tests {
 		}
 	}
 
+	/// A backend whose window listings report entry on the returned receiver,
+	/// then block until the returned sender drops.
+	fn hanging_backend() -> (FakeWaylandBackend, flume::Receiver<()>, flume::Sender<()>) {
+		let (entered_tx, entered) = flume::unbounded();
+		let (unblock, hang) = flume::bounded(0);
+		let mut backend = FakeWaylandBackend::new();
+		backend.hang_windows = Some((entered_tx, hang));
+		(backend, entered, unblock)
+	}
+
 	/// A session serving `backend` with an hour's grace, so while a request
 	/// hangs only the session giving up can release the display.
 	fn session_serving(backend: FakeWaylandBackend) -> Arc<SessionCore> {
@@ -2311,11 +2332,24 @@ mod capture_tests {
 		core
 	}
 
+	/// Queues a window listing without waiting for its reply; returns the
+	/// queue and the reply's receiver, which keeps its caller waiting.
+	fn queue_listing(
+		core: &SessionCore,
+	) -> (flume::Sender<QueuedRequest>, flume::Receiver<CoreResult<Response>>) {
+		let tx = core.lifecycle.lock().tx.clone().unwrap();
+		let (reply, pending) = flume::bounded(1);
+		tx.send(QueuedRequest {
+			request: Request::ListWindows { reply },
+			token:   core.cancellation.token(),
+		})
+		.unwrap();
+		(tx, pending)
+	}
+
 	#[test]
 	fn a_timed_out_call_releases_the_display_while_its_request_hangs() {
-		let (unblock, hang) = flume::bounded::<()>(0);
-		let mut backend = FakeWaylandBackend::new();
-		backend.hang_windows = Some(hang);
+		let (backend, _entered, unblock) = hanging_backend();
 		let awake = Arc::clone(&backend.awake);
 		let core = session_serving(backend);
 		let error = core
@@ -2331,25 +2365,42 @@ mod capture_tests {
 
 	#[test]
 	fn close_releases_the_display_while_a_request_hangs() {
-		let (unblock, hang) = flume::bounded::<()>(0);
-		let mut backend = FakeWaylandBackend::new();
-		backend.hang_windows = Some(hang);
+		let (backend, entered, unblock) = hanging_backend();
 		let awake = Arc::clone(&backend.awake);
 		let core = session_serving(backend);
-		let (reply, _pending) = flume::bounded(1);
-		let tx = core.lifecycle.lock().tx.clone().unwrap();
-		tx.send(QueuedRequest {
-			request: Request::ListWindows { reply },
-			token:   core.cancellation.token(),
-		})
-		.unwrap();
-		wait_for_awake(&awake, &[true]);
+		let (_tx, _pending) = queue_listing(&core);
+		entered.recv_timeout(Duration::from_secs(5)).unwrap();
 		assert_eq!(core.close().err().unwrap().code, ErrorCode::Timeout);
 		assert_eq!(*awake.lock(), [true, false], "close releases the hold");
 		drop(unblock);
 		let join = core.lifecycle.lock().join.take().unwrap();
 		join.join().unwrap();
 		assert_eq!(*awake.lock(), [true, false], "the late return neither holds nor releases again");
+	}
+
+	#[test]
+	fn a_request_queued_behind_a_hung_one_never_holds_the_display_once_its_caller_gave_up() {
+		let (backend, entered, unblock) = hanging_backend();
+		let awake = Arc::clone(&backend.awake);
+		let core = session_serving(backend);
+		let (tx, _pending) = queue_listing(&core);
+		entered.recv_timeout(Duration::from_secs(5)).unwrap();
+		let error = core
+			.call(core.cancellation.token(), |reply| Request::ListWindows { reply })
+			.err()
+			.unwrap();
+		assert_eq!(error.code, ErrorCode::Timeout);
+		assert_eq!(*awake.lock(), [true, false]);
+		drop(unblock);
+		// Served after the abandoned request, so its reply means that one ran.
+		send_and_wait(&tx, |reply| Request::Capabilities { reply });
+		assert_eq!(*awake.lock(), [true, false], "the abandoned request does not hold the display");
+		core
+			.call(core.cancellation.token(), |reply| Request::ListWindows { reply })
+			.unwrap();
+		assert_eq!(*awake.lock(), [true, false, true], "a fresh request holds it again");
+		core.close().unwrap();
+		assert_eq!(*awake.lock(), [true, false, true, false]);
 	}
 
 	fn locked_capture_and_failure(screen: ScreenState) -> (bool, DesktopError) {
