@@ -15,6 +15,7 @@ import type { AgentSession, AgentSessionEvent, PromptOptions } from "@oh-my-pi/p
 import type { CustomMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { buildBudgetNotice, resolveSoftRequestBudget, runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
+import { cfgTaskAgentSoftRequestBudget } from "@oh-my-pi/pi-coding-agent/task/settings";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@oh-my-pi/pi-coding-agent/task/types";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
@@ -665,22 +666,63 @@ describe("runSubprocess soft request budget", () => {
 
 describe("resolveSoftRequestBudget", () => {
 	it("lets a configured budget lower a bundled agent's ceiling", () => {
-		expect(resolveSoftRequestBudget("scout", 20)).toBe(20);
-		expect(resolveSoftRequestBudget("sonic", 20)).toBe(20);
+		expect(resolveSoftRequestBudget("scout", 20, {})).toBe(20);
+		expect(resolveSoftRequestBudget("sonic", 20, {})).toBe(20);
 	});
 
 	it("keeps the bundled ceiling when the configured budget is higher", () => {
-		expect(resolveSoftRequestBudget("scout", 200)).toBe(100);
-		expect(resolveSoftRequestBudget("sonic", 200)).toBe(100);
+		expect(resolveSoftRequestBudget("scout", 200, {})).toBe(100);
+		expect(resolveSoftRequestBudget("sonic", 200, {})).toBe(100);
 	});
 
 	it("uses the configured budget for agents without a bundled entry", () => {
-		expect(resolveSoftRequestBudget("task", 20)).toBe(20);
+		expect(resolveSoftRequestBudget("task", 20, {})).toBe(20);
 	});
 
 	it("keeps 0 disabled and normalizes negative or fractional budgets", () => {
-		expect(resolveSoftRequestBudget("scout", 0)).toBe(0);
-		expect(resolveSoftRequestBudget("scout", -5)).toBe(0);
-		expect(resolveSoftRequestBudget("scout", 20.9)).toBe(20);
+		expect(resolveSoftRequestBudget("scout", 0, {})).toBe(0);
+		expect(resolveSoftRequestBudget("scout", -5, {})).toBe(0);
+		expect(resolveSoftRequestBudget("scout", 20.9, {})).toBe(20);
+	});
+
+	it("lets an agent's own entry replace the configured budget and the bundled ceiling", () => {
+		expect(resolveSoftRequestBudget("lead", 200, { lead: 400 })).toBe(400);
+		expect(resolveSoftRequestBudget("scout", 200, { scout: 150 })).toBe(150);
+		expect(resolveSoftRequestBudget("task", 200, { task: 50 })).toBe(50);
+	});
+
+	it("keeps agents without an entry on the configured budget and bundled ceilings", () => {
+		const agentBudgets = { lead: 400 };
+		expect(resolveSoftRequestBudget("task", 200, agentBudgets)).toBe(200);
+		expect(resolveSoftRequestBudget("scout", 200, agentBudgets)).toBe(100);
+		expect(resolveSoftRequestBudget("sonic", 200, agentBudgets)).toBe(100);
+	});
+
+	it("disables only the named agent's guard with an entry of 0", () => {
+		expect(resolveSoftRequestBudget("lead", 200, { lead: 0 })).toBe(0);
+		expect(resolveSoftRequestBudget("task", 200, { lead: 0 })).toBe(200);
+	});
+
+	it("applies an agent's entry when the configured budget disables the guard", () => {
+		expect(resolveSoftRequestBudget("lead", 0, { lead: 400 })).toBe(400);
+		expect(resolveSoftRequestBudget("task", 0, { lead: 400 })).toBe(0);
+	});
+});
+
+describe("task.agentSoftRequestBudget", () => {
+	it("rejects entries that are not non-negative integer request counts", () => {
+		for (const budget of [-1, 1.5, "400", [400]]) {
+			expect(() => Settings.isolated({ "task.agentSoftRequestBudget": { lead: budget } })).toThrow(
+				"Invalid task.agentSoftRequestBudget.lead",
+			);
+		}
+		expect(() => Settings.isolated({ "task.agentSoftRequestBudget": [400] })).toThrow(
+			"Invalid task.agentSoftRequestBudget:",
+		);
+	});
+
+	it("treats a null entry as absent", () => {
+		const settings = Settings.isolated({ "task.agentSoftRequestBudget": { scout: null } });
+		expect(resolveSoftRequestBudget("scout", 200, cfgTaskAgentSoftRequestBudget.get(settings))).toBe(100);
 	});
 });
