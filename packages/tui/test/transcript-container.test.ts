@@ -220,6 +220,33 @@ describe("TranscriptContainer row split", () => {
 		expect(committed.length - restart).toBeLessThan(wrapWords(words, 25)[0]!.split(" ").length);
 		expect(committed).toEqual(words.slice(0, committed.length));
 	});
+
+	it("loses no text of a split block whose wrapped rows carry a per-row prefix", () => {
+		// Every wrapped row starts with a quote bar, so a narrower width spends
+		// more cells on decoration per character of content.
+		const content = "abcdefghij".repeat(5);
+		const quoted: Component = {
+			render: width => {
+				const step = width - 1;
+				return Array.from(
+					{ length: Math.ceil(content.length / step) },
+					(_, i) => `#${content.slice(i * step, (i + 1) * step)}`,
+				);
+			},
+		};
+		const transcript = new TranscriptContainer();
+		transcript.addChild(quoted);
+		transcript.addChild(new Block(["tail"], true));
+		const head = transcript.peekFinalizedBatch(6, 3)!;
+		transcript.acknowledgeFinalizedBatch(head.id);
+		const committed = head.rows.map(row => row.slice(1)).join("");
+		expect(content.startsWith(committed)).toBe(true);
+		const rest = transcript.peekFlushBatch(9)!.rows.filter(row => row.startsWith("#"));
+		const resumed = rest.map(row => row.slice(1)).join("");
+		// The rest resumes at or before the committed end and runs to the end.
+		expect(content.endsWith(resumed)).toBe(true);
+		expect(content.length - resumed.length).toBeLessThanOrEqual(committed.length);
+	});
 });
 
 describe("TranscriptContainer", () => {

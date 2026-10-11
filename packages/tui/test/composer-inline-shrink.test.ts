@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import { type Component, Container, setKeybindings, Text } from "@oh-my-pi/pi-tui";
+import { type Component, Container, getKeybindings, setKeybindings, Text } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { VirtualRenderScheduler } from "./virtual-render-scheduler";
@@ -202,46 +202,51 @@ describe("composer inline shrink (#11007)", () => {
 	});
 
 	it("brings rows an ask panel covered back on screen when the ask is hidden", async () => {
-		// The default app bindings (Alt+H hides a pending ask), as other suites leave them.
+		// The default app bindings (Alt+H hides a pending ask).
+		const previous = getKeybindings();
 		setKeybindings(KeybindingsManager.inMemory());
-		const h = makeHarness();
-		await h.scheduler.settle(h.terminal);
-		const dialog = new AskDialogComponent(
-			[
-				{
-					id: "q",
-					question: "Is it good?",
-					options: ["A", "B", "C", "D"].map(label => ({ label, description: `${label} described` })),
-				},
-			],
-			{ onSubmit: () => {}, onCancel: () => {}, onPrompt: () => Promise.resolve(undefined) },
-			{ tui: h.composer.ui },
-		);
-		h.editor.clear();
-		h.editor.addChild(dialog);
-		h.composer.ui.requestRender();
-		await h.scheduler.settle(h.terminal);
-		const reachable = (): number[] =>
-			h.terminal
-				.getScrollBuffer()
-				.map(row => Bun.stripANSI(row).trimEnd())
-				.filter(row => row.startsWith(TRANSCRIPT_PREFIX))
-				.map(row => Number(row.slice(TRANSCRIPT_PREFIX.length)));
-		// Alt+H collapses the pending ask to one line: the rows it covered are
-		// still live, so they refill the screen instead of leaving a band.
-		dialog.handleInput("\x1bh");
-		await h.scheduler.settle(h.terminal);
-		const view = h.terminal.getViewport().map(row => Bun.stripANSI(row).trimEnd());
-		expect(view[ROWS - 1]).toContain("Ask hidden");
-		expect(blankBand(h.terminal, "Ask hidden")).toBeLessThanOrEqual(1);
-		expect(reachable()).toEqual(Array.from({ length: TRANSCRIPT_ROWS }, (_, i) => i));
-		// Showing it again covers them without writing anything twice.
-		dialog.handleInput("\x1bh");
-		await h.scheduler.settle(h.terminal);
-		const shown = reachable();
-		expect(new Set(shown).size).toBe(shown.length);
-		dialog.dispose();
-		h.composer.stop();
+		try {
+			const h = makeHarness();
+			await h.scheduler.settle(h.terminal);
+			const dialog = new AskDialogComponent(
+				[
+					{
+						id: "q",
+						question: "Is it good?",
+						options: ["A", "B", "C", "D"].map(label => ({ label, description: `${label} described` })),
+					},
+				],
+				{ onSubmit: () => {}, onCancel: () => {}, onPrompt: () => Promise.resolve(undefined) },
+				{ tui: h.composer.ui },
+			);
+			h.editor.clear();
+			h.editor.addChild(dialog);
+			h.composer.ui.requestRender();
+			await h.scheduler.settle(h.terminal);
+			const reachable = (): number[] =>
+				h.terminal
+					.getScrollBuffer()
+					.map(row => Bun.stripANSI(row).trimEnd())
+					.filter(row => row.startsWith(TRANSCRIPT_PREFIX))
+					.map(row => Number(row.slice(TRANSCRIPT_PREFIX.length)));
+			// Alt+H collapses the pending ask to one line: the rows it covered are
+			// still live, so they refill the screen instead of leaving a band.
+			dialog.handleInput("\x1bh");
+			await h.scheduler.settle(h.terminal);
+			const view = h.terminal.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+			expect(view[ROWS - 1]).toContain("Ask hidden");
+			expect(blankBand(h.terminal, "Ask hidden")).toBeLessThanOrEqual(1);
+			expect(reachable()).toEqual(Array.from({ length: TRANSCRIPT_ROWS }, (_, i) => i));
+			// Showing it again covers them without writing anything twice.
+			dialog.handleInput("\x1bh");
+			await h.scheduler.settle(h.terminal);
+			const shown = reachable();
+			expect(new Set(shown).size).toBe(shown.length);
+			dialog.dispose();
+			h.composer.stop();
+		} finally {
+			setKeybindings(previous);
+		}
 	});
 
 	it("keeps the editor pinned to the bottom after transient below-transcript chrome shrinks", async () => {

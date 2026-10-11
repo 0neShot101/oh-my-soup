@@ -106,14 +106,15 @@ interface TranscriptEntry {
 
 /**
  * A committed physical row prefix of one block. `rows` counts trimmed render
- * rows at `width` (any emitted stable prefix included); `ink` is their
- * non-blank cell count, which re-locates the seam at another width without a
- * replay, since rewrapping moves cells between rows but never drops them.
+ * rows at `width` (any emitted stable prefix included); `text` is their
+ * letters and digits in order, which re-locates the seam at another width
+ * without a replay: rewrapping moves that text between rows, while per-row
+ * decoration (quote bars, borders, bullets) is punctuation it ignores.
  */
 interface RowSplit {
 	readonly rows: number;
 	readonly width: number;
-	readonly ink: number;
+	readonly text: string;
 	readonly rowsByWidth: Map<number, number>;
 }
 
@@ -160,11 +161,11 @@ function isPlainBlank(line: string): boolean {
 	return !/\S/.test(line);
 }
 
-/** Non-blank cells of `rows`; wrapping a block at another width preserves this total. */
-function inkOf(rows: readonly string[]): number {
-	let ink = 0;
-	for (const row of rows) ink += Bun.stripANSI(row).replace(/\s/g, "").length;
-	return ink;
+/** Letters and digits of `rows` in reading order: the content rewrapping preserves. */
+function contentOf(rows: readonly string[]): string {
+	let text = "";
+	for (const row of rows) text += Bun.stripANSI(row).replace(/[^\p{L}\p{N}]/gu, "");
+	return text;
 }
 
 /** Whether `prefix` matches `rows` byte-for-byte from the top. */
@@ -844,7 +845,7 @@ export class TranscriptContainer extends Container {
 		if (scrollback.length !== measured.length) return undefined;
 		return {
 			rows: scrollback.slice(start, total),
-			split: { rows: total, width, ink: inkOf(measured.slice(0, total)), rowsByWidth: new Map() },
+			split: { rows: total, width, text: contentOf(measured.slice(0, total)), rowsByWidth: new Map() },
 		};
 	}
 
@@ -1043,21 +1044,21 @@ export class TranscriptContainer extends Container {
 
 	/**
 	 * Rows `split` covers at `width`: exact at the width it was taken, else the
-	 * longest render prefix holding no more ink than was committed. A seam that
-	 * falls inside a row at the new width leaves that row live, repeating its
-	 * already-committed cells rather than dropping uncommitted ones.
+	 * longest render prefix whose content continues the committed text exactly.
+	 * A row the seam falls inside, or one whose decoration reads as content,
+	 * stays live: it can repeat already-committed text but never drop any.
 	 */
 	#splitRowCount(entry: TranscriptEntry, split: RowSplit, width: number): number {
 		if (width === split.width) return split.rows;
 		let count = split.rowsByWidth.get(width);
 		if (count === undefined) {
 			const rendered = this.#measuredRows(entry, width);
-			let ink = 0;
+			let consumed = 0;
 			count = 0;
-			while (count < rendered.length) {
-				const next = ink + inkOf([rendered[count]!]);
-				if (next > split.ink) break;
-				ink = next;
+			while (count < rendered.length && consumed < split.text.length) {
+				const row = contentOf([rendered[count]!]);
+				if (!split.text.startsWith(row, consumed)) break;
+				consumed += row.length;
 				count++;
 			}
 			split.rowsByWidth.set(width, count);
