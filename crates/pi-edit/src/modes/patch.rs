@@ -817,8 +817,11 @@ fn find_context_relative(
 }
 
 /// Applies a single context-free hunk at the character level. With
-/// `first_match`, repeated exact text yields `None` so the caller binds it to
-/// the first line-based match instead of rejecting it.
+/// `first_match`, repeated text yields `None` so the caller binds it to the
+/// first line-based match instead of rejecting it; this covers exact repeats
+/// and repeats that only match after normalization (whitespace, unicode),
+/// which the character pass reports as fuzzy candidates. The line pass still
+/// rejects ambiguous candidates that are genuinely fuzzy.
 fn character_match(
 	content: &str,
 	path: &str,
@@ -868,6 +871,9 @@ fn character_match(
 		)));
 	}
 	if outcome.fuzzy_matches.is_some_and(|count| count > 1) {
+		if first_match && outcome.dominant_fuzzy != Some(true) {
+			return Ok(None);
+		}
 		return Err(EditError::apply(format!(
 			"Found {} high-confidence matches in {path}. The text must be unique. Please provide \
 			 more context to make it unique.",
