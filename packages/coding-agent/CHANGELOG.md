@@ -5,6 +5,9 @@
 ### Added
 
 - Added hiding a pending `ask` question without answering it: `Alt+H` (`app.ask.hide`) or the Hide button in Tern collapses the dialog to one line; the same key, `Enter`, or Show brings it back ([#15400](https://github.com/can1357/oh-my-pi/pull/15400) by [@H4vC](https://github.com/H4vC))
+### Fixed
+
+- Fixed `RpcClient.stop()` occasionally waiting forever because the agent process was never signaled.
 
 ## [18.9.2] - 2026-10-11
 
