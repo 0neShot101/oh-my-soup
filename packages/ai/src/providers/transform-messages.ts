@@ -87,9 +87,9 @@ interface ToolCallOriginScope {
  *
  * Called from the normalization map (`transformMessages`) in document order, on
  * the SAME post-transform content that message emits, so the two sets cover
- * every assistant turn exactly once and hold the ids the request will carry.
- * Both sets are only read via `.has`, so ordering is inert; document order is
- * preserved anyway.
+ * every assistant turn exactly once and hold its post-normalization, pre-dedup
+ * ids (`_dupN` replacements minted later by dedup are never scope members).
+ * Both sets are only read via `.has`, so ordering is inert.
  */
 function recordToolCallOriginScope(
 	msg: AssistantMessage,
