@@ -2,9 +2,28 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserved execution of shell scripts without a shebang on the faster external-command launch path ([#14847](https://github.com/can1357/oh-my-pi/issues/14847), [#14858](https://github.com/can1357/oh-my-pi/pull/14858) by [@farnoy](https://github.com/farnoy), [#15271](https://github.com/can1357/oh-my-pi/pull/15271) by [@iliaal](https://github.com/iliaal)).
+
+## [18.9.0] - 2026-10-11
+
+### Added
+
+- Added `applyBinaryPatch(oldPath, patchPath, outPath)` for applying HDiffPatch single-stream delta patches, including zstd-compressed patches, to files.
+- macOS desktop sessions now keep the display awake while in use and expose screen-lock and display-sleep state through capabilities, `screenState`, and screen captures.
+
 ### Changed
 
-- Reduced external-command launch latency in the embedded shell on glibc 2.29+ Linux when no explicit `ulimit`, `umask`, or extra file descriptors are needed, while preserving execution of scripts without a shebang ([#14847](https://github.com/can1357/oh-my-pi/issues/14847), [#14858](https://github.com/can1357/oh-my-pi/pull/14858) by [@farnoy](https://github.com/farnoy), [#15271](https://github.com/can1357/oh-my-pi/pull/15271) by [@iliaal](https://github.com/iliaal)).
+- Improved Linux embedded-shell startup performance for external commands.
+- Improved macOS computer-use performance, including faster screenshots and accessibility queries, with better handling of large numbers of off-screen windows.
+- Updated `grep()` and `search()` to truncate matching lines around the first match when they exceed `maxColumns`, mark truncated sides with `...`, and report the match's character column.
+
+### Fixed
+
+- Fixed macOS accessibility and window-management operations requiring Screen Recording permission; only screenshots and display listing now require that permission, and window listing includes windows beyond the frontmost 48. Window titles from other applications remain unavailable without Screen Recording permission.
+- Fixed macOS menu inspection and selection for menus containing items whose titles cannot be read; those items are now skipped safely.
+- Fixed syntax highlighting and language detection for several languages, including TOML, PowerShell, SCSS, Less, Vim script, GraphQL, Protobuf, Terraform/HCL, Dockerfile, CMake, INI, gitignore, Kotlin, Swift, Elixir, Sass, Python f-strings, Julia interpolations, and Elixir interpolations.
 
 ## [18.8.8] - 2026-10-10
 
