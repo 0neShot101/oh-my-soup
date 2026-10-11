@@ -165,14 +165,16 @@ const TASK_ABORT_CLEANUP_GRACE_MS = 10_000;
  * agent is driven to one forced final `yield` so partial findings come back
  * as a real report; only if it still refuses to yield within
  * {@link BUDGET_STOP_GRACE_REQUESTS} more requests is the run hard-aborted.
- * Entries are ceilings, not fixed values: `task.softRequestBudget` applies to
- * agents without an entry and can only lower an entry, never raise it (0
- * disables the guard entirely). An agent's `task.agentSoftRequestBudget`
- * entry replaces both.
+ * Entries are ceilings, not fixed values: the `default` key applies to agents
+ * without an explicit entry, and the `task.softRequestBudget` setting can only
+ * lower an agent's budget, never raise it above its bundled entry (0 disables
+ * the guard entirely). An agent's `task.agentSoftRequestBudget` entry replaces
+ * both.
  */
 export const SOFT_REQUEST_BUDGET: Record<string, number> = {
 	scout: 100,
 	sonic: 100,
+	default: 200,
 };
 
 /**

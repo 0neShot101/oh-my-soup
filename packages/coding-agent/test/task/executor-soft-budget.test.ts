@@ -674,6 +674,7 @@ describe("resolveSoftRequestBudget", () => {
 	it("keeps the bundled ceiling when the configured budget is higher", () => {
 		expect(resolveSoftRequestBudget("scout", 200, {})).toBe(100);
 		expect(resolveSoftRequestBudget("sonic", 200, {})).toBe(100);
+		expect(resolveSoftRequestBudget("default", 400, {})).toBe(200);
 	});
 
 	it("uses the configured budget for agents without a bundled entry", () => {
@@ -732,9 +733,17 @@ describe("task.agentSoftRequestBudget", () => {
 		);
 		await Bun.write(overlay, JSON.stringify({ task: { agentSoftRequestBudget: { scout: null } } }));
 
-		const settings = await Settings.loadReadOnly({ agentDir, cwd: tempDir.path(), configFiles: [overlay] });
-		const agentBudgets = cfgTaskAgentSoftRequestBudget.get(settings);
-		expect(resolveSoftRequestBudget("scout", 200, agentBudgets)).toBe(100);
-		expect(resolveSoftRequestBudget("lead", 200, agentBudgets)).toBe(400);
+		// Ambient overlays would join the layers under test.
+		const previousConfigFiles = process.env.PI_CONFIG_FILES;
+		delete process.env.PI_CONFIG_FILES;
+		try {
+			const settings = await Settings.loadReadOnly({ agentDir, cwd: tempDir.path(), configFiles: [overlay] });
+			const agentBudgets = cfgTaskAgentSoftRequestBudget.get(settings);
+			expect(resolveSoftRequestBudget("scout", 200, agentBudgets)).toBe(100);
+			expect(resolveSoftRequestBudget("lead", 200, agentBudgets)).toBe(400);
+		} finally {
+			if (previousConfigFiles === undefined) delete process.env.PI_CONFIG_FILES;
+			else process.env.PI_CONFIG_FILES = previousConfigFiles;
+		}
 	});
 });
