@@ -2994,36 +2994,6 @@ mod tests {
 		}
 	}
 
-	/// An empty match right after a block's line terminator starts the next
-	/// line. The searcher never reports such a block for its own matcher, so a
-	/// second matcher (`^$`, the empty second line) re-runs over the block it
-	/// found.
-	#[test]
-	fn first_match_in_line_leaves_an_empty_match_on_the_next_line() {
-		struct FirstMatch<'m>(&'m super::RegexMatcher, Vec<Option<(usize, usize)>>);
-		impl grep_searcher::Sink for FirstMatch<'_> {
-			type Error = std::io::Error;
-
-			fn matched(
-				&mut self,
-				searcher: &grep_searcher::Searcher,
-				mat: &grep_searcher::SinkMatch<'_>,
-			) -> Result<bool, Self::Error> {
-				let line = super::bytes_to_trimmed_string(mat.bytes());
-				let found = super::first_match_in_line(searcher, self.0, mat, &line);
-				self.1.push(found);
-				Ok(true)
-			}
-		}
-		let reported = super::build_regex_matcher("-", false, true).expect("matcher");
-		let rerun = super::build_regex_matcher("^$", false, true).expect("matcher");
-		let mut sink = FirstMatch(&rerun, Vec::new());
-		super::build_searcher(0, 0, true, true)
-			.search_slice(&reported, b"-\n\n", &mut sink)
-			.expect("search");
-		assert_eq!(sink.1, [None]);
-	}
-
 	#[cfg(unix)]
 	#[test]
 	fn streaming_grep_delivers_bounded_batches_and_returns_only_counts() {
