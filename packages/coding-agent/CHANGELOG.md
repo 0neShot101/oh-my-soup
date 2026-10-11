@@ -21,6 +21,7 @@
 - `omp auth-gateway serve` now accepts OpenRouter routing-variant selectors such as `openrouter/<model>:floor` or `:nitro`, matching `--model`, instead of returning "Unknown model".
 - Fixed `computer` helpers given a missing or non-string text argument (`setValue`, `type`, `press`, `perform`, `ref`, `apps.open`, `clipboard.write`) failing with a native conversion error that named neither the helper nor the argument; they now say which, before any native call ([#15309](https://github.com/can1357/oh-my-pi/pull/15309) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed `/tan` forks that reset inherited spend still showing the parent's subagent costs: billing inside inherited task results is now cleared too, while token counts are kept ([#15039](https://github.com/can1357/oh-my-pi/pull/15039) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy))
+- Fixed `omp://` documentation links in chat, read cards and grep headers doing nothing when clicked in a source checkout; they now open the matching file under `docs/` ([#15086](https://github.com/can1357/oh-my-pi/pull/15086) by [@danzaio](https://github.com/danzaio))
 
 ## [18.9.1] - 2026-10-11
 
