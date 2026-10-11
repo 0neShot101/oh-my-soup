@@ -7008,6 +7008,7 @@ dependencies = [
  "inferno",
  "libc",
  "log",
+ "memchr",
  "napi",
  "napi-build",
  "napi-derive",

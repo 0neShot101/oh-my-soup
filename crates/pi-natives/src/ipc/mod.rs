@@ -8,6 +8,7 @@
 
 use std::{io, sync::Arc, time::Duration};
 
+use memchr::memchr;
 use napi::{
 	Env, Error, JsError, JsString, JsTypeError, Result,
 	bindgen_prelude::{Either, Function, PromiseRaw, Uint8Array},
@@ -21,6 +22,7 @@ use tokio_util::sync::CancellationToken;
 use crate::js;
 
 mod conn;
+mod cork;
 mod endpoint;
 mod lines;
 #[cfg(unix)]
@@ -394,27 +396,28 @@ impl IpcConnection {
 			.start(env, FrameCallback::Raw(on_chunk.create_ref()?), &on_close)
 	}
 
-	/// Queue one frame. lines: a string without LF (`TypeError` otherwise);
+	/// Send one frame. lines: a string without LF (`TypeError` otherwise);
 	/// LF is appended. raw: string (UTF-8) or `Uint8Array` written as-is.
-	/// Returns false once queued-but-unwritten bytes exceed 1 MiB (await
-	/// `drained()` before sending more). After close: returns false and drops
-	/// the frame.
+	/// Frames sent during one JS task are written together when it ends (a
+	/// microtask), in order; `end()` writes them first. Returns false once
+	/// unwritten bytes exceed 1 MiB (await `drained()` before sending more).
+	/// After close: returns false and drops the frame.
 	#[napi]
 	pub fn send(&self, env: &Env, frame: Either<JsString<'_>, Uint8Array>) -> Result<bool> {
-		let bytes = match (self.shared.framing, frame) {
+		// Bytes are copied once, from the JS string scratch (or the caller's
+		// typed array) into the cork — or not at all for large frames the
+		// socket takes directly.
+		let outcome = match (self.shared.framing, frame) {
 			(Framing::Lines, Either::A(text)) => {
 				let text = js::utf8(text)?;
-				if text.as_bytes().contains(&b'\n') {
+				if memchr(b'\n', text.as_bytes()).is_some() {
 					return Err(type_error(
 						env,
 						"ERR_INVALID_ARG_VALUE",
 						"lines frame must not contain \"\\n\"",
 					));
 				}
-				let mut bytes = Vec::with_capacity(text.len() + 1);
-				bytes.extend_from_slice(text.as_bytes());
-				bytes.push(b'\n');
-				bytes
+				self.shared.send(&[text.as_bytes(), b"\n"])
 			},
 			(Framing::Lines, Either::B(_)) => {
 				return Err(type_error(
@@ -423,10 +426,13 @@ impl IpcConnection {
 					"lines connections send strings, not bytes",
 				));
 			},
-			(Framing::Raw, Either::A(text)) => js::utf8(text)?.as_bytes().to_vec(),
-			(Framing::Raw, Either::B(bytes)) => bytes.to_vec(),
+			(Framing::Raw, Either::A(text)) => self.shared.send(&[js::utf8(text)?.as_bytes()]),
+			(Framing::Raw, Either::B(bytes)) => self.shared.send(&[&bytes]),
 		};
-		Ok(self.shared.send(bytes))
+		if outcome.uncorked {
+			cork::schedule(env, &self.shared)?;
+		}
+		Ok(outcome.below_high_water)
 	}
 
 	/// Resolves when the write queue is empty, or the connection closed.
@@ -475,7 +481,8 @@ impl IpcConnection {
 impl IpcConnection {
 	fn spawn(stream: platform::Stream, framing: Framing, max_frame_bytes: usize) -> Self {
 		let (commands, receiver) = mpsc::unbounded_channel();
-		let shared = Arc::new(Shared::new(framing, commands));
+		let stream = Arc::new(stream);
+		let shared = Arc::new(Shared::new(framing, commands, Arc::clone(&stream)));
 		napi::bindgen_prelude::spawn(conn::run(
 			stream,
 			Arc::clone(&shared),

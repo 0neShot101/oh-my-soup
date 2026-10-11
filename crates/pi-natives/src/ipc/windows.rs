@@ -321,10 +321,11 @@ impl Stream {
 		}
 	}
 
-	pub fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
+	/// Read into `buf`'s spare capacity without initializing it first.
+	pub fn try_read_buf(&self, buf: &mut Vec<u8>) -> io::Result<usize> {
 		match self {
-			Self::Server(pipe) => pipe.try_read(buf),
-			Self::Client(pipe) => pipe.try_read(buf),
+			Self::Server(pipe) => pipe.try_read_buf(buf),
+			Self::Client(pipe) => pipe.try_read_buf(buf),
 		}
 	}
 

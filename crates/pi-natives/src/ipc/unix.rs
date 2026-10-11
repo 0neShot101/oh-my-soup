@@ -339,8 +339,9 @@ impl Stream {
 		self.0.readable().await
 	}
 
-	pub fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
-		self.0.try_read(buf)
+	/// Read into `buf`'s spare capacity without initializing it first.
+	pub fn try_read_buf(&self, buf: &mut Vec<u8>) -> io::Result<usize> {
+		self.0.try_read_buf(buf)
 	}
 
 	pub async fn writable(&self) -> io::Result<()> {

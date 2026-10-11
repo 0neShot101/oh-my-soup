@@ -239,6 +239,31 @@ describe("native IPC", () => {
 		expect(seen.events).toEqual(["RELOCATED"]);
 	});
 
+	test("small and large frames arrive in send order, within and across tasks", async () => {
+		// Small frames coalesce until the end of the task while large ones may
+		// be written immediately; a 4 MiB frame also overflows the socket
+		// buffer so later frames queue behind its unwritten tail.
+		const endpoint = await endpointIn();
+		const { accepted } = await acceptingServer(endpoint, { framing: "lines" });
+		const client = await connect(endpoint, { framing: "lines" });
+		const peer = record(await accepted);
+		const big = "b".repeat(4 * 1024 * 1024);
+		const mid = "m".repeat(128 * 1024);
+		client.send(big); // written directly; the unwritten tail is queued
+		client.send("a"); // corked behind the queued tail
+		client.send(mid); // large, but joins the open cork to keep order
+		await Promise.resolve();
+		client.send("c");
+		await client.drained();
+		await peer.until(4);
+		expect(peer.events.map(line => (line.length > 8 ? `${line[0]}×${line.length}` : line))).toEqual([
+			`b×${big.length}`,
+			"a",
+			`m×${mid.length}`,
+			"c",
+		]);
+	});
+
 	test("send then end() delivers everything before the peer sees close", async () => {
 		const endpoint = await endpointIn();
 		const { accepted } = await acceptingServer(endpoint, { framing: "lines" });

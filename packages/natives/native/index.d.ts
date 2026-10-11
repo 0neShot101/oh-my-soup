@@ -259,11 +259,12 @@ export declare class IpcConnection {
    */
   startRaw(onChunk: (chunk: Uint8Array) => void, onClose: (reason: string | null) => void): void
   /**
-   * Queue one frame. lines: a string without LF (`TypeError` otherwise);
+   * Send one frame. lines: a string without LF (`TypeError` otherwise);
    * LF is appended. raw: string (UTF-8) or `Uint8Array` written as-is.
-   * Returns false once queued-but-unwritten bytes exceed 1 MiB (await
-   * `drained()` before sending more). After close: returns false and drops
-   * the frame.
+   * Frames sent during one JS task are written together when it ends (a
+   * microtask), in order; `end()` writes them first. Returns false once
+   * unwritten bytes exceed 1 MiB (await `drained()` before sending more).
+   * After close: returns false and drops the frame.
    */
   send(frame: string | Uint8Array): boolean
   /** Resolves when the write queue is empty, or the connection closed. */
