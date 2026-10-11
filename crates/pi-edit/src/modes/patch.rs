@@ -57,13 +57,17 @@ impl Operation {
 /// One normalized single-file patch request.
 pub struct PatchInput<'a> {
 	/// Authored source path.
-	pub path:   &'a str,
+	pub path:        &'a str,
 	/// Requested file operation.
-	pub op:     Operation,
+	pub op:          Operation,
 	/// Optional update destination.
-	pub rename: Option<&'a str>,
+	pub rename:      Option<&'a str>,
 	/// Full create content or update hunks.
-	pub diff:   Option<&'a str>,
+	pub diff:        Option<&'a str>,
+	/// Codex `apply_patch` placement: a hunk binds to its first match at or
+	/// after the previous hunk instead of rejecting a context-free hunk whose
+	/// lines occur more than once.
+	pub first_match: bool,
 }
 
 /// JSON patch mode engine.
@@ -72,6 +76,8 @@ pub struct PatchEngine {
 	pub allow_fuzzy:     bool,
 	/// Minimum confidence for character-level fallback matching.
 	pub fuzzy_threshold: f64,
+	/// See [`PatchInput::first_match`].
+	pub first_match:     bool,
 }
 
 #[derive(Debug, Clone)]
@@ -931,6 +937,7 @@ fn compute_replacements(
 	path: &str,
 	hunks: &[DiffHunk],
 	allow_fuzzy: bool,
+	first_match: bool,
 ) -> Result<(Vec<Replacement>, Vec<String>), EditError> {
 	let mut replacements = Vec::new();
 	let mut warnings = Vec::new();
@@ -1214,7 +1221,8 @@ fn compute_replacements(
 				));
 			}
 		}
-		if hunk.change_context.is_none()
+		if !first_match
+			&& hunk.change_context.is_none()
 			&& !hunk.has_context_lines
 			&& !hunk.is_end_of_file
 			&& line_hint.is_none()
@@ -1287,9 +1295,12 @@ fn apply_hunks(
 	hunks: &[DiffHunk],
 	threshold: f64,
 	allow_fuzzy: bool,
+	first_match: bool,
 ) -> Result<(String, Vec<String>), EditError> {
 	let had_newline = content.ends_with('\n');
-	if hunks.len() == 1 {
+	// The whole-content character match rejects repeated text; first-match
+	// placement stays line-based like Codex.
+	if hunks.len() == 1 && !first_match {
 		let hunk = &hunks[0];
 		if hunk.change_context.is_none()
 			&& !hunk.has_context_lines
@@ -1311,7 +1322,8 @@ fn apply_hunks(
 	if stripped {
 		lines.pop();
 	}
-	let (replacements, warnings) = compute_replacements(&lines, path, hunks, allow_fuzzy)?;
+	let (replacements, warnings) =
+		compute_replacements(&lines, path, hunks, allow_fuzzy, first_match)?;
 	// Replacements are sorted and disjoint: copy forward over borrowed lines.
 	let mut result: Vec<&str> = Vec::with_capacity(lines.len() + 1);
 	let mut copied = 0;
@@ -1510,7 +1522,7 @@ fn apply_entry(
 				return Err(EditError::apply("Diff contains no hunks"));
 			}
 			let (after, warnings) =
-				apply_hunks(&read.text, input.path, &hunks, threshold, allow_fuzzy)?;
+				apply_hunks(&read.text, input.path, &hunks, threshold, allow_fuzzy, input.first_match)?;
 			Ok(AppliedEntry {
 				resolved: read.resolved.clone(),
 				read: Some(read),
@@ -1610,12 +1622,17 @@ fn preview_entry(
 	})
 }
 
-fn entry_input<'a>(path: &'a str, entry: &'a EditEntry) -> Result<PatchInput<'a>, EditError> {
+fn entry_input<'a>(
+	path: &'a str,
+	entry: &'a EditEntry,
+	first_match: bool,
+) -> Result<PatchInput<'a>, EditError> {
 	Ok(PatchInput {
 		path,
 		op: Operation::parse(entry.op.as_deref())?,
 		rename: entry.rename.as_deref(),
 		diff: entry.diff.as_deref(),
+		first_match,
 	})
 }
 
@@ -1637,7 +1654,7 @@ impl ModeEngine for PatchEngine {
 		let Some(entry) = args.edits.iter().find(|entry| !streaming || entry.closed) else {
 			return Vec::new();
 		};
-		match entry_input(path, entry) {
+		match entry_input(path, entry, self.first_match) {
 			Ok(input) => {
 				vec![preview_patch(
 					input,
@@ -1676,7 +1693,7 @@ impl ModeEngine for PatchEngine {
 		}
 		if entries.len() == 1 {
 			return Ok(vec![stage_patch(
-				entry_input(path, entries[0])?,
+				entry_input(path, entries[0], self.first_match)?,
 				files,
 				self.allow_fuzzy,
 				self.fuzzy_threshold,
@@ -1684,7 +1701,7 @@ impl ModeEngine for PatchEngine {
 			)?]);
 		}
 
-		let first = entry_input(path, entries[0])?;
+		let first = entry_input(path, entries[0], self.first_match)?;
 		let initial_resolved = files.resolve(path, first.op != Operation::Create)?;
 		// After a create or delete, later updates use replacement text or fail
 		// the existence check; only an initial update needs the original text.
@@ -1707,7 +1724,7 @@ impl ModeEngine for PatchEngine {
 		let mut move_to = None;
 		let mut use_new_encoding = false;
 		for entry in entries {
-			let input = entry_input(path, entry)?;
+			let input = entry_input(path, entry, self.first_match)?;
 			if let Some(rename) = input.rename {
 				let destination = files.resolve(rename, false)?;
 				if destination.absolute == initial_resolved.absolute {
@@ -1755,8 +1772,14 @@ impl ModeEngine for PatchEngine {
 					if hunks.is_empty() {
 						return Err(EditError::apply("Diff contains no hunks"));
 					}
-					let (next, mut next_warnings) =
-						apply_hunks(&current, path, &hunks, self.fuzzy_threshold, self.allow_fuzzy)?;
+					let (next, mut next_warnings) = apply_hunks(
+						&current,
+						path,
+						&hunks,
+						self.fuzzy_threshold,
+						self.allow_fuzzy,
+						self.first_match,
+					)?;
 					current = next;
 					warnings.append(&mut next_warnings);
 					final_op = FileOp::Update;
@@ -1772,6 +1795,7 @@ impl ModeEngine for PatchEngine {
 			},
 			rename: None,
 			diff: None,
+			first_match: self.first_match,
 		};
 		let after = exists.then_some(current);
 		Ok(vec![{
@@ -1851,7 +1875,7 @@ mod tests {
 				}],
 				..ArgSnapshot::default()
 			};
-			PatchEngine { allow_fuzzy: false, fuzzy_threshold: 0.95 }
+			PatchEngine { allow_fuzzy: false, fuzzy_threshold: 0.95, first_match: false }
 				.inspect(&args)
 				.entries
 		};
@@ -1871,11 +1895,16 @@ mod tests {
 			is_end_of_file:    false,
 		};
 		assert_eq!(
-			apply_hunks("one\n", "a.txt", std::slice::from_ref(&hunk), 0.95, true)
+			apply_hunks("one\n", "a.txt", std::slice::from_ref(&hunk), 0.95, true, false)
 				.unwrap()
 				.0,
 			"two\n"
 		);
-		assert_eq!(apply_hunks("one", "a.txt", &[hunk], 0.95, true).unwrap().0, "two");
+		assert_eq!(
+			apply_hunks("one", "a.txt", &[hunk], 0.95, true, false)
+				.unwrap()
+				.0,
+			"two"
+		);
 	}
 }
