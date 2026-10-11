@@ -29,7 +29,7 @@ use std::{
 
 pub use applications::{Application, ApplicationOpenOptions, ApplicationQuery};
 use ax::{AxRegistry, register_node};
-use backend::{Backend, DeliveryMode, MouseButton, PointerEvent};
+use backend::{Backend, DeliveryMode, DisplayAwakeHold, MouseButton, PointerEvent};
 use control::{CancellationSource, InputLease, OperationToken};
 use error::{CoreResult, DesktopError};
 use frame::{FrameGeometry, apply_capture_caps, encode_png};
@@ -42,13 +42,37 @@ pub use types::*;
 
 use crate::task;
 
+#[cfg(not(test))]
 const OPERATION_TIMEOUT: Duration = Duration::from_mins(3);
+/// Short enough for a test to wait out a hung request.
+#[cfg(test)]
+const OPERATION_TIMEOUT: Duration = Duration::from_secs(1);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 /// How long the display stays awake after the last desktop request. Releasing
 /// the assertion restarts the OS display-sleep countdown, so the display can
 /// sleep this long plus the user's display-sleep setting after the agent's
 /// last action, and never sooner while the agent keeps acting.
 const DISPLAY_AWAKE_GRACE: Duration = Duration::from_mins(5);
+
+/// The display-awake assertion, shared by the worker that takes it for
+/// activity and the session, which drops it when a caller gives up (timeout,
+/// close) while the worker may still be blocked inside a request.
+#[derive(Default)]
+struct DisplayAwake(Mutex<Option<DisplayAwakeHold>>);
+
+impl DisplayAwake {
+	fn hold(&self, start: impl FnOnce() -> Option<DisplayAwakeHold>) {
+		let mut held = self.0.lock();
+		if held.is_none() {
+			*held = start();
+		}
+	}
+
+	fn release(&self) {
+		let released = self.0.lock().take();
+		drop(released);
+	}
+}
 
 enum Response {
 	Capabilities(DesktopCapabilities),
@@ -386,21 +410,29 @@ fn hold_duration(seconds: f64) -> CoreResult<Duration> {
 }
 
 struct Worker {
-	backend:      CoreResult<Box<dyn Backend>>,
-	registry:     AxRegistry,
-	frames:       HashMap<String, FrameGeometry>,
+	backend:       CoreResult<Box<dyn Backend>>,
+	registry:      AxRegistry,
+	frames:        HashMap<String, FrameGeometry>,
 	/// Latest capabilities the worker computed, shared with the session so the
 	/// getter can answer while an operation holds the worker.
-	capabilities: Arc<Mutex<Option<DesktopCapabilities>>>,
+	capabilities:  Arc<Mutex<Option<DesktopCapabilities>>>,
+	display_awake: Arc<DisplayAwake>,
 }
 
 impl Worker {
 	fn new(
 		selector: DisplaySelector,
 		capabilities: Arc<Mutex<Option<DesktopCapabilities>>>,
+		display_awake: Arc<DisplayAwake>,
 	) -> Self {
 		let backend = create_backend(selector);
-		Self { backend, registry: AxRegistry::default(), frames: HashMap::new(), capabilities }
+		Self {
+			backend,
+			registry: AxRegistry::default(),
+			frames: HashMap::new(),
+			capabilities,
+			display_awake,
+		}
 	}
 
 	fn backend(&mut self) -> CoreResult<&mut Box<dyn Backend>> {
@@ -628,8 +660,10 @@ impl Worker {
 	}
 
 	fn keep_display_awake(&mut self, awake: bool) {
-		if let Ok(backend) = self.backend.as_mut() {
-			backend.keep_display_awake(awake);
+		if !awake {
+			self.display_awake.release();
+		} else if let Ok(backend) = self.backend.as_mut() {
+			self.display_awake.hold(|| backend.hold_display_awake());
 		}
 	}
 
@@ -1090,12 +1124,13 @@ struct Lifecycle {
 	closed: bool,
 }
 struct SessionCore {
-	selector:     DisplaySelector,
-	lifecycle:    Mutex<Lifecycle>,
-	capabilities: Arc<Mutex<Option<DesktopCapabilities>>>,
+	selector:      DisplaySelector,
+	lifecycle:     Mutex<Lifecycle>,
+	capabilities:  Arc<Mutex<Option<DesktopCapabilities>>>,
+	display_awake: Arc<DisplayAwake>,
 	/// `call`s sent to the worker that have not returned yet.
-	in_flight:    AtomicUsize,
-	cancellation: CancellationSource,
+	in_flight:     AtomicUsize,
+	cancellation:  CancellationSource,
 }
 impl SessionCore {
 	fn new(selector: DisplaySelector) -> Arc<Self> {
@@ -1108,6 +1143,7 @@ impl SessionCore {
 				closed: false,
 			}),
 			capabilities: Arc::default(),
+			display_awake: Arc::default(),
 			in_flight: AtomicUsize::new(0),
 			cancellation: CancellationSource::default(),
 		})
@@ -1125,10 +1161,11 @@ impl SessionCore {
 		let (done_tx, done_rx) = flume::bounded(1);
 		let selector = self.selector.clone();
 		let caps = Arc::clone(&self.capabilities);
+		let display_awake = Arc::clone(&self.display_awake);
 		let join = thread::Builder::new()
 			.name("omp-desktop-session".into())
 			.spawn(move || {
-				Worker::new(selector, caps).serve(&rx, DISPLAY_AWAKE_GRACE);
+				Worker::new(selector, caps, display_awake).serve(&rx, DISPLAY_AWAKE_GRACE);
 				let _ = done_tx.send(());
 			})
 			.map_err(|e| {
@@ -1157,6 +1194,7 @@ impl SessionCore {
 			.and_then(|()| {
 				rxr.recv_timeout(OPERATION_TIMEOUT).map_err(|e| {
 					self.cancellation.cancel();
+					self.display_awake.release();
 					DesktopError::timeout(format!("native desktop operation did not complete: {e}"))
 				})
 			});
@@ -1166,6 +1204,7 @@ impl SessionCore {
 
 	fn close(&self) -> CoreResult<()> {
 		self.cancellation.cancel();
+		self.display_awake.release();
 		let mut lifecycle = self.lifecycle.lock();
 		lifecycle.closed = true;
 		let Some(tx) = lifecycle.tx.take() else {
@@ -1196,6 +1235,7 @@ impl SessionCore {
 impl Drop for SessionCore {
 	fn drop(&mut self) {
 		self.cancellation.cancel();
+		self.display_awake.release();
 		let lifecycle = self.lifecycle.get_mut();
 		if let Some(tx) = lifecycle.tx.take() {
 			let (reply, _) = flume::bounded(1);
@@ -1870,6 +1910,8 @@ mod capture_tests {
 		awake:                  Arc<Mutex<Vec<bool>>>,
 		/// Unlock the session on the next layout read, i.e. after the frame.
 		unlock_on_layout:       Arc<Mutex<bool>>,
+		/// Blocks every window listing until the sender drops.
+		hang_windows:           Option<flume::Receiver<()>>,
 	}
 
 	impl FakeWaylandBackend {
@@ -1913,6 +1955,7 @@ mod capture_tests {
 				screen_displays:        Arc::new(Mutex::new(Vec::new())),
 				awake:                  Arc::new(Mutex::new(Vec::new())),
 				unlock_on_layout:       Arc::new(Mutex::new(false)),
+				hang_windows:           None,
 			}
 		}
 	}
@@ -2010,6 +2053,9 @@ mod capture_tests {
 		}
 
 		fn windows(&mut self) -> CoreResult<Vec<DesktopWindow>> {
+			if let Some(hang) = &self.hang_windows {
+				let _ = hang.recv();
+			}
 			*self.window_queries.lock() += 1;
 			Ok(self
 				.overlap
@@ -2027,11 +2073,9 @@ mod capture_tests {
 			*self.screen.lock()
 		}
 
-		fn keep_display_awake(&mut self, awake: bool) {
-			let mut log = self.awake.lock();
-			if log.last().copied().unwrap_or(false) != awake {
-				log.push(awake);
-			}
+		fn hold_display_awake(&mut self) -> Option<DisplayAwakeHold> {
+			self.awake.lock().push(true);
+			Some(Box::new(FakeAwakeHold(Arc::clone(&self.awake))))
 		}
 
 		fn capture(
@@ -2144,10 +2188,11 @@ mod capture_tests {
 
 	fn worker_with(backend: impl Backend + 'static) -> Worker {
 		Worker {
-			backend:      Ok(Box::new(backend)),
-			registry:     AxRegistry::default(),
-			frames:       HashMap::new(),
-			capabilities: Arc::default(),
+			backend:       Ok(Box::new(backend)),
+			registry:      AxRegistry::default(),
+			frames:        HashMap::new(),
+			capabilities:  Arc::default(),
+			display_awake: Arc::default(),
 		}
 	}
 
@@ -2234,6 +2279,77 @@ mod capture_tests {
 		drop(tx);
 		serving.join().unwrap();
 		assert_eq!(*awake.lock(), [true, false]);
+	}
+
+	/// Logs the release of the fake display-awake assertion.
+	struct FakeAwakeHold(Arc<Mutex<Vec<bool>>>);
+
+	impl Drop for FakeAwakeHold {
+		fn drop(&mut self) {
+			self.0.lock().push(false);
+		}
+	}
+
+	/// A session serving `backend` with an hour's grace, so while a request
+	/// hangs only the session giving up can release the display.
+	fn session_serving(backend: FakeWaylandBackend) -> Arc<SessionCore> {
+		let core = SessionCore::new(DisplaySelector::Active);
+		let display_awake = Arc::clone(&core.display_awake);
+		let (tx, rx) = flume::unbounded();
+		let (done_tx, done) = flume::bounded(1);
+		let join = thread::spawn(move || {
+			let mut worker = worker_with(backend);
+			worker.display_awake = display_awake;
+			worker.serve(&rx, Duration::from_secs(3600));
+			let _ = done_tx.send(());
+		});
+		let mut lifecycle = core.lifecycle.lock();
+		lifecycle.tx = Some(tx);
+		lifecycle.done = Some(done);
+		lifecycle.join = Some(join);
+		drop(lifecycle);
+		core
+	}
+
+	#[test]
+	fn a_timed_out_call_releases_the_display_while_its_request_hangs() {
+		let (unblock, hang) = flume::bounded::<()>(0);
+		let mut backend = FakeWaylandBackend::new();
+		backend.hang_windows = Some(hang);
+		let awake = Arc::clone(&backend.awake);
+		let core = session_serving(backend);
+		let error = core
+			.call(core.cancellation.token(), |reply| Request::ListWindows { reply })
+			.err()
+			.unwrap();
+		assert_eq!(error.code, ErrorCode::Timeout);
+		assert_eq!(*awake.lock(), [true, false], "the caller's timeout releases the hold");
+		drop(unblock);
+		core.close().unwrap();
+		assert_eq!(*awake.lock(), [true, false], "the late return neither holds nor releases again");
+	}
+
+	#[test]
+	fn close_releases_the_display_while_a_request_hangs() {
+		let (unblock, hang) = flume::bounded::<()>(0);
+		let mut backend = FakeWaylandBackend::new();
+		backend.hang_windows = Some(hang);
+		let awake = Arc::clone(&backend.awake);
+		let core = session_serving(backend);
+		let (reply, _pending) = flume::bounded(1);
+		let tx = core.lifecycle.lock().tx.clone().unwrap();
+		tx.send(QueuedRequest {
+			request: Request::ListWindows { reply },
+			token:   core.cancellation.token(),
+		})
+		.unwrap();
+		wait_for_awake(&awake, &[true]);
+		assert_eq!(core.close().err().unwrap().code, ErrorCode::Timeout);
+		assert_eq!(*awake.lock(), [true, false], "close releases the hold");
+		drop(unblock);
+		let join = core.lifecycle.lock().join.take().unwrap();
+		join.join().unwrap();
+		assert_eq!(*awake.lock(), [true, false], "the late return neither holds nor releases again");
 	}
 
 	fn locked_capture_and_failure(screen: ScreenState) -> (bool, DesktopError) {

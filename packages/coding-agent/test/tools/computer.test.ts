@@ -13,6 +13,7 @@ import {
 	type ComputerWorkerOutbound,
 	type ComputerWorkerTransport,
 	SCREEN_LOCKED_CAPTURE_NOTE,
+	screenStateNotice,
 } from "@oh-my-pi/pi-coding-agent/tools/computer/protocol";
 import {
 	type ComputerController,
@@ -350,6 +351,13 @@ function toolSession(): ToolSession {
 		getSessionFile: () => null,
 		getSessionSpawns: () => null,
 	};
+}
+
+/** The run-ended notice the model gets for a locked screen or a sleeping display. */
+function runNotice(state: DesktopScreenState): string {
+	const notice = screenStateNotice(state);
+	if (!notice) throw new Error("an unlocked, awake screen has no run notice");
+	return notice;
 }
 
 /** Exercise the shipped host approval/call rendering and worker, with only native OS work substituted. */
@@ -1333,7 +1341,7 @@ describe("computer worker round trips", () => {
 			if (locked) {
 				expect(result.content[0]).toMatchObject({
 					type: "text",
-					text: expect.stringMatching(/^Note: when this run ended the screen is locked\. /),
+					text: runNotice({ screenLocked: true, displayAsleep: false }),
 				});
 			} else {
 				expect(notes).toEqual([]);
@@ -1357,7 +1365,7 @@ describe("computer worker round trips", () => {
 			if (result.ok) return;
 			const [first, ...rest] = result.error.message.split("\n");
 			expect(first).toBe("verification failed");
-			if (locked) expect(rest.join("\n")).toMatch(/^Note: when this run ended the screen is locked\. /);
+			if (locked) expect(rest.join("\n")).toBe(runNotice({ screenLocked: true, displayAsleep: false }));
 			else expect(rest).toEqual([]);
 		}
 	});
@@ -1373,9 +1381,7 @@ describe("computer worker round trips", () => {
 		);
 		const [note] = result.content;
 		const text = note?.type === "text" ? note.text : "";
-		expect(text).toMatch(/^Note: when this run ended the session's display is asleep\. /);
-		expect(text).toContain("Nothing on that display can be captured or clicked until it wakes.");
-		expect(text).toContain("`computer.display`");
+		expect(text).toBe(runNotice({ screenLocked: false, displayAsleep: true }));
 	});
 
 	it("adds the lock state to a run timed out by a hung native call without reading capabilities", async () => {
@@ -1407,7 +1413,7 @@ describe("computer worker round trips", () => {
 		if (result.ok) return;
 		const [first, ...rest] = result.error.message.split("\n");
 		expect(first).toBe("Computer code execution timed out after 50ms");
-		expect(rest.join("\n")).toMatch(/^Note: when this run ended the screen is locked\. /);
+		expect(rest.join("\n")).toBe(runNotice({ screenLocked: true, displayAsleep: false }));
 		expect(native.blockingReads).toBe(0);
 	});
 
