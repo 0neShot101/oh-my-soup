@@ -17,6 +17,7 @@ import { getThinkingLevelMetadata } from "@oh-my-pi/pi-tui/thinking";
 const EMPTY_AGENT_SERVICE_TIER_OVERRIDES: Record<string, ServiceTierInheritSettingValue> = {};
 const EMPTY_AGENT_COMPACTION_THRESHOLD_OVERRIDES: Record<string, AgentCompactionThresholdOverride> = {};
 const EMPTY_AGENT_ACCOUNT_POOLS: Record<string, OAuthAccountPools> = {};
+const EMPTY_AGENT_SOFT_REQUEST_BUDGET: Record<string, number | null> = {};
 
 const DEFAULT_AGENT_MODEL_OVERRIDES: Record<string, string | string[]> = {};
 
@@ -435,7 +436,7 @@ function validateAgentSoftRequestBudget(value: unknown): void {
 export const cfgTaskAgentSoftRequestBudget = register({
 	id: "task.agentSoftRequestBudget",
 	type: "record",
-	default: {} as Record<string, number | null>,
+	default: EMPTY_AGENT_SOFT_REQUEST_BUDGET,
 	validate: validateAgentSoftRequestBudget,
 });
 
