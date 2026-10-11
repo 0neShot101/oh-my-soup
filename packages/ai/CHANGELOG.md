@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.9.2] - 2026-10-11
+
 ### Breaking Changes
 
 - Renamed `TypeSafeJudge` to `NativeJudge` and `TypeSafeApiError` to `JudgmentApiError`, including their associated option types. `JUDGMENT_ROUTES` has been removed; use `isJudgmentApi` or create a judge for catalog models with `createNativeJudge(model, { apiKey })`.

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.9.2] - 2026-10-11
+
 ### Changed
 
 - Improved streaming JSON parsing performance for tool arguments containing many string values.

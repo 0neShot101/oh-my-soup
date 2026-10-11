@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.9.2] - 2026-10-11
+
 ### Fixed
 
 - Improved responsiveness when adding assistant text after tool calls in long transcripts.

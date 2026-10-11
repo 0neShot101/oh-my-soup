@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.9.2] - 2026-10-11
+
 ### Changed
 
 - Improved context caching for repeat turns, reducing redundant prompt processing and making subsequent turns faster when the system prompt is unchanged.
