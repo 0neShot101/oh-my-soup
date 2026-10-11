@@ -14,14 +14,19 @@ provider "groq" {
 	}
 	// Groq accepts OpenAI `reasoning_effort` for Qwen, with `none` as its off
 	// value, not Qwen-native `enable_thinking` (400 "property 'enable_thinking'
-	// is unsupported").
+	// is unsupported"). Its documented Qwen ladder (Qwen 3.8) is low/medium/high;
+	// `minimal` answers 400 "invalid Qwen3.8 reasoning_effort".
 	class "qwen" {
 		thinking-format "openai"
 		reasoning-disable-mode "none-effort"
-	}
-	// Qwen 3.8 accepts low/medium/high (`minimal` answers 400 "invalid Qwen3.8
-	// reasoning_effort").
-	models "qwen/qwen3.8-27b" {
 		thinking-efforts "low" "medium" "high"
+	}
+	// Qwen 3.6 only takes `default` (thinking) or `none` (off), per its Groq
+	// model card.
+	models "qwen/qwen3.6-27b" {
+		thinking-efforts "high"
+		thinking-effort-map {
+			high "default"
+		}
 	}
 }
