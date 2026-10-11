@@ -258,9 +258,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	// with rows — so it is retained across resizes rather than rediscovered
 	// from whatever chrome is expanded when the height changes.
 	#chromeFloor: number | undefined;
-	// Whether native history holds rows this composer committed. Without any,
-	// the live viewport is the whole document and may shrink in place.
-	#historyCommitted = false;
 	/** Rows the chrome below each below-transcript root took in the last frame (see {@link rowsBelow}). */
 	#rowsBelow = new Map<Component, number>();
 	#lastInterruptAt = 0;
@@ -406,8 +403,10 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		// between the history still on screen and the live rows; replaying
 		// those rows would duplicate them, clearing history would lose them.
 		// Replays position themselves.
+		// Without native history the live viewport is the whole document and
+		// shrinks in place.
 		const filledHistoryRows =
-			history?.kind === "replay" || !(this.#historyCommitted || history !== undefined)
+			history?.kind === "replay" || !(history !== undefined || this.ui.hasProviderHistory())
 				? undefined
 				: this.ui.getFilledHistoryRows();
 		const topPadding =
@@ -566,7 +565,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	acknowledgeHistory(id: number): void {
 		const offered = this.#offeredHistory;
 		if (offered === undefined || offered.id !== id) return;
-		this.#historyCommitted = offered.rows.length > 0 || (offered.kind === "append" && this.#historyCommitted);
 		if (offered.source === "header") {
 			this.#headerRetired = true;
 			this.#retiredHeaderRows = offered.rows;
@@ -634,9 +632,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#startHistoryReplay(): void {
 		this.#headerReplayPending = this.#headerRetired && (this.#retiredHeaderRows?.length ?? 0) > 0;
 		this.#historyReplayRequested = false;
-		// A replay follows a scrollback clear: history holds only what the
-		// replay itself commits, and an empty one commits nothing at all.
-		this.#historyCommitted = false;
 		for (const child of this.#runtimeChildren) {
 			if (child instanceof TranscriptContainer) child.beginReplay();
 		}

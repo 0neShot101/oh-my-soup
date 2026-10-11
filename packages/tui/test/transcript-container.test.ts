@@ -446,7 +446,11 @@ describe("TranscriptContainer", () => {
 		const block = new ReflowingAppendBlock();
 		transcript.addChild(block);
 
-		const emitted = transcript.peekFinalizedBatch(4, 2)!;
+		// Room 2: "efgh" is still on screen, so its stable prefix stays live —
+		// committing it would strand that row above the live tail.
+		expect(transcript.peekFinalizedBatch(4, 2)).toBeUndefined();
+		// Room 1: the whole two-row stable prefix has left the screen.
+		const emitted = transcript.peekFinalizedBatch(4, 1)!;
 		expect(emitted.rows).toEqual(["abcd", "efgh"]);
 		transcript.acknowledgeFinalizedBatch(emitted.id);
 		expect(transcript.renderViewport(8, 1, frame)).toEqual(["partial"]);

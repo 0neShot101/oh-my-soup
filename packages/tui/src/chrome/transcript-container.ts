@@ -1092,7 +1092,8 @@ export class TranscriptContainer extends Container {
 	 * `renderedStableByWidth` holds the newest, so each count's rows are a
 	 * prefix of it and the batch is one slice. Undefined when a count the walk
 	 * needs was never recorded here (published between renders, or before a
-	 * resize); the rendered walk then decides.
+	 * resize); the rendered walk then decides. Like the rendered walk, it never
+	 * passes `overflow`: a prefix reaching onto the screen waits.
 	 */
 	#measuredAppendBatch(entry: TranscriptEntry, width: number, overflow: number): AppendBatch | undefined {
 		const counts = entry.stableRowCountByWidth.get(width);
@@ -1103,7 +1104,7 @@ export class TranscriptContainer extends Container {
 		if (start === undefined) return undefined;
 		let emittedEnd = entry.emitted;
 		let end = start;
-		while (emittedEnd < target && end - start < overflow) {
+		while (emittedEnd < target) {
 			const next = counts.get(emittedEnd + 1);
 			if (next === undefined) return undefined;
 			if (next <= start) {
@@ -1112,6 +1113,7 @@ export class TranscriptContainer extends Container {
 				}
 				break;
 			}
+			if (next - start > overflow) break;
 			end = next;
 			emittedEnd += 1;
 		}
@@ -1120,15 +1122,18 @@ export class TranscriptContainer extends Container {
 
 	/**
 	 * Size a progressive-append batch by rendering each further stable prefix:
-	 * extend the emitted prefix until its new rows cover `overflow`, stopping
-	 * at the first prefix that adds no row or stops extending the emitted one
-	 * (freezing the block when that is the very next prefix).
+	 * extend the emitted prefix while its new rows stay within `overflow` — the
+	 * rows that left the screen — stopping at the first prefix that would reach
+	 * onto it, adds no row, or stops extending the emitted one (freezing the
+	 * block when that is the very next prefix). A prefix still partly on screen
+	 * stays live: committing it would strand those rows above the live tail,
+	 * where a later shrink of the chrome below opens a band no frame can fill.
 	 */
 	#renderedAppendBatch(entry: TranscriptEntry, width: number, overflow: number): AppendBatch {
 		const before = this.#renderStablePrefix(entry, entry.emitted, width);
 		let emittedEnd = entry.emitted;
 		let after = before;
-		while (emittedEnd < entry.stableRows.length && after.length - before.length < overflow) {
+		while (emittedEnd < entry.stableRows.length) {
 			const next = this.#renderStablePrefix(entry, emittedEnd + 1, width);
 			if (!isRowPrefix(before, next) || next.length === before.length) {
 				if (emittedEnd === entry.emitted) {
@@ -1136,6 +1141,7 @@ export class TranscriptContainer extends Container {
 				}
 				break;
 			}
+			if (next.length - before.length > overflow) break;
 			after = next;
 			emittedEnd += 1;
 		}

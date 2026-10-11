@@ -1,4 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -28,6 +30,7 @@ interface Harness {
 	terminal: VirtualTerminal;
 	scheduler: VirtualRenderScheduler;
 	composer: Composer;
+	transcript: TranscriptContainer;
 	widget: InlineWidget;
 	/** Turn-scoped chrome between transcript and editor (loader, todo/subagent HUDs). */
 	hud: InlineWidget;
@@ -54,7 +57,7 @@ function makeHarness(columns = COLUMNS, rows = ROWS, transcriptRows = TRANSCRIPT
 	editor.addChild(new Text("EDITOR", 0, 0));
 	composer.setRuntimeChildren([transcript, hud, editor]);
 	composer.start({ playWelcomeIntro: false });
-	return { terminal, scheduler, composer, widget, hud, editor };
+	return { terminal, scheduler, composer, transcript, widget, hud, editor };
 }
 
 /** Settle, grow the inline chrome, settle, shrink it back, settle. */
@@ -375,6 +378,58 @@ describe("composer inline shrink (#11007)", () => {
 			.filter(row => row.startsWith(TRANSCRIPT_PREFIX))
 			.map(row => Number(row.slice(TRANSCRIPT_PREFIX.length)));
 		expect(indices).toEqual(Array.from({ length: TRANSCRIPT_ROWS }, (_, i) => i));
+		h.composer.stop();
+	});
+
+	it("leaves no band inside a streamed answer when the working loader goes away", async () => {
+		const h = makeHarness(COLUMNS, 30);
+		await h.scheduler.settle(h.terminal);
+		const message = new AssistantMessageComponent();
+		h.transcript.addChild(message);
+		h.hud.rows = 2; // the working loader, up for the whole turn
+		const reply = (text: string): AssistantMessage => ({
+			role: "assistant",
+			content: [{ type: "text", text }],
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			model: "gpt-5.6-sol",
+			stopReason: "stop",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: 1,
+		});
+		let text = "";
+		for (let p = 0; p < 12; p++) {
+			const words = Array.from({ length: 25 + (p % 4) * 10 }, (_, w) => `p${p}w${w}`).join(" ");
+			for (const chunk of [words.slice(0, words.length / 2), words]) {
+				message.updateContent(reply(`${text}${chunk}`), { transient: true });
+				h.composer.ui.requestRender();
+				await h.scheduler.settle(h.terminal);
+			}
+			text += `${words}\n\n`;
+		}
+		message.updateContent(reply(text.trim()));
+		message.markTranscriptBlockFinalized();
+		h.hud.rows = 0;
+		h.composer.ui.requestRender();
+		await h.scheduler.settle(h.terminal);
+		// Streaming committed only rows that had left the screen, so the rows the
+		// loader covered refill from the live tail instead of a blank band.
+		expect(blankBand(h.terminal)).toBeLessThanOrEqual(1);
+		const words = h.terminal
+			.getScrollBuffer()
+			.join(" ")
+			.split(/\s+/)
+			.map(word => Bun.stripANSI(word))
+			.filter(word => /^p\d+w\d+$/.test(word));
+		expect(new Set(words).size).toBe(words.length);
+		expect(words.length).toBe(text.split(/\s+/).filter(Boolean).length);
 		h.composer.stop();
 	});
 

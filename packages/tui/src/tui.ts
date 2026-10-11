@@ -816,6 +816,10 @@ export class TUI extends Container {
 	// rows the paint prepended for a short viewport. Negative while prepended
 	// blanks outweigh replaced rows; zero on ordinary frames.
 	#providerViewportPadTop = 0;
+	// Whether native history holds rows the provider committed since the last
+	// destructive reset. Only paints write history and only a destructive reset
+	// erases it; an `append` resize replay keeps the rows it replays beneath.
+	#providerHistoryWritten = false;
 	// Viewport-relative row of the hardware cursor after the last normal paint
 	// (0 = parked at the viewport top). A resize reflows the normal buffer
 	// before the app hears about it; terminals keep the cursor attached to its
@@ -1375,6 +1379,11 @@ export class TUI extends Container {
 			return undefined;
 		}
 		return Math.min(this.#providerViewportTop, height);
+	}
+
+	/** Whether native history holds rows the frame provider committed since the last destructive reset. */
+	hasProviderHistory(): boolean {
+		return this.#providerHistoryWritten && !this.#clearScrollbackOnNextRender;
 	}
 
 	/**
@@ -3453,6 +3462,7 @@ export class TUI extends Container {
 			this.#providerViewportTop = 0;
 			this.#providerWindow = [];
 			this.#providerPreparedRows = [];
+			this.#providerHistoryWritten = false;
 		}
 		// The viewport stays anchored directly below whatever history remains on
 		// screen. Appending K history rows moves the anchor down by K; the write
@@ -3645,6 +3655,7 @@ export class TUI extends Container {
 		this.#resizeBurstWidthChanged = false;
 		this.#resizeBurstResized = false;
 		this.#previousFrameLength = mutablePreparedLines.length;
+		if (preparedHistory.lines.length > 0 || replayViewportRows > 0) this.#providerHistoryWritten = true;
 		this.#clearScrollbackOnNextRender = false;
 		this.#forceViewportRepaintOnNextRender = false;
 		this.#hasEverRendered = true;
