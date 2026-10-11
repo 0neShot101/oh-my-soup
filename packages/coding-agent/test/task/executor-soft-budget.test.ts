@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as path from "node:path";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -721,8 +722,19 @@ describe("task.agentSoftRequestBudget", () => {
 		);
 	});
 
-	it("treats a null entry as absent", () => {
-		const settings = Settings.isolated({ "task.agentSoftRequestBudget": { scout: null } });
-		expect(resolveSoftRequestBudget("scout", 200, cfgTaskAgentSoftRequestBudget.get(settings))).toBe(100);
+	it("lets a higher settings layer clear a lower layer's entry with null", async () => {
+		using tempDir = TempDir.createSync("@pi-agent-budget-");
+		const agentDir = path.join(tempDir.path(), "agent");
+		const overlay = path.join(tempDir.path(), "overlay.yml");
+		await Bun.write(
+			path.join(agentDir, "config.yml"),
+			JSON.stringify({ task: { agentSoftRequestBudget: { scout: 150, lead: 400 } } }),
+		);
+		await Bun.write(overlay, JSON.stringify({ task: { agentSoftRequestBudget: { scout: null } } }));
+
+		const settings = await Settings.loadReadOnly({ agentDir, cwd: tempDir.path(), configFiles: [overlay] });
+		const agentBudgets = cfgTaskAgentSoftRequestBudget.get(settings);
+		expect(resolveSoftRequestBudget("scout", 200, agentBudgets)).toBe(100);
+		expect(resolveSoftRequestBudget("lead", 200, agentBudgets)).toBe(400);
 	});
 });
