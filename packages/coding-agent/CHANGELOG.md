@@ -45,7 +45,7 @@
 - Added `omp session pack`, `omp session unpack` and `omp session moved` to move a session with its artifacts to another machine and continue it there; resuming the copy left behind forks it instead of continuing it
 - Added `omp auth export` and `omp auth import` to carry model sign-ins to another machine
 - Added hiding a pending `ask` question without answering it: `Alt+H` (`app.ask.hide`) or the Hide button in Tern collapses the dialog to one line; the same key, `Enter`, or Show brings it back ([#15400](https://github.com/can1357/oh-my-pi/pull/15400) by [@H4vC](https://github.com/H4vC))
-- Added `task.agentSoftRequestBudget` to give named subagents their own soft request budget, so a long-running agent such as `lead` can get more requests (or `0` for no guard) while scout, sonic and other agents keep theirs
+- Added `task.agentSoftRequestBudget` to give named subagents their own soft request budget, so a long-running agent can get more requests (or `0` for no guard) while scout, sonic and other agents keep theirs ([#15419](https://github.com/can1357/oh-my-pi/pull/15419) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Changed
 
