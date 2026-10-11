@@ -358,4 +358,65 @@ describe("TypeSafeJudge", () => {
 		});
 		await expect(mismatched.judge(request)).rejects.toThrow(/missing a "noul" answer/);
 	});
+
+	it("splits a request above maxQuestions into chunks, merging answers and usage", async () => {
+		const questions = Object.fromEntries(
+			Array.from({ length: 20 }, (_, i) => [`q${i}`, { type: "noul", instructions: `Question ${i}?` }] as const),
+		);
+		const sizes: number[] = [];
+		const judgeWith = (maxQuestions: number | undefined) =>
+			new TypeSafeJudge({
+				apiKey: "k",
+				maxQuestions,
+				fetch: async (_url, init) => {
+					const ids = Object.keys(JSON.parse(String(init?.body)).questions);
+					sizes.push(ids.length);
+					// OpenJEV's validation: oversized maps are rejected before any judging.
+					if (ids.length > 8) {
+						return new Response(
+							`{"detail":[{"msg":"Dictionary should have at most 8 items after validation, not ${ids.length}"}]}`,
+							{ status: 422 },
+						);
+					}
+					return Response.json({
+						model: "openjev-4b",
+						answers: Object.fromEntries(ids.map(id => [id, { type: "noul", noul: 0.5 }])),
+						usage: { input_tokens: 10, output_tokens: 1 },
+					});
+				},
+			});
+
+		const result = await judgeWith(8).judge({ state: "s", questions });
+		expect(sizes).toEqual([8, 8, 4]);
+		expect(Object.keys(result.answers).sort()).toEqual(Object.keys(questions).sort());
+		expect(result.usage).toMatchObject({ input: 30, output: 3, totalTokens: 33 });
+
+		// Without a declared cap the request goes out whole.
+		sizes.length = 0;
+		await expect(judgeWith(undefined).judge({ state: "s", questions })).rejects.toBeInstanceOf(TypeSafeApiError);
+		expect(sizes).toEqual([20]);
+	});
+
+	it("aborts in-flight sibling chunks when one chunk fails", async () => {
+		const questions = Object.fromEntries(
+			Array.from({ length: 20 }, (_, i) => [`q${i}`, { type: "noul", instructions: `Question ${i}?` }] as const),
+		);
+		let aborted = 0;
+		const judge = new TypeSafeJudge({
+			apiKey: "k",
+			maxQuestions: 8,
+			fetch: async (_url, init) => {
+				if ("q0" in JSON.parse(String(init?.body)).questions) return new Response("bad", { status: 400 });
+				const { promise, reject } = Promise.withResolvers<Response>();
+				init?.signal?.addEventListener("abort", () => {
+					aborted++;
+					reject(init.signal?.reason);
+				});
+				return promise;
+			},
+		});
+
+		await expect(judge.judge({ state: "s", questions })).rejects.toBeInstanceOf(TypeSafeApiError);
+		expect(aborted).toBe(2);
+	});
 });

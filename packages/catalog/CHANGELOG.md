@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the `judgment-questions-max` catalog axis and `resolveJudgmentQuestionsMax`: self-hosted OpenJEV judges are capped at 16 questions per System One request, razorback16/openjev's `openjev-latest`, Laya, Verdict and JevK5 at 256, and hosted jev stays uncapped ([#15368](https://github.com/can1357/oh-my-pi/pull/15368) by [@H4vC](https://github.com/H4vC))
+
 ## [18.9.1] - 2026-10-11
 
 ### Added

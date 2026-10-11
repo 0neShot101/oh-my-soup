@@ -38,6 +38,7 @@ import {
 	type Usage,
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
+import { resolveJudgmentQuestionsMax } from "@oh-my-pi/pi-catalog/compat/judgment-questions";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
@@ -345,6 +346,7 @@ export class ChainJudge implements Judge {
 				model: model.id,
 				baseUrl: model.baseUrl,
 				headers,
+				maxQuestions: resolveJudgmentQuestionsMax(model),
 			});
 			return nativeJudge(judge, model, this.#deps.cache, attempt => this.#report(attempt));
 		}
