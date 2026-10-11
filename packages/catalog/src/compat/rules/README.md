@@ -219,7 +219,7 @@ One object axis carries a computed form: `long-context-cost` accepts either the 
 
 `inline-image-byte-budget` caps retained base64 image characters for a deployment's request body. It leaves room for tool schemas and text beneath the provider's body-size limit; the coding agent reads it through `resolveInlineImageByteBudget` before sending live history. The budget applies only while `compat.officialEndpoint` holds: a custom `baseUrl` imposes its own body limit.
 
-`judgment-questions-max` is the most questions one System One judgment request may carry (self-hosted OpenJEV: 16). The coding agent reads it through `resolveJudgmentQuestionsMax` and `TypeSafeJudge` splits larger requests into parallel chunks; unassigned means the endpoint takes any batch size.
+`judgment-questions-max` is the most questions one System One judgment request may carry (razorback16/openjev: 256; unidentified `*openjev*` deployments: 16). The coding agent reads it through `resolveJudgmentQuestionsMax` and `TypeSafeJudge` splits larger requests into parallel chunks; unassigned means the endpoint takes any batch size. [`providers/judgment-questions.kdl`](providers/judgment-questions.kdl) lists the servers verified uncapped or not isolatable.
 
 `prompt-cache-lookback` is how many block positions back from a cache breakpoint the model's prompt cache looks for an earlier request's entry (Claude: 20, counting the breakpoint; a run of consecutive `tool_use` or `tool_result` blocks is one position). The coding agent reads it through `resolvePromptCacheLookback` and keeps warm-cache tool-result pruning inside the window; unassigned means no known bound.
 

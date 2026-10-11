@@ -11,34 +11,19 @@ const base = {
 };
 
 describe("judgment-questions-max", () => {
-	test("caps user-configured OpenJEV judges at 16 questions; TypeSafe jev stays uncapped", () => {
-		const openjev = buildModel({
-			...base,
-			id: "openjev-4b",
-			name: "OpenJEV 4B",
-			api: "typesafe",
-			provider: "my-openjev",
-			baseUrl: "http://localhost:8000",
-		});
-		const jev = buildModel({
-			...base,
-			id: "jev-latest",
-			name: "TypeSafe jev",
-			api: "typesafe",
-			provider: "typesafe",
-			baseUrl: "https://api.typesafe.ai",
-		});
-		const openrouterJev = buildModel({
-			...base,
-			id: "~typesafe/jev-latest",
-			name: "TypeSafe: Jev Latest",
-			api: "openrouter-decisions",
-			provider: "openrouter",
-			baseUrl: "https://openrouter.ai/api/alpha",
-		});
+	const judge = (id: string, api: "typesafe" | "openrouter-decisions", provider: string) =>
+		buildModel({ ...base, id, name: id, api, provider, baseUrl: "http://localhost:8000" });
 
-		expect(resolveJudgmentQuestionsMax(openjev)).toBe(16);
-		expect(resolveJudgmentQuestionsMax(jev)).toBeUndefined();
-		expect(resolveJudgmentQuestionsMax(openrouterJev)).toBeUndefined();
+	test("caps unidentified OpenJEV judges at 16; razorback16/openjev wire names at 256 over the glob", () => {
+		expect(resolveJudgmentQuestionsMax(judge("openjev-4b", "typesafe", "my-openjev"))).toBe(16);
+		expect(resolveJudgmentQuestionsMax(judge("openjev-latest", "typesafe", "my-openjev"))).toBe(256);
+		expect(resolveJudgmentQuestionsMax(judge("verdict-1.4", "typesafe", "my-openjev"))).toBe(256);
+	});
+
+	test("leaves hosted jev uncapped", () => {
+		expect(resolveJudgmentQuestionsMax(judge("jev-latest", "typesafe", "typesafe"))).toBeUndefined();
+		expect(
+			resolveJudgmentQuestionsMax(judge("~typesafe/jev-latest", "openrouter-decisions", "openrouter")),
+		).toBeUndefined();
 	});
 });
