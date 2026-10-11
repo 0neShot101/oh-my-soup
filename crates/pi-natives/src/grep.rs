@@ -505,12 +505,13 @@ fn first_match_in_line<M: Matcher>(
 ) -> Option<(usize, usize)> {
 	let buffer = mat.buffer();
 	let range = mat.bytes_range_in_buffer();
+	let terminator = searcher.line_terminator();
+	let terminated = terminator.is_suffix(&buffer[range.clone()]);
 	let end = if searcher.multi_line_with_matcher(matcher) {
 		buffer.len()
 	} else {
 		let mut end = range.end;
-		let terminator = searcher.line_terminator();
-		if terminator.is_suffix(&buffer[range.clone()]) {
+		if terminated {
 			end -= 1;
 			if terminator.is_crlf() && end > range.start && buffer[end - 1] == b'\r' {
 				end -= 1;
@@ -522,7 +523,9 @@ fn first_match_in_line<M: Matcher>(
 		.find_at(&buffer[..end], range.start)
 		.ok()
 		.flatten()?;
-	if found.start() >= range.end {
+	// A match at `range.end` begins on the next line, except an empty one
+	// (`$`, `\z`) after an unterminated last line.
+	if found.start() > range.end || (found.start() == range.end && terminated) {
 		return None;
 	}
 	let block = mat.bytes();
@@ -2976,6 +2979,49 @@ mod tests {
 		let found = search_long_line("\u{FFFD}|needle", &content, false);
 		assert!(found.line.contains("needle"), "{}", found.line);
 		assert_eq!(found.column, Some(14_002));
+	}
+
+	#[test]
+	fn long_line_window_shows_an_empty_match_at_the_end_of_input() {
+		let line = "a".repeat(5_000);
+		for (pattern, multiline) in
+			[("$", false), (r"\z", false), ("x|$", false), ("$", true), (r"\z", true)]
+		{
+			let found = search_long_line(pattern, &line, multiline);
+			assert_eq!(found.column, Some(5_001), "{pattern} multiline={multiline}");
+			assert!(found.line.starts_with("...a"), "{pattern}: {}", found.line);
+			assert!(found.line.ends_with('a'), "{pattern}: {}", found.line);
+		}
+	}
+
+	/// An empty match right after a block's line terminator starts the next
+	/// line. The searcher never reports such a block for its own matcher, so a
+	/// second matcher (`^$`, the empty second line) re-runs over the block it
+	/// found.
+	#[test]
+	fn first_match_in_line_leaves_an_empty_match_on_the_next_line() {
+		struct FirstMatch<'m>(&'m super::RegexMatcher, Vec<Option<(usize, usize)>>);
+		impl grep_searcher::Sink for FirstMatch<'_> {
+			type Error = std::io::Error;
+
+			fn matched(
+				&mut self,
+				searcher: &grep_searcher::Searcher,
+				mat: &grep_searcher::SinkMatch<'_>,
+			) -> Result<bool, Self::Error> {
+				let line = super::bytes_to_trimmed_string(mat.bytes());
+				let found = super::first_match_in_line(searcher, self.0, mat, &line);
+				self.1.push(found);
+				Ok(true)
+			}
+		}
+		let reported = super::build_regex_matcher("-", false, true).expect("matcher");
+		let rerun = super::build_regex_matcher("^$", false, true).expect("matcher");
+		let mut sink = FirstMatch(&rerun, Vec::new());
+		super::build_searcher(0, 0, true, true)
+			.search_slice(&reported, b"-\n\n", &mut sink)
+			.expect("search");
+		assert_eq!(sink.1, [None]);
 	}
 
 	#[cfg(unix)]
