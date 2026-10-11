@@ -27,10 +27,10 @@ import { type FileEntry, listFiles, type SearchRoot } from "./tree";
 /** Requests in flight per dispatched phase. */
 const PARALLEL = 16;
 /**
- * Questions per judgment request. System One gateways reject an oversized
+ * Questions per judgment request. Some System One gateways reject an oversized
  * `questions` map before judging anything (OpenJEV answers HTTP 422, `at most
- * 16 items`), so no wave may pack more than this, whatever the byte budgets
- * would allow: a rejected batch is a batch nobody answered.
+ * 16 items`), so the filename and sketch waves chunk to this size whatever the
+ * byte budgets would allow: a rejected batch is a batch nobody answered.
  */
 const QUESTIONS_MAX = 16;
 /** Lexically ranked files that receive a filename judgment. */

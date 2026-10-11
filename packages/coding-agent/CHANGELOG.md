@@ -10,6 +10,7 @@
 
 - Improved responsiveness when placing assistant text after tool calls in long transcripts ([#12178](https://github.com/can1357/oh-my-pi/issues/12178), [#14344](https://github.com/can1357/oh-my-pi/pull/14344) by [@F0Rextasy](https://github.com/F0Rextasy), [#15353](https://github.com/can1357/oh-my-pi/pull/15353) by [@iliaal](https://github.com/iliaal)).
 - Fixed `apply_patch` rejecting a hunk without context lines when its text occurs more than once ("Found 2 occurrences"); like Codex, each hunk now takes the first exact or whitespace-insensitive match at or after the previous hunk, while fuzzy matches must still be unique ([#15340](https://github.com/can1357/oh-my-pi/pull/15340) by [@Ikaleio](https://github.com/Ikaleio))
+- Fixed `find` sending more than 16 questions in one judgment request, which System One gateways such as OpenJEV reject with HTTP 422 ([#15160](https://github.com/can1357/oh-my-pi/pull/15160) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 ### Fixed
 
 - `omp auth-gateway serve` now accepts OpenRouter routing-variant selectors such as `openrouter/<model>:floor` or `:nitro`, matching `--model`, instead of returning "Unknown model".
@@ -135,7 +136,6 @@
 
 ### Fixed
 
-- Fixed `find` sending more than 16 questions in one judgment request, which System One gateways such as OpenJEV reject with HTTP 422 ([#15160](https://github.com/can1357/oh-my-pi/pull/15160) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 - Fixed `/usage` (or clicking the status-line cost) while the usage dashboard was already open stacking a second dashboard on top; it now focuses the open one ([#15145](https://github.com/can1357/oh-my-pi/pull/15145) by [@H4vC](https://github.com/H4vC))
 - Fixed the browser tool prompt not documenting `observe()`'s `viewportOnly` and `includeAll` options, or that `open`/`close`/`run` timeouts are seconds clamped to 1–300 while `waitFor*` timeouts are milliseconds ([#15104](https://github.com/can1357/oh-my-pi/pull/15104) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed browser relay pages opened in the background (`browser.newPage({ background: true })` in `tab.run`) taking over the user's selected tab; they now open unselected once the relay extension is reinstalled ([#15109](https://github.com/can1357/oh-my-pi/pull/15109) by [@will-bogusz](https://github.com/will-bogusz))
