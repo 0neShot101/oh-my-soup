@@ -1016,35 +1016,56 @@ fn replace_native_text(element: &AXUIElement, text: &str) -> CoreResult<bool> {
 	{
 		return Ok(false);
 	}
+	replace_whole_value(&LiveField { element, pid: element_pid(element)? }, text)
+}
+
+/// The AX steps of a whole-value replacement, kept apart so the order of its
+/// foreground checks can be tested without a live app.
+trait TextField {
+	type Element;
+	/// Whether the field holds its app's focus, which is app-local.
+	fn focused(&self) -> Option<bool>;
+	/// The element that holds the app's focus.
+	fn focus_owner(&self) -> Option<Self::Element>;
+	/// Whether another app is frontmost (`may_borrow_focus`).
+	fn in_background(&self) -> bool;
+	fn focus(&self) -> bool;
+	fn hand_focus_to(&self, owner: &Self::Element) -> AXError;
+	/// The whole value's UTF-16 length, when its selection is settable.
+	fn selectable_length(&self) -> Option<isize>;
+	fn select(&self, length: isize) -> bool;
+	fn insert(&self, text: &str) -> CoreResult<()>;
+}
+
+fn replace_whole_value<F: TextField>(field: &F, text: &str) -> CoreResult<bool> {
 	// An unfocused Cocoa field has no field editor, so it publishes no
 	// settable selection until it is focused. Focus is borrowed only when the
 	// element that holds it is known, so it can be handed back.
-	let pid = element_pid(element)?;
-	let previous = if copy_bool(element, "AXFocused") == Some(true) {
+	let previous = if field.focused() == Some(true) {
 		None
 	} else {
-		let Some(owner) =
-			probe_application(pid).and_then(|app| copy_element(&app, "AXFocusedUIElement"))
-		else {
+		let Some(owner) = field.focus_owner() else {
 			return Ok(false);
 		};
 		// Checked after the probes, which can block, and right before focusing.
-		if !may_borrow_focus(skylight::front_pid(), pid) {
-			return Ok(false);
-		}
-		if focus_element(element) != AXError::Success {
+		if !field.in_background() || !field.focus() {
 			return Ok(false);
 		}
 		Some(owner)
 	};
-	// The user may have brought the app forward meanwhile: a borrowed caret is
-	// theirs again, so nothing is inserted.
-	if !select_whole_value(element)
-		|| (previous.is_some() && !may_borrow_focus(skylight::front_pid(), pid))
-	{
-		// Nothing was written: hand focus back before the `AXValue` fallback.
-		if let Some(previous) = previous {
-			let error = focus_element(&previous);
+	// Focusing can swap in the field editor, so the length is read afterward.
+	// The user may have brought the app forward while those reads blocked: a
+	// borrowed caret is theirs again, so its selection is left alone.
+	let selected = field
+		.selectable_length()
+		.is_some_and(|length| (previous.is_none() || field.in_background()) && field.select(length));
+	if !selected {
+		// Nothing was written: hand focus back before the `AXValue` fallback,
+		// unless the user has since moved it off the borrowed field.
+		if let Some(previous) = previous
+			&& field.focused() == Some(true)
+		{
+			let error = field.hand_focus_to(&previous);
 			if error != AXError::Success {
 				return Err(DesktopError::ax_failed(format!(
 					"focused the field to replace its text, then could not hand focus back \
@@ -1054,9 +1075,65 @@ fn replace_native_text(element: &AXUIElement, text: &str) -> CoreResult<bool> {
 		}
 		return Ok(false);
 	}
-	set_string_value(element, "AXSelectedText", text)?;
-	verify_text_value(element, text, text)?;
+	field.insert(text)?;
 	Ok(true)
+}
+
+struct LiveField<'a> {
+	element: &'a AXUIElement,
+	pid:     libc::pid_t,
+}
+
+impl TextField for LiveField<'_> {
+	type Element = CFRetained<AXUIElement>;
+
+	fn focused(&self) -> Option<bool> {
+		copy_bool(self.element, "AXFocused")
+	}
+
+	fn focus_owner(&self) -> Option<Self::Element> {
+		probe_application(self.pid).and_then(|app| copy_element(&app, "AXFocusedUIElement"))
+	}
+
+	fn in_background(&self) -> bool {
+		may_borrow_focus(skylight::front_pid(), self.pid)
+	}
+
+	fn focus(&self) -> bool {
+		focus_element(self.element) == AXError::Success
+	}
+
+	fn hand_focus_to(&self, owner: &Self::Element) -> AXError {
+		focus_element(owner)
+	}
+
+	fn selectable_length(&self) -> Option<isize> {
+		if !attribute_settable(self.element, "AXSelectedText")
+			|| !attribute_settable(self.element, "AXSelectedTextRange")
+		{
+			return None;
+		}
+		Some(copy_string(self.element, "AXValue")?.encode_utf16().count() as isize)
+	}
+
+	fn select(&self, length: isize) -> bool {
+		let mut all = CFRange { location: 0, length };
+		// SAFETY: `all` is a live CFRange matching the requested AXValue type.
+		let Some(range) =
+			(unsafe { AXValue::new(AXValueType::CFRange, NonNull::from(&mut all).cast()) })
+		else {
+			return false;
+		};
+		let attribute = CFString::from_str("AXSelectedTextRange");
+		// SAFETY: The element, attribute and range remain retained for the
+		// setter.
+		(unsafe { self.element.set_attribute_value(&attribute, &range) }) == AXError::Success
+	}
+
+	fn insert(&self, text: &str) -> CoreResult<()> {
+		set_string_value(self.element, "AXSelectedText", text)?;
+		verify_text_value(self.element, text, text)
+	}
 }
 
 /// Focus moves only inside a background app: in the front app it would move
@@ -1070,28 +1147,6 @@ fn focus_element(element: &AXUIElement) -> AXError {
 	// SAFETY: The singleton CFBoolean and retained element remain valid for the
 	// synchronous setter call.
 	unsafe { element.set_attribute_value(&attribute, CFBoolean::new(true)) }
-}
-
-fn select_whole_value(element: &AXUIElement) -> bool {
-	if !attribute_settable(element, "AXSelectedText")
-		|| !attribute_settable(element, "AXSelectedTextRange")
-	{
-		return false;
-	}
-	// Focusing can swap in the field editor, so the length is read afterward.
-	let Some(before) = copy_string(element, "AXValue") else {
-		return false;
-	};
-	let mut all = CFRange { location: 0, length: before.encode_utf16().count() as isize };
-	// SAFETY: `all` is a live CFRange matching the requested AXValue type.
-	let Some(range) =
-		(unsafe { AXValue::new(AXValueType::CFRange, NonNull::from(&mut all).cast()) })
-	else {
-		return false;
-	};
-	let attribute = CFString::from_str("AXSelectedTextRange");
-	// SAFETY: The element, attribute and range remain retained for the setter.
-	(unsafe { element.set_attribute_value(&attribute, &range) }) == AXError::Success
 }
 
 /// AX text ranges use UTF-16 offsets, not UTF-8 byte or Unicode scalar indices.
@@ -1514,17 +1569,21 @@ fn element_gone() -> DesktopError {
 
 #[cfg(test)]
 mod tests {
-	use std::ptr::NonNull;
+	use std::{
+		cell::{Cell, RefCell},
+		ptr::NonNull,
+	};
 
 	use objc2_application_services::{AXError, AXValue, AXValueType};
 	use objc2_core_foundation::{CFArray, CFNumber, CFString, CFType, Type, kCFNull};
 
 	use super::{
-		AttachedCandidate, CHILDREN, DESCRIPTION, ENABLED, NodeRead, NodeValues, ROLE, TITLE, VALUE,
-		ax_result, element_action_result, may_borrow_focus, replace_utf16_selection,
-		required_string, secure_subrole, select_attached, stringify_value, text_readback,
+		AttachedCandidate, CHILDREN, DESCRIPTION, ENABLED, NodeRead, NodeValues, ROLE, TITLE,
+		TextField, VALUE, ax_result, element_action_result, may_borrow_focus,
+		replace_utf16_selection, replace_whole_value, required_string, secure_subrole,
+		select_attached, stringify_value, text_readback,
 	};
-	use crate::desktop::error::ErrorCode;
+	use crate::desktop::error::{CoreResult, ErrorCode};
 
 	#[test]
 	fn batched_values_read_like_lone_reads() {
@@ -1688,6 +1747,101 @@ mod tests {
 		assert!(may_borrow_focus(Some(10), 20));
 		assert!(!may_borrow_focus(Some(20), 20));
 		assert!(!may_borrow_focus(None, 20));
+	}
+
+	/// A background field whose user, while the selection probes block, brings
+	/// its app forward and, with `takes_focus`, clicks another control in it.
+	struct ScriptedField {
+		focused:     Cell<bool>,
+		switches:    bool,
+		takes_focus: bool,
+		switched:    Cell<bool>,
+		calls:       RefCell<Vec<&'static str>>,
+	}
+
+	impl ScriptedField {
+		fn new(switches: bool, takes_focus: bool) -> Self {
+			Self {
+				focused: Cell::new(false),
+				switches,
+				takes_focus,
+				switched: Cell::new(false),
+				calls: RefCell::default(),
+			}
+		}
+
+		fn calls(&self) -> Vec<&'static str> {
+			self.calls.borrow().clone()
+		}
+	}
+
+	impl TextField for ScriptedField {
+		type Element = ();
+
+		fn focused(&self) -> Option<bool> {
+			Some(self.focused.get())
+		}
+
+		fn focus_owner(&self) -> Option<()> {
+			Some(())
+		}
+
+		fn in_background(&self) -> bool {
+			!self.switched.get()
+		}
+
+		fn focus(&self) -> bool {
+			self.calls.borrow_mut().push("focus");
+			self.focused.set(true);
+			true
+		}
+
+		fn hand_focus_to(&self, (): &()) -> AXError {
+			self.calls.borrow_mut().push("hand back");
+			self.focused.set(false);
+			AXError::Success
+		}
+
+		fn selectable_length(&self) -> Option<isize> {
+			if self.switches {
+				self.switched.set(true);
+				if self.takes_focus {
+					self.focused.set(false);
+				}
+			}
+			Some(3)
+		}
+
+		fn select(&self, _: isize) -> bool {
+			self.calls.borrow_mut().push("select");
+			true
+		}
+
+		fn insert(&self, _: &str) -> CoreResult<()> {
+			self.calls.borrow_mut().push("insert");
+			Ok(())
+		}
+	}
+
+	#[test]
+	fn a_background_field_is_focused_selected_and_replaced() {
+		let field = ScriptedField::new(false, false);
+		assert!(replace_whole_value(&field, "abc").unwrap());
+		assert_eq!(field.calls(), ["focus", "select", "insert"]);
+	}
+
+	#[test]
+	fn bringing_the_app_forward_during_the_probes_leaves_its_selection_alone() {
+		let field = ScriptedField::new(true, false);
+		assert!(!replace_whole_value(&field, "abc").unwrap());
+		assert_eq!(field.calls(), ["focus", "hand back"]);
+	}
+
+	#[test]
+	fn focus_the_user_moved_during_the_probes_is_not_taken_back() {
+		let field = ScriptedField::new(true, true);
+		assert!(!replace_whole_value(&field, "abc").unwrap());
+		assert_eq!(field.calls(), ["focus"]);
 	}
 
 	#[test]
