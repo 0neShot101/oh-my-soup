@@ -6,13 +6,9 @@
 
 - Improved Anthropic prompt-cache breakpoint selection in long conversations to pick cache anchors in a single backward walk, removing the per-request index arrays that grew with conversation length ([#15219](https://github.com/can1357/oh-my-pi/pull/15219) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 ### Fixed
-
-- Fixed `omp auth-gateway` System One judgments to capped OpenJEV models being sent as one oversized request; they are now split under the catalog's question cap like omp's own judgments ([#15373](https://github.com/can1357/oh-my-pi/pull/15373) by [@H4vC](https://github.com/H4vC))
-- Fixed `TypeSafeJudge` split judgments firing every chunk at once; at most 4 chunks of one judgment are now in flight, and a `maxQuestions` that is not a positive integer is rejected at construction instead of hanging ([#15373](https://github.com/can1357/oh-my-pi/pull/15373) by [@H4vC](https://github.com/H4vC))
-
 ### Added
 
-- Added `maxQuestions` to `TypeSafeJudge`: requests with more questions are split into parallel chunks and their answers and usage merged, for System One endpoints that cap the `questions` map ([#15368](https://github.com/can1357/oh-my-pi/pull/15368) by [@H4vC](https://github.com/H4vC))
+- Added `maxQuestions` to `TypeSafeJudge`: requests with more questions are split into chunks, at most 4 in flight at once, and their answers and usage merged, for System One endpoints that cap the `questions` map; the auth-gateway System One route applies the catalog's cap too ([#15368](https://github.com/can1357/oh-my-pi/pull/15368), [#15373](https://github.com/can1357/oh-my-pi/pull/15373) by [@H4vC](https://github.com/H4vC))
 
 ## [18.9.1] - 2026-10-11
 
