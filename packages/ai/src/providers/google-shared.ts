@@ -162,7 +162,7 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 	const contents: Content[] = [];
 	const emittedToolCallNames = new Map<string, string>();
 
-	const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
+	const transformedMessages = transformMessages(context.messages, model, id => normalizeToolCallId(id));
 
 	// Gemini < 3 image tool results go in a separate user turn, but parallel tool results must
 	// stay a single contiguous functionResponse turn ("number of function response parts is not

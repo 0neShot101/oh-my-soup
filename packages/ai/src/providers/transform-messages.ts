@@ -38,8 +38,8 @@ const enum ToolCallStatus {
 export const MAX_TOOL_CALL_ID_LENGTH = 64;
 
 /** Replace unsupported tool-call ID characters and cap the result for strict replay providers. */
-export function normalizeToolCallId(id: string): string {
-	return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, MAX_TOOL_CALL_ID_LENGTH);
+export function normalizeToolCallId(id: string, maxLength = MAX_TOOL_CALL_ID_LENGTH): string {
+	return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, maxLength);
 }
 
 const TOOL_CALL_ID_PATTERN = new RegExp(`^[a-zA-Z0-9_-]{1,${MAX_TOOL_CALL_ID_LENGTH}}$`);
