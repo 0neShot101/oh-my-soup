@@ -1029,15 +1029,19 @@ trait TextField {
 	fn focus_owner(&self) -> Option<Self::Element>;
 	/// Whether another app is frontmost (`may_borrow_focus`).
 	fn in_background(&self) -> bool;
-	fn focus(&self) -> bool;
+	fn focus(&self) -> AXError;
 	fn hand_focus_to(&self, owner: &Self::Element) -> AXError;
 	/// The whole value's UTF-16 length, when its selection is settable.
 	fn selectable_length(&self) -> Option<isize>;
-	fn select(&self, length: isize) -> bool;
+	fn select(&self, length: isize) -> AXError;
 	fn insert(&self, text: &str) -> CoreResult<()>;
 }
 
 fn replace_whole_value<F: TextField>(field: &F, text: &str) -> CoreResult<bool> {
+	// A setter the app did not answer may still apply, like `set_string_value`'s
+	// partial delivery: the `AXValue` fallback is skipped rather than written
+	// over a focus or selection that may have moved.
+	let mut unanswered = None;
 	// An unfocused Cocoa field has no field editor, so it publishes no
 	// settable selection until it is focused. Focus is borrowed only when the
 	// element that holds it is known, so it can be handed back.
@@ -1048,8 +1052,13 @@ fn replace_whole_value<F: TextField>(field: &F, text: &str) -> CoreResult<bool> 
 			return Ok(false);
 		};
 		// Checked after the probes, which can block, and right before focusing.
-		if !field.in_background() || !field.focus() {
+		if !field.in_background() {
 			return Ok(false);
+		}
+		match field.focus() {
+			AXError::Success => {},
+			AXError::CannotComplete => unanswered = Some("AXFocused"),
+			_ => return Ok(false),
 		}
 		Some(owner)
 	};
@@ -1058,9 +1067,18 @@ fn replace_whole_value<F: TextField>(field: &F, text: &str) -> CoreResult<bool> 
 	// write block: a borrowed caret is theirs again, so it is neither selected
 	// nor typed over.
 	let still_borrowed = || previous.is_none() || field.in_background();
-	let selected = field
-		.selectable_length()
-		.is_some_and(|length| still_borrowed() && field.select(length) && still_borrowed());
+	let selected = unanswered.is_none()
+		&& field.selectable_length().is_some_and(|length| {
+			still_borrowed()
+				&& match field.select(length) {
+					AXError::Success => still_borrowed(),
+					AXError::CannotComplete => {
+						unanswered = Some("AXSelectedTextRange");
+						false
+					},
+					_ => false,
+				}
+		});
 	if !selected {
 		// Nothing was written: hand focus back before the `AXValue` fallback,
 		// unless the user has since moved it off the borrowed field.
@@ -1074,6 +1092,13 @@ fn replace_whole_value<F: TextField>(field: &F, text: &str) -> CoreResult<bool> 
 					 ({error:?}); nothing was written"
 				)));
 			}
+		}
+		if let Some(attribute) = unanswered {
+			return Err(DesktopError::ax_unconfirmed(format!(
+				"setting {attribute} to replace the field's text got no reply in time \
+				 (CannotComplete) and may still apply, so nothing was written: observe the window \
+				 before retrying"
+			)));
 		}
 		return Ok(false);
 	}
@@ -1101,8 +1126,8 @@ impl TextField for LiveField<'_> {
 		may_borrow_focus(skylight::front_pid(), self.pid)
 	}
 
-	fn focus(&self) -> bool {
-		focus_element(self.element) == AXError::Success
+	fn focus(&self) -> AXError {
+		focus_element(self.element)
 	}
 
 	fn hand_focus_to(&self, owner: &Self::Element) -> AXError {
@@ -1118,18 +1143,18 @@ impl TextField for LiveField<'_> {
 		Some(copy_string(self.element, "AXValue")?.encode_utf16().count() as isize)
 	}
 
-	fn select(&self, length: isize) -> bool {
+	fn select(&self, length: isize) -> AXError {
 		let mut all = CFRange { location: 0, length };
 		// SAFETY: `all` is a live CFRange matching the requested AXValue type.
 		let Some(range) =
 			(unsafe { AXValue::new(AXValueType::CFRange, NonNull::from(&mut all).cast()) })
 		else {
-			return false;
+			return AXError::Failure;
 		};
 		let attribute = CFString::from_str("AXSelectedTextRange");
 		// SAFETY: The element, attribute and range remain retained for the
 		// setter.
-		(unsafe { self.element.set_attribute_value(&attribute, &range) }) == AXError::Success
+		unsafe { self.element.set_attribute_value(&attribute, &range) }
 	}
 
 	fn insert(&self, text: &str) -> CoreResult<()> {
@@ -1759,6 +1784,9 @@ mod tests {
 		switches_on_select: bool,
 		takes_focus:        bool,
 		switched:           Cell<bool>,
+		/// What the focus and selection setters answer after applying.
+		focus_reply:        AXError,
+		select_reply:       AXError,
 		calls:              RefCell<Vec<&'static str>>,
 	}
 
@@ -1770,6 +1798,8 @@ mod tests {
 				switches_on_select: false,
 				takes_focus,
 				switched: Cell::new(false),
+				focus_reply: AXError::Success,
+				select_reply: AXError::Success,
 				calls: RefCell::default(),
 			}
 		}
@@ -1794,10 +1824,10 @@ mod tests {
 			!self.switched.get()
 		}
 
-		fn focus(&self) -> bool {
+		fn focus(&self) -> AXError {
 			self.calls.borrow_mut().push("focus");
 			self.focused.set(true);
-			true
+			self.focus_reply
 		}
 
 		fn hand_focus_to(&self, (): &()) -> AXError {
@@ -1816,12 +1846,12 @@ mod tests {
 			Some(3)
 		}
 
-		fn select(&self, _: isize) -> bool {
+		fn select(&self, _: isize) -> AXError {
 			self.calls.borrow_mut().push("select");
 			if self.switches_on_select {
 				self.switched.set(true);
 			}
-			true
+			self.select_reply
 		}
 
 		fn insert(&self, _: &str) -> CoreResult<()> {
@@ -1854,6 +1884,37 @@ mod tests {
 	#[test]
 	fn bringing_the_app_forward_during_the_selection_write_is_not_typed_over() {
 		let field = ScriptedField { switches_on_select: true, ..ScriptedField::new(false, false) };
+		assert!(!replace_whole_value(&field, "abc").unwrap());
+		assert_eq!(field.calls(), ["focus", "select", "hand back"]);
+	}
+
+	#[test]
+	fn an_unanswered_focus_that_applied_is_handed_back_and_nothing_is_written() {
+		let field =
+			ScriptedField { focus_reply: AXError::CannotComplete, ..ScriptedField::new(false, false) };
+		let error = replace_whole_value(&field, "abc").unwrap_err();
+		assert_eq!(error.code, ErrorCode::AxUnconfirmed);
+		assert_eq!(field.calls(), ["focus", "hand back"]);
+		assert!(!field.focused.get());
+	}
+
+	#[test]
+	fn an_unanswered_selection_hands_focus_back_and_skips_the_value_write() {
+		let field = ScriptedField {
+			select_reply: AXError::CannotComplete,
+			..ScriptedField::new(false, false)
+		};
+		let error = replace_whole_value(&field, "abc").unwrap_err();
+		assert_eq!(error.code, ErrorCode::AxUnconfirmed);
+		assert_eq!(field.calls(), ["focus", "select", "hand back"]);
+	}
+
+	#[test]
+	fn a_refused_selection_still_falls_back_to_the_value_write() {
+		let field = ScriptedField {
+			select_reply: AXError::AttributeUnsupported,
+			..ScriptedField::new(false, false)
+		};
 		assert!(!replace_whole_value(&field, "abc").unwrap());
 		assert_eq!(field.calls(), ["focus", "select", "hand back"]);
 	}
