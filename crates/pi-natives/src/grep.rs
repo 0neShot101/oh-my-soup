@@ -532,7 +532,8 @@ fn first_match_in_line<M: Matcher>(
 	let (start, stop) = (found.start() - range.start, found.end().min(range.end) - range.start);
 	// `line` is `block` decoded and trimmed: offsets carry over unless lossy
 	// decoding replaced invalid bytes, which changes the byte lengths before
-	// them.
+	// them. An offset in the trimmed trailing whitespace maps to the end of
+	// `line`, the last column it shows.
 	let lossy = std::str::from_utf8(block).is_err();
 	let to_line = |offset: usize| -> usize {
 		let offset = if lossy {
