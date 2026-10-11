@@ -554,6 +554,46 @@ describe("Image budget integration", () => {
 			encodeSixel.mockRestore();
 		}
 	});
+	it("commits a straddling SIXEL image exactly once while its off-thread encode is pending", async () => {
+		terminal.imageProtocol = ImageProtocol.Sixel;
+		const encodeSixel = spyOn(natives, "encodeSixelAsync");
+		try {
+			const transcript = new TranscriptContainer();
+			transcript.addChild(
+				new Image(
+					BASE64_ONE_PIXEL_PNG,
+					"image/png",
+					{ fallbackColor: t => t },
+					{ maxWidthCells: 4, maxHeightCells: 4, requestRender: () => {} },
+					// Several rows, so the pending block straddles the viewport top.
+					{ widthPx: 40, heightPx: 40 },
+				),
+			);
+			transcript.addChild(new Text("tail", 0, 0));
+
+			// The live frame starts the encode and reserves the image's rows.
+			const live = transcript.renderViewport(80, 3, { tick: 0, now: 0 });
+			expect(live.join("")).not.toContain("\x1bP");
+			expect(encodeSixel).toHaveBeenCalledTimes(1);
+			// Pressure splits the block while the encode is pending; the split
+			// fingerprint must keep locating the seam once the encode lands,
+			// so the sequence reaches scrollback exactly once.
+			const head = transcript.peekFinalizedBatch(80, 3)!;
+			transcript.acknowledgeFinalizedBatch(head.id);
+			// The pending encode must not duplicate the committed prefix into
+			// the live tail, either before or after it lands.
+			const pendingRest = transcript.peekFlushBatch(80)!.rows;
+			expect(pendingRest.join("")).toContain("tail");
+			await encodeSixel.mock.results[0]?.value;
+			const rest = transcript.peekFlushBatch(80)!.rows;
+			const sequences = [...head.rows, ...rest].join("").split("\x1bP").length - 1;
+			expect(sequences).toBe(1);
+			expect(rest.join("")).toContain("tail");
+			expect(pendingRest).toEqual(rest);
+		} finally {
+			encodeSixel.mockRestore();
+		}
+	});
 
 	it("moves back up before multi-row direct Kitty placements and restores the cursor below them", () => {
 		const budget = new ImageBudget(3, () => {});
