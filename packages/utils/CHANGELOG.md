@@ -6,6 +6,24 @@
 
 - Sped up streaming JSON scanning for long ordinary tool-argument strings while limiting bulk-scan overhead between escapes ([#14297](https://github.com/can1357/oh-my-pi/pull/14297) by [@abilliontokens](https://github.com/abilliontokens), [#15273](https://github.com/can1357/oh-my-pi/pull/15273) by [@iliaal](https://github.com/iliaal)).
 
+## [18.9.0] - 2026-10-11
+
+### Breaking Changes
+
+- Renamed `takeRecentLoopPhase()` to `takeLoopPhaseAttribution()`. The new API returns a `LoopPhaseAttribution` object (`{ label, ms }`) and reports a label only when it accounts for more time than unlabeled work within an armed measurement window.
+
+### Added
+
+- Added `withLoopPhase(label, fn)` for attributing synchronous work to a named loop phase, with automatic cleanup even when the callback throws.
+
+### Changed
+
+- Improved streaming JSON parsing performance for long tool-argument payloads.
+
+### Fixed
+
+- Fixed archive extraction on Windows systems without symlink privileges by allowing symlink entries to be extracted using supported fallbacks, while skipping unresolvable dangling links instead of failing the entire archive.
+
 ## [18.8.9] - 2026-10-10
 
 ### Added
