@@ -5,6 +5,7 @@
 ### Changed
 
 - Reduced interactive startup memory usage for new sessions by initializing syntax highlighting only when needed; resumed sessions still prepare highlighting in the background so the restored transcript paints without delay ([#15299](https://github.com/can1357/oh-my-pi/pull/15299) by [@iliaal](https://github.com/iliaal))
+## [18.9.1] - 2026-10-11
 
 ### Added
 
