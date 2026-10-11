@@ -1054,11 +1054,13 @@ fn replace_whole_value<F: TextField>(field: &F, text: &str) -> CoreResult<bool> 
 		Some(owner)
 	};
 	// Focusing can swap in the field editor, so the length is read afterward.
-	// The user may have brought the app forward while those reads blocked: a
-	// borrowed caret is theirs again, so its selection is left alone.
+	// The user may bring the app forward while those reads or the selection
+	// write block: a borrowed caret is theirs again, so it is neither selected
+	// nor typed over.
+	let still_borrowed = || previous.is_none() || field.in_background();
 	let selected = field
 		.selectable_length()
-		.is_some_and(|length| (previous.is_none() || field.in_background()) && field.select(length));
+		.is_some_and(|length| still_borrowed() && field.select(length) && still_borrowed());
 	if !selected {
 		// Nothing was written: hand focus back before the `AXValue` fallback,
 		// unless the user has since moved it off the borrowed field.
@@ -1752,11 +1754,12 @@ mod tests {
 	/// A background field whose user, while the selection probes block, brings
 	/// its app forward and, with `takes_focus`, clicks another control in it.
 	struct ScriptedField {
-		focused:     Cell<bool>,
-		switches:    bool,
-		takes_focus: bool,
-		switched:    Cell<bool>,
-		calls:       RefCell<Vec<&'static str>>,
+		focused:            Cell<bool>,
+		switches:           bool,
+		switches_on_select: bool,
+		takes_focus:        bool,
+		switched:           Cell<bool>,
+		calls:              RefCell<Vec<&'static str>>,
 	}
 
 	impl ScriptedField {
@@ -1764,6 +1767,7 @@ mod tests {
 			Self {
 				focused: Cell::new(false),
 				switches,
+				switches_on_select: false,
 				takes_focus,
 				switched: Cell::new(false),
 				calls: RefCell::default(),
@@ -1814,6 +1818,9 @@ mod tests {
 
 		fn select(&self, _: isize) -> bool {
 			self.calls.borrow_mut().push("select");
+			if self.switches_on_select {
+				self.switched.set(true);
+			}
 			true
 		}
 
@@ -1842,6 +1849,13 @@ mod tests {
 		let field = ScriptedField::new(true, true);
 		assert!(!replace_whole_value(&field, "abc").unwrap());
 		assert_eq!(field.calls(), ["focus"]);
+	}
+
+	#[test]
+	fn bringing_the_app_forward_during_the_selection_write_is_not_typed_over() {
+		let field = ScriptedField { switches_on_select: true, ..ScriptedField::new(false, false) };
+		assert!(!replace_whole_value(&field, "abc").unwrap());
+		assert_eq!(field.calls(), ["focus", "select", "hand back"]);
 	}
 
 	#[test]
