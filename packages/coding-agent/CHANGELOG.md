@@ -23,6 +23,7 @@
 - Fixed `find` failing filename ranking and sketch scoring on judge endpoints that cap questions per request, such as OpenJEV (HTTP 422); only those endpoints now get smaller requests ([#15160](https://github.com/can1357/oh-my-pi/pull/15160) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 - Fixed `find` failing filename ranking and sketch scoring on judge endpoints that cap questions per request, such as OpenJEV (HTTP 422); only those endpoints now get smaller requests ([#15160](https://github.com/can1357/oh-my-pi/pull/15160) by [@yuzu-octopus](https://github.com/yuzu-octopus), [#15368](https://github.com/can1357/oh-my-pi/pull/15368) by [@H4vC](https://github.com/H4vC))
 - Fixed `find` failing filename ranking and sketch scoring on OpenJEV judges (HTTP 422, at most 16 questions per request); only judge models with a catalog question cap now get smaller requests ([#15160](https://github.com/can1357/oh-my-pi/pull/15160) by [@yuzu-octopus](https://github.com/yuzu-octopus), [#15368](https://github.com/can1357/oh-my-pi/pull/15368) by [@H4vC](https://github.com/H4vC))
+- Fixed `omp gc --apply` leaving full-size session rewrite temps (`.<name>.jsonl.<snowflake>.tmp`) behind after a writer was killed mid-save; the sessions phase now reclaims them past the write grace ([#15350](https://github.com/can1357/oh-my-pi/issues/15350))
 ### Fixed
 
 - `omp auth-gateway serve` now accepts OpenRouter routing-variant selectors such as `openrouter/<model>:floor` or `:nitro`, matching `--model`, instead of returning "Unknown model".
