@@ -117,6 +117,10 @@
 - Fixed blank rows opening under the input after an `ask` dialog, command report or todo list closed in a session that had filled the screen; the transcript now refills the screen ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
 - Fixed blank rows appearing between the last paragraphs of a streamed answer when the turn ended ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
 
+### Changed
+
+- Changed the `todo` tool and system prompt guidance so agents send to-do updates alongside their next tool call instead of spending a separate model turn on them
+
 ## [18.9.2] - 2026-10-11
 
 ### Fixed
