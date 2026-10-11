@@ -43,6 +43,13 @@
    "expect":{"files":{"a.txt":"const timeoutMs = 1000;\nother\nconst timeoutMs = 2000;\n"},"error":"Found 2 occurrences in a.txt","writes":0}
   },
   {
+   "name":"single ambiguous fuzzy hunk is rejected when the better candidate comes later",
+   "files":{"a.txt":"const requestTimeoutMilliseconds = 1200;\nother\nconst requestTimeoutMilliseconds = 3001;\n"},
+   "rawInput":true,
+   "args":{"input":"*** Begin Patch\n*** Update File: a.txt\n@@\n-const requestTimeoutMilliseconds = 3000;\n+const requestTimeoutMilliseconds = 5000;\n*** End Patch"},
+   "expect":{"files":{"a.txt":"const requestTimeoutMilliseconds = 1200;\nother\nconst requestTimeoutMilliseconds = 3001;\n"},"error":"Found 2 occurrences in a.txt","writes":0}
+  },
+  {
    "name":"single hunk repeated only after unicode normalization takes the first",
    "files":{"a.txt":"title \u2013 one\nmid\ntitle \u2013 one\n"},
    "rawInput":true,

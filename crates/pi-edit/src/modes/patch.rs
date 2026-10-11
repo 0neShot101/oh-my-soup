@@ -820,8 +820,9 @@ fn find_context_relative(
 /// `first_match`, repeated text yields `None` so the caller binds it to the
 /// first line-based match instead of rejecting it; this covers exact repeats
 /// and repeats that only match after normalization (whitespace, unicode),
-/// which the character pass reports as fuzzy candidates. The line pass still
-/// rejects ambiguous candidates that are genuinely fuzzy.
+/// which the character pass reports as fuzzy candidates. `compute_replacements`
+/// binds those that match by Codex rules and rejects the rest when they have
+/// more than one candidate.
 fn character_match(
 	content: &str,
 	path: &str,
@@ -1261,6 +1262,17 @@ fn compute_replacements(
 			&& line_hint.is_none()
 		{
 			let refs = pattern.iter().map(String::as_str).collect::<Vec<_>>();
+			// The fuzzy pass returns the best-scoring candidate, not the first,
+			// so the forward-only search below would miss earlier candidates.
+			if let Some(count) = result.match_count.filter(|count| *count > 1) {
+				let preview =
+					sequence_previews(lines, result.match_indices.as_deref(), result.match_count)
+						.map_or(String::new(), |value| format!(":\n\n{value}"));
+				return Err(EditError::apply(format!(
+					"Found {count} occurrences in {path}{preview}\n\nAdd more context lines to \
+					 disambiguate."
+				)));
+			}
 			let second = seek_sequence(lines, &refs, found + 1, false, allow_fuzzy);
 			if let Some(second) = second.index {
 				return Err(EditError::apply(format!(
