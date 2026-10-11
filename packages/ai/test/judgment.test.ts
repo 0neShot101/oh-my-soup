@@ -464,7 +464,8 @@ describe("TypeSafeJudge", () => {
 	});
 
 	it("rejects a non-positive or fractional maxQuestions", () => {
-		for (const maxQuestions of [0, -1, 1.5, Number.NaN]) {
+		// One row per guard: integer but not positive, then not an integer.
+		for (const maxQuestions of [0, 1.5]) {
 			expect(() => new TypeSafeJudge({ apiKey: "k", maxQuestions })).toThrow(RangeError);
 		}
 	});

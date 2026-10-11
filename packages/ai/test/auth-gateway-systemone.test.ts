@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { startAuthGateway } from "@oh-my-pi/pi-ai/auth-gateway";
+import { buildGatewayApiKeyResolver } from "@oh-my-pi/pi-ai/auth-gateway/dispatch";
 import { AuthStorage } from "@oh-my-pi/pi-ai/auth-storage";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -184,6 +185,60 @@ describe("auth-gateway POST /v1/systemone", () => {
 		expect(Object.keys(body.answers).sort()).toEqual(Object.keys(questions).sort());
 		const sizes = harness.upstream.map(call => Object.keys(JSON.parse(String(call.init?.body)).questions).length);
 		expect(sizes.sort((a, b) => b - a)).toEqual([16, 4]);
+	});
+
+	it("records the usage of chunks that succeeded when a split judgment fails", async () => {
+		harness = await boot(init => {
+			const ids = Object.keys(JSON.parse(String(init?.body)).questions);
+			if (ids.includes("q32")) return new Response("bad chunk", { status: 400 });
+			return Response.json({
+				model: "openjev-4b",
+				answers: Object.fromEntries(ids.map(id => [id, { type: "noul", noul: 0.5 }])),
+				usage: { input_tokens: 10, output_tokens: 1 },
+			});
+		});
+		const recorded: { usage: { input: number; output: number } }[] = [];
+		vi.spyOn(harness.storage.usage, "observe").mockImplementation(entry => {
+			recorded.push(entry);
+		});
+		const questions = Object.fromEntries(
+			Array.from({ length: 40 }, (_, i) => [`q${i}`, { type: "noul", instructions: `Question ${i}?` }]),
+		);
+		const response = await post(harness.url, "/v1/systemone", { model: "openjev-4b", state: "s", questions });
+		expect(response.status).toBe(400);
+		// Chunks of 16, 16 and 8: the two without q32 were billed upstream.
+		expect(recorded).toHaveLength(1);
+		expect(recorded[0].usage).toMatchObject({ input: 20, output: 2 });
+	});
+
+	it("invalidates the bearer each chunk sent, not the one a sibling rotated to", async () => {
+		harness = await boot(() => Response.json(UPSTREAM_ANSWER));
+		const storage = harness.storage;
+		const invalidated: string[] = [];
+		vi.spyOn(storage.limits, "invalidateMatching").mockImplementation(async (_provider, apiKey) => {
+			invalidated.push(apiKey);
+			return true;
+		});
+		vi.spyOn(storage.keys, "getWithCredential").mockImplementation(async () => ({ apiKey: "key-b" }));
+		const model = getBundledModel("typesafe", "jev-latest");
+		if (!model) throw new Error("expected bundled typesafe/jev-latest");
+		const resolve = buildGatewayApiKeyResolver(
+			storage,
+			model,
+			"session",
+			{ apiKey: "key-a" },
+			new AbortController().signal,
+			"systemone",
+			"peer",
+		);
+		const forbidden = Object.assign(new Error("403 forbidden"), { status: 403 });
+		// Chunk 1 fails with key-a and rotates the shared resolver to key-b.
+		expect(await resolve({ lastChance: true, error: forbidden, previousKey: "key-a" })).toMatchObject({
+			apiKey: "key-b",
+		});
+		// Chunk 2's 403 arrives later, but it too was sent with key-a.
+		await resolve({ lastChance: true, error: forbidden, previousKey: "key-a" });
+		expect(invalidated).toEqual(["key-a", "key-a"]);
 	});
 
 	it("maps upstream failures onto TypeSafe's status codes", async () => {

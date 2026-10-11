@@ -105,7 +105,14 @@ export async function handleSystemOne(
 	});
 
 	try {
-		const result = await judge.judge(parsed.request, { signal: controller.signal });
+		const result = await judge.judge(parsed.request, {
+			signal: controller.signal,
+			// A split judgment that fails still billed the chunks that succeeded.
+			onPartialUsage: usage => {
+				if (usage.cost.total === 0) calculateCost(model, usage);
+				recordGatewayUsage(bootOpts.storage, model, client, usage);
+			},
+		});
 		// Encode before pricing: the body's `cost` means "upstream billed this"
 		// (OpenRouter), while the header and ledger carry the catalog estimate
 		// when the upstream reported tokens only (TypeSafe).

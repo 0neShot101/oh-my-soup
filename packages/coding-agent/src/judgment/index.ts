@@ -447,12 +447,23 @@ function nativeJudge(
 			};
 			let fresh: JudgmentResult | undefined;
 			if (pendingCount > 0 || questions === 0) {
+				let partial = tokenUsage(0, 0);
 				try {
-					fresh = await judge.judge({ state: request.state, questions: pending }, options);
+					fresh = await judge.judge(
+						{ state: request.state, questions: pending },
+						{
+							signal: options?.signal,
+							onPartialUsage: usage => {
+								partial = usage;
+							},
+						},
+					);
 				} catch (error) {
+					// A split judgment that fails still billed the chunks that succeeded.
+					if (partial.cost.total === 0) calculateCost(model, partial);
 					report({
 						...attempt,
-						usage: tokenUsage(0, 0),
+						usage: partial,
 						stopReason: isAbortOrTimeout(error) ? "aborted" : "error",
 						errorMessage: error instanceof Error ? error.message : String(error),
 					});
