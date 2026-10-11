@@ -358,4 +358,60 @@ describe("TypeSafeJudge", () => {
 		});
 		await expect(mismatched.judge(request)).rejects.toThrow(/missing a "noul" answer/);
 	});
+
+	it("splits requests under the cap an endpoint rejected, and only for that endpoint", async () => {
+		const questions = Object.fromEntries(
+			Array.from({ length: 20 }, (_, i) => [`q${i}`, { type: "noul", instructions: `Question ${i}?` }] as const),
+		);
+		const sizes: number[] = [];
+		const capped = (baseUrl: string) =>
+			new TypeSafeJudge({
+				apiKey: "k",
+				baseUrl,
+				fetch: async (_url, init) => {
+					const sent = JSON.parse(String(init?.body)).questions as Record<string, unknown>;
+					const ids = Object.keys(sent);
+					sizes.push(ids.length);
+					if (ids.length > 8) {
+						return new Response(
+							`{"detail":[{"msg":"Dictionary should have at most 8 items after validation, not ${ids.length}"}]}`,
+							{ status: 422 },
+						);
+					}
+					return Response.json({
+						model: "openjev-4b",
+						answers: Object.fromEntries(ids.map(id => [id, { type: "noul", noul: 0.5 }])),
+						usage: { input_tokens: 10, output_tokens: 1 },
+					});
+				},
+			});
+
+		const first = await capped("https://openjev-split.example").judge({ state: "s", questions });
+		expect(sizes).toEqual([20, 8, 8, 4]);
+		expect(Object.keys(first.answers)).toHaveLength(20);
+		expect(first.usage).toMatchObject({ input: 30, output: 3 });
+
+		// The learned cap outlives the instance: a fresh judge for the same endpoint skips the rejected probe.
+		sizes.length = 0;
+		await capped("https://openjev-split.example").judge({ state: "s", questions });
+		expect(sizes).toEqual([8, 8, 4]);
+
+		// Another endpoint is not capped until it rejects on its own.
+		sizes.length = 0;
+		const uncapped = new TypeSafeJudge({
+			apiKey: "k",
+			baseUrl: "https://jev-uncapped.example",
+			fetch: async (_url, init) => {
+				const ids = Object.keys(JSON.parse(String(init?.body)).questions);
+				sizes.push(ids.length);
+				return Response.json({
+					model: "jev-latest",
+					answers: Object.fromEntries(ids.map(id => [id, { type: "noul", noul: 0.5 }])),
+					usage: {},
+				});
+			},
+		});
+		await uncapped.judge({ state: "s", questions });
+		expect(sizes).toEqual([20]);
+	});
 });

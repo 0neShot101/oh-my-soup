@@ -186,10 +186,6 @@ class FakeJudge implements Judge {
 
 	async judge<Q extends Questions>(request: JudgmentRequest<Q>): Promise<JudgmentResult<Q>> {
 		this.requests.push(request);
-		// System One gateways (OpenJEV) reject a `questions` map above 16 items.
-		if (Object.keys(request.questions).length > 16) {
-			throw new Error("Dictionary should have at most 16 items after validation, not 17");
-		}
 		this.inFlight++;
 		this.peak = Math.max(this.peak, this.inFlight);
 		try {
@@ -222,7 +218,7 @@ describe("jfind cascade", () => {
 	it("verifies only sketched passages, reports merged ranges, and runs waves in parallel", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "jfind-cascade-"));
 		try {
-			// 72 files, so five 16-question filename batches (128 would be truncated).
+			// Enough files to need three filename batches (> 128 would be truncated).
 			for (let i = 0; i < 70; i++) {
 				await Bun.write(path.join(dir, "pkg", `filler${i}.ts`), `export const filler${i} = ${i};\n`);
 			}
@@ -261,10 +257,10 @@ describe("jfind cascade", () => {
 			expect(hit.ranges[0]!.end).toBeGreaterThanOrEqual(251);
 			expect(hit.ranges[0]!.snippet).toBe("const noise0 = 0;");
 
-			// Wave 1 judged every listed file by name in five 16-question requests; wave 3 verified only the routed sketch.
+			// Wave 1 judged every listed file by name; wave 3 verified only the routed sketch.
 			const nameRequests = judge.requests.filter(request => "tree" in stateOf(request));
 			const verifyRequests = judge.requests.filter(request => "file" in stateOf(request));
-			expect(nameRequests).toHaveLength(5);
+			expect(nameRequests).toHaveLength(2);
 			expect(verifyRequests).toHaveLength(1);
 			expect(Object.keys(verifyRequests[0]!.questions)).toEqual(["p00"]);
 			expect(result.stats.judged).toBe(72);
