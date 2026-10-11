@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.9.1] - 2026-10-11
+
 ### Fixed
 
 - Fixed inline charts and images leaving overlapping copies over text when moved, resized, replaced, or hidden, while preserving images in scrollback.
