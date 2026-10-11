@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { isRecord, logger, WhichCachePolicy } from "@oh-my-pi/pi-utils";
 import { hasRootMarkers, parseConfigContent, resolveCommand } from "../lsp/config";
-import { type JsonConfigAdapter, jsonConfigSources } from "../utils/json-config-sources";
+import { type ConfigFileAdapter, configFileSources } from "../utils/config-file-sources";
 import DEFAULTS from "./defaults.json" with { type: "json" };
 import type { DapAdapterConfig, DapResolvedAdapter } from "./types";
 
@@ -47,7 +47,7 @@ function normalizeAdapterConfig(config: unknown): DapAdapterConfig | null {
 	};
 }
 
-const adaptConfig: JsonConfigAdapter<NormalizedConfig> = (content, filePath) =>
+const adaptConfig: ConfigFileAdapter<NormalizedConfig> = (content, filePath) =>
 	normalizeConfig(parseConfigContent(content, filePath));
 
 function getDefaults(): Record<string, DapAdapterConfig> {
@@ -99,7 +99,7 @@ function mergeAdapters(
 
 function loadAdapterConfigs(cwd: string): Record<string, DapAdapterConfig> {
 	let adapters = { ...DEFAULT_ADAPTERS };
-	for (const source of jsonConfigSources("dap", cwd, adaptConfig).reverse()) {
+	for (const source of configFileSources("dap", cwd, adaptConfig).reverse()) {
 		const parsed = source.read();
 		if (!parsed) continue;
 		adapters = mergeAdapters(adapters, parsed.adapters);

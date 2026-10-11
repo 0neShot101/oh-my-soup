@@ -4,11 +4,11 @@ import { $which, isRecord, logger, pathIsWithin, type WhichOptions } from "@oh-m
 import { YAML } from "bun";
 import type { ClaudePluginRoot } from "../discovery/helpers";
 import {
-	type JsonConfigAdapter,
-	type JsonConfigSource,
-	jsonConfigSources,
-	readJsonConfigFile,
-} from "../utils/json-config-sources";
+	type ConfigFileAdapter,
+	type ConfigFileSource,
+	configFileSources,
+	readConfigFile,
+} from "../utils/config-file-sources";
 import { BiomeClient } from "./clients/biome-client";
 import { SwiftLintClient } from "./clients/swiftlint-client";
 import DEFAULTS from "./defaults.json" with { type: "json" };
@@ -107,7 +107,7 @@ function normalizeServerConfig(name: string, config: RawServerConfig): ServerCon
 	};
 }
 
-const adaptConfig: JsonConfigAdapter<NormalizedConfig> = (content, filePath) =>
+const adaptConfig: ConfigFileAdapter<NormalizedConfig> = (content, filePath) =>
 	normalizeConfig(parseConfigContent(content, filePath));
 
 function coerceServerConfigs(servers: Record<string, RawServerConfig>): Record<string, ServerConfig> {
@@ -380,7 +380,7 @@ function readMarketplaceLspConfig(root: ClaudePluginRoot): NormalizedConfig | nu
 				if (typeof lspServers === "string") {
 					const configPath = path.resolve(root.path, lspServers);
 					if (!pathIsWithin(root.path, configPath)) return null;
-					return readJsonConfigFile(configPath, adaptConfig);
+					return readConfigFile(configPath, adaptConfig);
 				}
 				if (isRecord(lspServers)) {
 					return normalizeConfig({ servers: lspServers });
@@ -393,7 +393,7 @@ function readMarketplaceLspConfig(root: ClaudePluginRoot): NormalizedConfig | nu
 	return null;
 }
 
-function marketplaceConfigSource(root: ClaudePluginRoot): JsonConfigSource<NormalizedConfig> {
+function marketplaceConfigSource(root: ClaudePluginRoot): ConfigFileSource<NormalizedConfig> {
 	return {
 		read: () => readMarketplaceLspConfig(root),
 	};
@@ -434,7 +434,7 @@ function marketplaceConfigSource(root: ClaudePluginRoot): JsonConfigSource<Norma
 export function loadConfig(cwd: string): LspConfig {
 	let mergedServers = coerceServerConfigs(DEFAULTS);
 
-	const configSources = jsonConfigSources("lsp", cwd, adaptConfig, {
+	const configSources = configFileSources("lsp", cwd, adaptConfig, {
 		pluginRootSource: marketplaceConfigSource,
 	}).reverse();
 

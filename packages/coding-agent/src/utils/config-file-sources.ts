@@ -5,10 +5,10 @@ import { getConfigDirPaths } from "../config";
 import { type ClaudePluginRoot, getPreloadedPluginRoots } from "../discovery/helpers";
 
 /** Turns raw file content (from `filePath`) into a config, or `null` to skip the file. */
-export type JsonConfigAdapter<T> = (content: string, filePath: string) => T | null;
+export type ConfigFileAdapter<T> = (content: string, filePath: string) => T | null;
 
 /** One entry of a config stack; `read` yields `null` for unreadable or rejected files. */
-export interface JsonConfigSource<T> {
+export interface ConfigFileSource<T> {
 	read(): T | null;
 }
 
@@ -18,7 +18,7 @@ export interface JsonConfigSource<T> {
  * skipped instead of thrown. `adapt` receives the raw content because the YAML/JSON
  * split lives with the config files that consume this walk, not here.
  */
-export function readJsonConfigFile<T>(filePath: string, adapt: JsonConfigAdapter<T>): T | null {
+export function readConfigFile<T>(filePath: string, adapt: ConfigFileAdapter<T>): T | null {
 	try {
 		const content = fs.readFileSync(filePath, "utf-8");
 		return adapt(content, filePath);
@@ -27,28 +27,28 @@ export function readJsonConfigFile<T>(filePath: string, adapt: JsonConfigAdapter
 	}
 }
 
-export interface JsonConfigSourcesOptions<T> {
+export interface ConfigFileSourcesOptions<T> {
 	/** Extra source emitted right after each plugin root's config files (e.g. its marketplace catalog). */
-	pluginRootSource?: (root: ClaudePluginRoot) => JsonConfigSource<T>;
+	pluginRootSource?: (root: ClaudePluginRoot) => ConfigFileSource<T>;
 }
 
 /**
  * Config sources for base name `base` — `"lsp"` covers `lsp.json`/`.lsp.json`/`lsp.yaml`/`.lsp.yaml`/
  * `lsp.yml`/`.lsp.yml` — in priority order: cwd files, project config dirs, user config dirs,
- * plugin roots (plus {@link JsonConfigSourcesOptions.pluginRootSource} per root), then home-directory
+ * plugin roots (plus {@link ConfigFileSourcesOptions.pluginRootSource} per root), then home-directory
  * files. Lowest priority comes last, so callers merge over a reversed list.
  */
-export function jsonConfigSources<T>(
+export function configFileSources<T>(
 	base: string,
 	cwd: string,
-	adapt: JsonConfigAdapter<T>,
-	options: JsonConfigSourcesOptions<T> = {},
-): JsonConfigSource<T>[] {
+	adapt: ConfigFileAdapter<T>,
+	options: ConfigFileSourcesOptions<T> = {},
+): ConfigFileSource<T>[] {
 	const filenames = [`${base}.json`, `.${base}.json`, `${base}.yaml`, `.${base}.yaml`, `${base}.yml`, `.${base}.yml`];
-	const sources: JsonConfigSource<T>[] = [];
+	const sources: ConfigFileSource<T>[] = [];
 	const addDir = (dir: string): void => {
 		for (const filename of filenames) {
-			sources.push({ read: () => readJsonConfigFile(path.join(dir, filename), adapt) });
+			sources.push({ read: () => readConfigFile(path.join(dir, filename), adapt) });
 		}
 	};
 
