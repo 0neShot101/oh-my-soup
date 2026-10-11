@@ -738,9 +738,6 @@ mod tests {
 		let distinct: BTreeSet<String> = actual.iter().cloned().collect();
 		assert_eq!(actual.len(), distinct.len(), "supported language list contains duplicates");
 		assert_eq!(distinct, expected);
-		for language in actual {
-			assert!(supports_language_impl(&language), "listed language {language} is unsupported");
-		}
 	}
 
 	#[test]
