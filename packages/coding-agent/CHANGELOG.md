@@ -16,6 +16,11 @@
 
 - Added `supportsThinkingBindingControls` to Bedrock `compat` in `models.yml`, so a Bedrock gateway or region that rejects Claude thinking-binding controls can turn them off ([#15316](https://github.com/can1357/oh-my-pi/pull/15316) by [@harshaygadekar](https://github.com/harshaygadekar))
 
+### Fixed
+
+- Fixed a bare model id defined in `models.yml` resolving to the auto-discovered Ollama, llama.cpp, or LM Studio provider when that provider serves the same id ([#15360](https://github.com/can1357/oh-my-pi/pull/15360) by [@H4vC](https://github.com/H4vC))
+- Fixed unreachable `OLLAMA_BASE_URL`, `OLLAMA_HOST`, `LLAMA_CPP_BASE_URL`, or `LM_STUDIO_BASE_URL` endpoints failing silently; omp now shows a warning that names the variable ([#15360](https://github.com/can1357/oh-my-pi/pull/15360) by [@H4vC](https://github.com/H4vC))
+
 ## [18.9.0] - 2026-10-11
 
 ### Added
