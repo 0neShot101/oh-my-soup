@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Status line `pr` segment no longer keeps the previous branch's PR after switching to the default branch, a detached HEAD, or a branch without a PR
+
 ## [18.10.1] - 2026-10-12
 
 ### Added
