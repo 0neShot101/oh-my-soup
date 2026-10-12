@@ -194,9 +194,16 @@ describe("countMessage", () => {
 	});
 });
 
-// Contract: a replayed thinking signature counts only for readers that bill it.
-describe("countMessage thinking signatures", () => {
+// Contract: a replayed signed thinking block costs what the reading model bills
+// for it: Claude rebuilds the full reasoning from the signature and bills it at
+// the size the turn billed as output; other readers are charged the
+// signature's bytes.
+describe("countMessage replayed thinking", () => {
 	const SIGNATURE = "s".repeat(4000);
+	const VISIBLE = "Check the call sites first.";
+	// What the visible blocks count to in the test env (bytes/4 per fragment).
+	const VISIBLE_TOKENS = 9;
+	const OUTPUT_TOKENS = 3000;
 
 	function reader(provider: "anthropic" | "openrouter" | "amazon-bedrock" | "google", id: string): Model {
 		const model = getBundledModel(provider, id);
@@ -204,41 +211,67 @@ describe("countMessage thinking signatures", () => {
 		return model as Model;
 	}
 
-	function signedTurn(thinkingSignature?: string): AssistantMessage {
+	function signedTurn(
+		from: Pick<Model, "api" | "provider" | "id">,
+		thinking: string,
+		thinkingSignature?: string,
+	): AssistantMessage {
 		return {
 			role: "assistant",
 			content: [
-				{ type: "thinking", thinking: "Check the call sites first.", thinkingSignature },
+				{ type: "thinking", thinking, thinkingSignature },
 				{ type: "text", text: "Done." },
 			],
-			api: "anthropic-messages",
-			provider: "anthropic",
-			model: "claude-opus-5-5",
+			api: from.api,
+			provider: from.provider,
+			model: from.id,
 			usage: {
 				input: 100,
-				output: 20,
+				output: OUTPUT_TOKENS,
 				cacheRead: 0,
 				cacheWrite: 0,
-				totalTokens: 120,
+				totalTokens: 100 + OUTPUT_TOKENS,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
-			stopReason: "stop",
+			stopReason: "toolUse",
 			timestamp: 1,
 		};
 	}
 
 	test.each([
-		["anthropic", "claude-opus-5-5"],
-		["openrouter", "~anthropic/claude-opus-latest"],
-		["amazon-bedrock", "global.anthropic.claude-opus-5-5"],
-	] as const)("leaves the signature out for Claude on %s (%s)", (provider, id) => {
-		const tokenizer = new Tokenizer(reader(provider, id));
-		expect(tokenizer.countMessage(signedTurn(SIGNATURE))).toBe(tokenizer.countMessage(signedTurn()));
+		["anthropic", "claude-opus-5-5", VISIBLE],
+		["amazon-bedrock", "global.anthropic.claude-opus-5-5", VISIBLE],
+		// Omitted display: no visible thinking, the same reasoning billed.
+		["anthropic", "claude-opus-5-5", ""],
+	] as const)("charges a Claude turn replayed natively on %s (%s) its output size", (provider, id, thinking) => {
+		const model = reader(provider, id);
+		expect(new Tokenizer(model).countMessage(signedTurn(model, thinking, SIGNATURE))).toBe(OUTPUT_TOKENS);
 	});
 
-	test("charges the signature's bytes for a reader whose catalog bills it", () => {
-		const tokenizer = new Tokenizer(reader("google", "gemini-3-pro-preview"));
-		expect(tokenizer.countMessage(signedTurn(SIGNATURE))).toBe(tokenizer.countMessage(signedTurn()) + 1000);
+	test.each([
+		// Signatures are model-bound: another model's turn replays its thinking as text.
+		["a turn from another Claude model", reader("anthropic", "claude-opus-5-5"), reader("anthropic", "claude-opus-5")],
+		// OpenRouter filters reasoning history out of the request.
+		[
+			"a reader that filters reasoning history",
+			reader("openrouter", "~anthropic/claude-opus-latest"),
+			reader("openrouter", "~anthropic/claude-opus-latest"),
+		],
+	] as const)("charges only the visible blocks for %s, never the signature", (_case, model, from) => {
+		expect(new Tokenizer(model).countMessage(signedTurn(from, VISIBLE, SIGNATURE))).toBe(VISIBLE_TOKENS);
+	});
+
+	test("keeps the compaction floor at the visible blocks of a native Claude replay", () => {
+		const model = reader("anthropic", "claude-opus-5-5");
+		const floored = new Tokenizer(model).countMessage(signedTurn(model, VISIBLE, SIGNATURE), {
+			excludeEncryptedReasoning: true,
+		});
+		expect(floored).toBe(VISIBLE_TOKENS);
+	});
+
+	test("charges the signature's bytes for a reader whose catalog prices them", () => {
+		const model = reader("google", "gemini-3-pro-preview");
+		expect(new Tokenizer(model).countMessage(signedTurn(model, VISIBLE, SIGNATURE))).toBe(VISIBLE_TOKENS + 1000);
 	});
 });
 

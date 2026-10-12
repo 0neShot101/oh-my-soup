@@ -390,14 +390,16 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 		values: [true, false],
 	},
 	/**
-	 * The model line bills a replayed thinking block's signature as input.
-	 * Unassigned: it does. Read through `./thinking-signatures`.
+	 * How the model line bills a replayed signed thinking block as input:
+	 * `output` bills the reasoning its signature carries, at the size the turn
+	 * billed as output, and not the signature's bytes. Unassigned: estimated
+	 * from the signature's bytes. Read through `./thinking-replay`.
 	 */
-	"bills-thinking-signatures": {
-		key: "billsThinkingSignatures",
+	"thinking-replay-tokens": {
+		key: "thinkingReplayTokens",
 		set: "catalog",
 		shape: "scalar",
-		values: [true, false],
+		values: ["output", "signature"],
 	},
 	"delegation-bias": { key: "delegationBias", set: "catalog", shape: "scalar", values: DELEGATION_BIASES },
 	"discovery-api": { key: "discoveryApi", set: "catalog", shape: "scalar" },

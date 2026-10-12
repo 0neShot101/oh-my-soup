@@ -14,11 +14,15 @@
 // consecutive tool_use or tool_result blocks is one position. Warm-cache
 // tool-result pruning keeps its rewrites inside this window.
 // https://platform.claude.com/docs/en/build-with-claude/prompt-caching
-// A replayed thinking block bills its thinking text as input, not its
-// signature, on every host, so the local count leaves the signature out.
+// A replayed signed thinking block bills the full reasoning its signature
+// carries (the server rebuilds it from the signature), at the size its turn
+// billed as output, not the signature's bytes. Lines that strip earlier
+// turns' thinking (Opus before 4.5, Sonnet before 4.6, Haiku before 5.5) bill
+// those turns nothing, so the count stays an upper bound there.
+// https://platform.claude.com/docs/en/build-with-claude/context-windows#the-context-window-with-thinking
 class "anthropic" {
 	prompt-cache-lookback 20
-	bills-thinking-signatures #false
+	thinking-replay-tokens "output"
 	// verified: billing matched this formula on Opus 4.7+ and Fable 5.1.
 	image-tokenization {
 		regime "anthropic-patch"

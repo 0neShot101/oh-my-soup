@@ -1,5 +1,5 @@
-import type { Model } from "@oh-my-pi/pi-ai";
-import { billsThinkingSignatures } from "@oh-my-pi/pi-catalog/compat/thinking-signatures";
+import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
+import { resolveThinkingReplayTokens, type ThinkingReplayTokens } from "@oh-my-pi/pi-catalog/compat/thinking-replay";
 import type { ModelTokenizer } from "@oh-my-pi/pi-catalog/types";
 import * as natives from "@oh-my-pi/pi-natives";
 import { materializeString, stringifyJson } from "@oh-my-pi/pi-utils";
@@ -28,6 +28,29 @@ export function tokenizerEncodingForModel(model: Pick<Model, "tokenizer"> | null
 	return model?.tokenizer ? NATIVE_ENCODING[model.tokenizer] : null;
 }
 
+type TokenizerModel = Pick<Model, "tokenizer"> & snapcompact.ShapeTarget & { compat?: Model["compat"] };
+
+/** The model an assistant turn's native reasoning (signed thinking, Responses history) is replayed to. */
+interface ReasoningReplayReader {
+	api: string;
+	provider: string;
+	id: string;
+}
+
+function reasoningReplayReader(model: TokenizerModel | null | undefined): ReasoningReplayReader | undefined {
+	if (!model?.api || !model.provider || !model.id) return undefined;
+	// Filtering targets strip native reasoning items before the request is encoded.
+	const compat = model.compat;
+	if (compat && "filterReasoningHistory" in compat && compat.filterReasoningHistory) return undefined;
+	return { api: model.api, provider: model.provider, id: model.id };
+}
+
+/** Identity of the reader whose replayed reasoning a {@link Tokenizer} counts; equal keys count it alike. */
+export function reasoningReplayKey(model: TokenizerModel | null | undefined): string {
+	const reader = reasoningReplayReader(model);
+	return reader ? `${reader.api}\0${reader.provider}\0${reader.id}` : "";
+}
+
 /**
  * `strict` always tries an exact native count (the catalog-resolved tokenizer
  * when known, o200k_base otherwise), falling back to the byte upper bound when
@@ -43,12 +66,13 @@ export type TokenCountMode = "strict" | "approximate" | "upperbound";
 export interface MessageCountOptions {
 	/**
 	 * Drop opaque provider reasoning payloads (`thinkingSignature`,
-	 * `redactedThinking`, native server-tool blocks) from the estimate. The
-	 * default counts the ones the reader bills on replay (signatures only where
-	 * its catalog says so) — but their *local* byte size can diverge wildly
-	 * from what the provider charges, so the compaction floor (which only needs
-	 * the reliably-countable, on-wire-compressible content) excludes them to
-	 * avoid false triggers on thinking-heavy turns.
+	 * `redactedThinking`, native server-tool blocks) from the estimate. Those
+	 * are billed by the provider on replay, so the default counts them (a reader
+	 * billing replayed thinking at `output` size: the reasoning, at its turn's
+	 * output size) — but their *local* byte size can diverge wildly from what
+	 * the provider charges, so the compaction floor (which only needs the
+	 * reliably-countable, on-wire-compressible content) excludes them to avoid
+	 * false triggers on thinking-heavy turns.
 	 */
 	excludeEncryptedReasoning?: boolean;
 }
@@ -150,17 +174,19 @@ interface MessageEstimate {
  * Model-aware local token counter. Immutable: the catalog-resolved encoding
  * is fixed at construction, so a cached count can never straddle two
  * encodings. An `Agent` owns one for its active model (swapping the instance
- * when the model's encoding or snapcompact frame pricing changes); one-shot
- * flows construct their own for the model that will be billed. Known
- * tokenizer families use exact native counts; unknown models keep the fast
- * byte estimate (or o200k when `PI_TOKENIZER_ACCURATE=1`).
+ * when the model's encoding, image or thinking-replay pricing, or replay
+ * identity changes); one-shot flows construct their own for the model that
+ * will be billed. Known tokenizer families use exact native counts; unknown
+ * models keep the fast byte estimate (or o200k when `PI_TOKENIZER_ACCURATE=1`).
  */
 export class Tokenizer {
 	readonly #encoding: natives.Encoding | null;
 	readonly #frameBilling: snapcompact.FrameBilling;
 	readonly frameBillingKey: string;
-	/** Whether the reader bills replayed thinking signatures (catalog `bills-thinking-signatures`). */
-	readonly countsThinkingSignatures: boolean;
+	readonly #reasoningReader: ReasoningReplayReader | undefined;
+	readonly reasoningReplayKey: string;
+	/** How the reader bills replayed signed thinking (catalog `thinking-replay-tokens`). */
+	readonly thinkingReplayTokens: ThinkingReplayTokens;
 
 	/** Exact counts only; byte fallbacks remain mode-dependent and uncached. */
 	readonly #nativeCounts = new LRUCache<string, number>({
@@ -179,11 +205,13 @@ export class Tokenizer {
 	 */
 	#estimates = new WeakMap<AgentMessage, MessageEstimate>();
 
-	constructor(model?: (Pick<Model, "tokenizer"> & snapcompact.ShapeTarget) | null) {
+	constructor(model?: TokenizerModel | null) {
 		this.#encoding = tokenizerEncodingForModel(model);
 		this.#frameBilling = snapcompact.frameBilling(model ?? undefined);
 		this.frameBillingKey = snapcompact.frameBillingKey(this.#frameBilling);
-		this.countsThinkingSignatures = billsThinkingSignatures(model ?? {});
+		this.#reasoningReader = reasoningReplayReader(model);
+		this.reasoningReplayKey = reasoningReplayKey(model);
+		this.thinkingReplayTokens = resolveThinkingReplayTokens(model ?? {});
 	}
 
 	get encoding(): natives.Encoding | null {
@@ -257,6 +285,22 @@ export class Tokenizer {
 		return estimateImageTokens(size, detail, this.#frameBilling.rule);
 	}
 
+	/**
+	 * Whether `message`'s signed reasoning reaches this reader natively (same
+	 * model, host and wire, from a completed turn), where a reader billing
+	 * replayed thinking at `output` size charges what the turn billed as output.
+	 */
+	#replaysReasoningNatively(message: AssistantMessage): boolean {
+		const reader = this.#reasoningReader;
+		return (
+			reader !== undefined &&
+			message.api === reader.api &&
+			message.model === reader.id &&
+			message.provider === reader.provider &&
+			(message.stopReason === "stop" || message.stopReason === "toolUse")
+		);
+	}
+
 	#measureMessage(message: AgentMessage, excludeEncryptedReasoning: boolean): number {
 		const fragments: string[] = [];
 		let extra = 0;
@@ -292,27 +336,31 @@ export class Tokenizer {
 				break;
 			}
 			case "assistant": {
+				const signaturesPriced = this.thinkingReplayTokens === "signature";
+				let signedReasoning = false;
 				for (const block of message.content) {
 					if (block.type === "text") {
 						fragments.push(block.text);
 					} else if (block.type === "thinking") {
 						fragments.push(block.thinking);
-						// Readers that bill the opaque signature riding alongside the thinking
-						// text (OpenAI Responses encrypted reasoning items, Gemini thought
-						// signatures) are charged its bytes; readers whose catalog says they
-						// bill only the thinking text (Claude) are not. The compaction floor
-						// excludes it either way: its local byte size diverges from provider
-						// billing.
-						if (block.thinkingSignature && !excludeEncryptedReasoning && this.countsThinkingSignatures) {
+						// Providers charge for the opaque signature/reasoning payload that
+						// rides alongside the thinking text (OpenAI Responses encrypted
+						// reasoning items, Gemini thought signatures). A reader billing at
+						// `output` size (Claude) charges the reasoning, priced below, not
+						// these bytes. The compaction floor excludes it (its local byte size
+						// diverges from provider billing).
+						if (block.thinkingSignature && !excludeEncryptedReasoning && signaturesPriced) {
 							fragments.push(block.thinkingSignature);
 						}
+						if (block.thinkingSignature) signedReasoning = true;
 					} else if (block.type === "toolCall") {
 						fragments.push(block.name);
 						fragments.push(stringifyJson(block.arguments) ?? "null");
 					} else if (block.type === "redactedThinking") {
 						// Encrypted reasoning blob the provider still bills for on replay;
 						// excluded from the compaction floor for the same reason as above.
-						if (!excludeEncryptedReasoning) fragments.push(block.data);
+						signedReasoning = true;
+						if (!excludeEncryptedReasoning && signaturesPriced) fragments.push(block.data);
 					} else if (block.type === "anthropicServerTool") {
 						// Native Anthropic server-tool call/result replayed verbatim on the
 						// wire (server_tool_use input and opaque result content). The provider
@@ -321,6 +369,19 @@ export class Tokenizer {
 						// byte size diverges from provider billing.
 						if (!excludeEncryptedReasoning) fragments.push(stringifyJson(block.block) ?? "null");
 					}
+				}
+				// The visible text undercounts a native replay: the provider rebuilds
+				// the full reasoning from its signature, billed at the turn's output
+				// size. The floor keeps the visible count, which later edits of the
+				// turn's text lower while the output size stays fixed.
+				if (
+					signedReasoning &&
+					!excludeEncryptedReasoning &&
+					!signaturesPriced &&
+					this.#replaysReasoningNatively(message)
+				) {
+					const visible = fragments.length === 0 ? extra : extra + this.countTokens(fragments);
+					return Math.max(visible, message.usage.output);
 				}
 				break;
 			}
