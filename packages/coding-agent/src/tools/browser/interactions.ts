@@ -391,39 +391,107 @@ export async function fillViaHandle(
 	await untilAborted(signal, () => type(value));
 }
 
-/** Resolve text-query matches to the first visible clickable candidate in document order. */
-export async function resolveActionableQueryHandlerClickTarget(
-	handles: ElementHandle[],
-): Promise<ElementHandle | null> {
-	const candidates: Array<{ handle: ElementHandle; x: number; y: number; owned: boolean }> = [];
-	for (const handle of handles) {
-		let candidate = handle;
-		let owned = false;
-		try {
-			const proxy = await handle.evaluateHandle(el =>
-				(el as Element).closest('a,button,[role="button"],[role="link"],input[type="button"],input[type="submit"]'),
-			);
-			const element = proxy.asElement();
-			if (element) {
-				candidate = element;
-				owned = candidate !== handle;
-			} else await proxy.dispose();
-			const rect = (await candidate.evaluate(el => {
-				const box = (el as Element).getBoundingClientRect();
-				return { x: box.left, y: box.top, width: box.width, height: box.height };
-			})) as { x: number; y: number; width: number; height: number };
-			if (rect.width >= 1 && rect.height >= 1 && (await candidate.isIntersectingViewport())) {
-				candidates.push({ handle: candidate, x: rect.x, y: rect.y, owned });
-			} else if (owned) await candidate.dispose().catch(() => undefined);
-		} catch {
-			if (owned) await candidate.dispose().catch(() => undefined);
-		}
-	}
-	candidates.sort((a, b) => a.y - b.y || a.x - b.x);
-	const winner = candidates.shift();
+interface QueryCandidate {
+	handle: ElementHandle;
+	/** Document coordinates, so candidates measured at different scroll offsets still compare. */
+	x: number;
+	y: number;
+	onScreen: boolean;
+	owned: boolean;
+}
+
+async function disposeOwned(candidates: Iterable<QueryCandidate>): Promise<void> {
 	for (const candidate of candidates) {
 		if (candidate.owned) await candidate.handle.dispose().catch(() => undefined);
 	}
+}
+
+/**
+ * Lift a text match to its clickable ancestor and measure it, or return null for a match with no box.
+ * Geometry comes from `getBoundingClientRect`: `isIntersectingViewport` waits on an
+ * `IntersectionObserver` callback that background tabs never deliver.
+ */
+async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal): Promise<QueryCandidate | null> {
+	let candidate = handle;
+	let owned = false;
+	try {
+		const proxy = await untilAborted(signal, () =>
+			handle.evaluateHandle(el =>
+				(el as Element).closest('a,button,[role="button"],[role="link"],input[type="button"],input[type="submit"]'),
+			),
+		);
+		const element = proxy.asElement();
+		if (element) {
+			candidate = element;
+			owned = candidate !== handle;
+		} else await proxy.dispose();
+		const box = (await untilAborted(signal, () =>
+			candidate.evaluate(el => {
+				const rect = (el as unknown as PageElement).getBoundingClientRect();
+				const page = globalThis as unknown as PageGlobals & { scrollX: number; scrollY: number };
+				return {
+					x: rect.left + page.scrollX,
+					y: rect.top + page.scrollY,
+					sized: rect.width >= 1 && rect.height >= 1,
+					onScreen:
+						rect.right > 0 && rect.bottom > 0 && rect.left < page.innerWidth && rect.top < page.innerHeight,
+				};
+			}),
+		)) as { x: number; y: number; sized: boolean; onScreen: boolean };
+		if (box.sized) return { handle: candidate, x: box.x, y: box.y, onScreen: box.onScreen, owned };
+	} catch (error) {
+		if (owned) await candidate.dispose().catch(() => undefined);
+		if (signal?.aborted) throw error;
+		return null;
+	}
+	if (owned) await candidate.dispose().catch(() => undefined);
+	return null;
+}
+
+/** Scroll an off-screen match into view and report whether a click could reach it (or names what covers it). */
+async function scrollToClickable(handle: ElementHandle, signal?: AbortSignal): Promise<boolean> {
+	try {
+		await untilAborted(signal, () =>
+			handle.evaluate(el => {
+				const element = el as unknown as PageElement;
+				element.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
+			}),
+		);
+		const actionable = await isClickActionable(handle, signal);
+		return actionable.ok || actionable.coveredBy !== undefined;
+	} catch (error) {
+		if (signal?.aborted) throw error;
+		return false;
+	}
+}
+
+/**
+ * Resolve text-query matches to the first on-screen candidate in document order. When no match is on
+ * screen, each off-screen match is scrolled into view and the first one a click can reach wins.
+ */
+export async function resolveActionableQueryHandlerClickTarget(
+	handles: ElementHandle[],
+	signal?: AbortSignal,
+): Promise<ElementHandle | null> {
+	const onScreen: QueryCandidate[] = [];
+	const offScreen: QueryCandidate[] = [];
+	try {
+		for (const handle of handles) {
+			const candidate = await measureQueryCandidate(handle, signal);
+			if (candidate) (candidate.onScreen ? onScreen : offScreen).push(candidate);
+		}
+		if (onScreen.length === 0) {
+			for (const candidate of offScreen) {
+				if (await scrollToClickable(candidate.handle, signal)) onScreen.push(candidate);
+			}
+		}
+	} catch (error) {
+		await disposeOwned(new Set([...onScreen, ...offScreen]));
+		throw error;
+	}
+	onScreen.sort((a, b) => a.y - b.y || a.x - b.x);
+	const winner = onScreen[0];
+	await disposeOwned(new Set([...onScreen, ...offScreen].filter(candidate => candidate !== winner)));
 	return winner?.handle ?? null;
 }
 
@@ -442,7 +510,7 @@ export async function clickQueryHandlerText(
 		const handles = (await untilAborted(clickSignal, () => page.$$(selector))) as ElementHandle[];
 		let target: ElementHandle | null = null;
 		try {
-			target = await resolveActionableQueryHandlerClickTarget(handles);
+			target = await resolveActionableQueryHandlerClickTarget(handles, clickSignal);
 			if (!target) {
 				await untilAborted(clickSignal, () => Bun.sleep(50));
 				continue;

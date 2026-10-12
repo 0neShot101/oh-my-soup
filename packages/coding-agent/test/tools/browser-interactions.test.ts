@@ -6,6 +6,8 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { disposeAllVmContexts } from "@oh-my-pi/pi-coding-agent/eval/js/context-manager";
 import { createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
 import { CmuxTab } from "@oh-my-pi/pi-coding-agent/tools/browser/cmux/cmux-tab";
+import { clickQueryHandlerText } from "@oh-my-pi/pi-coding-agent/tools/browser/interactions";
+import { acquireBrowser, releaseBrowser } from "@oh-my-pi/pi-coding-agent/tools/browser/registry";
 import { releaseAllTabs } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
 import { TERN_KIT_SOURCE } from "@oh-my-pi/pi-coding-agent/tools/browser/tern/page-kit";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
@@ -20,6 +22,7 @@ const COMBO_TAB_NAME = `combos-${crypto.randomUUID()}`;
 const SHORTCUT = process.platform === "darwin" ? "Meta" : "Control";
 const comboHtml = `<!doctype html><textarea id="area">hello world</textarea><input id="field"><input id="paste">
 <iframe id="inner" srcdoc='<!doctype html><textarea id="deep">nested text</textarea>'></iframe>`;
+const TEXT_TAB_NAME = `text-click-${crypto.randomUUID()}`;
 let tempDir = "";
 let uploadPath = "";
 
@@ -90,7 +93,8 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser click timeouts", () => {
 		const tabName = `unclickable-${crypto.randomUUID()}`;
 		const unclickableHtml = `<!doctype html><button id="hidden" style="display:none">Hidden</button><button id="faded" style="opacity:0">Faded</button>
 <button class="multi" style="display:none">First</button><button class="multi">Second</button>
-<button id="swap">Swap</button>`;
+<button id="swap">Swap</button>
+<button style="pointer-events:none">Twin</button><button>Twin</button>`;
 		await prelude.invoke(
 			{ action: "open", name: tabName, url: `data:text/html,${encodeURIComponent(unclickableHtml)}` },
 			context,
@@ -119,6 +123,9 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser click timeouts", () => {
 			expect(hidden).toMatch(/^tab\.click\("#hidden"\) timed out after \d+ms/);
 			expect(hidden).toContain("last check: display:none");
 			expect(await attempt(`tab.click("#faded")`)).toContain("last check: opacity:0");
+			// Text queries keep the first on-screen match even when it is refused, and report why.
+			expect(await attempt(`tab.click("text/Faded")`)).toContain("last check: opacity:0");
+			expect(await attempt(`tab.click("text/Twin")`)).toContain("last check: pointer-events:none");
 			// The count tells the caller the first of several matches is the hidden one.
 			const multi = await attempt(`tab.dblclick(".multi")`);
 			expect(multi).toContain("last check: display:none");
@@ -134,6 +141,63 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser click timeouts", () => {
 			).toContain("last check: detached");
 		} finally {
 			await prelude.invoke({ action: "close", name: tabName, kill: true }, context).catch(() => undefined);
+		}
+	}, 30_000);
+
+	test("rejects promptly when a text-click candidate evaluation is aborted", async () => {
+		const browserHandle = await acquireBrowser({ kind: "headless", headless: true }, { cwd: process.cwd() });
+		if (!("browser" in browserHandle)) throw new Error("Expected a Puppeteer browser");
+		const page = await browserHandle.browser.newPage();
+		try {
+			await page.setContent('<button id="abort-candidate">Abort candidate</button>');
+			const [candidate] = await page.$$("text/Abort candidate");
+			if (!candidate) throw new Error("Expected a text-query candidate");
+			await candidate.evaluate(element => {
+				Object.defineProperty(element, "closest", {
+					configurable: true,
+					value: () => {
+						// Puppeteer's page callback type cannot name DOM globals in this test environment.
+						const target = element as unknown as { dataset: { closestEntered?: string } };
+						target.dataset.closestEntered = "1";
+						return Promise.withResolvers<never>().promise;
+					},
+				});
+			});
+
+			const controller = new AbortController();
+			const reason = new Error("candidate lookup aborted");
+			const settled = clickQueryHandlerText(
+				page,
+				"text/Abort candidate",
+				'tab.click("text/Abort candidate")',
+				5_000,
+				controller.signal,
+			).then(
+				() => ({ status: "resolved" as const }),
+				error => ({ status: "rejected" as const, error }),
+			);
+			await page.waitForFunction(
+				() => {
+					const page = globalThis as unknown as {
+						document: { querySelector(selector: string): { dataset: { closestEntered?: string } } | null };
+					};
+					return page.document.querySelector("#abort-candidate")?.dataset.closestEntered === "1";
+				},
+				{ timeout: 1_000 },
+			);
+
+			controller.abort(reason);
+			// Real Chromium CDP calls cannot run under fake timers; bound the formerly unending lookup.
+			const outcome = await Promise.race([settled, Bun.sleep(500).then(() => ({ status: "hung" as const }))]);
+			if (outcome.status !== "rejected") {
+				throw new Error(`Text-click candidate lookup ${outcome.status} after abort`);
+			}
+			if (!(outcome.error instanceof Error)) throw new Error("Expected candidate lookup to reject with an Error");
+			expect(outcome.error.name).toBe("AbortError");
+			expect(outcome.error.cause).toBe(reason);
+		} finally {
+			await page.close().catch(() => undefined);
+			if (browserHandle.browser.connected) await releaseBrowser(browserHandle, { kill: true });
 		}
 	}, 30_000);
 });
@@ -540,6 +604,7 @@ return { value: await tab.value("#q"), reported: await tab.evaluate(() => window
 		const session = makeSession();
 		const prelude = createBrowserPrelude(session);
 		const starvedHtml = `<!doctype html><input id="q" value="stale"><div id="editable" contenteditable>stale</div>
+<button id="top" onclick="this.dataset.clicked=1">Top level</button>
 <iframe id="inner" srcdoc='<!doctype html><input id="deep" value="stale"><button id="go" onclick="this.dataset.clicked=1">Go</button>'></iframe>`;
 		const context = { session, toolCallId: "browser-starved" };
 		await prelude.invoke(
@@ -559,21 +624,26 @@ const inner = await tab.frame("#inner");
 await inner.fill("#deep", "nested");
 await tab.fill("#editable", "replaced");
 await inner.click("#go");
+await tab.click("text/Top level");
 return {
 	page: await tab.value("#q"),
 	frame: await inner.value("#deep"),
 	editable: await tab.text("#editable"),
 	clicked: await inner.attr("#go", "data-clicked"),
+	textClicked: await tab.attr("#top", "data-clicked"),
 };`,
 					timeout: 25,
 				},
 				context,
 			);
-			expect(valueFrom<{ page: string; frame: string; editable: string; clicked: string }>(result)).toEqual({
+			expect(
+				valueFrom<{ page: string; frame: string; editable: string; clicked: string; textClicked: string }>(result),
+			).toEqual({
 				page: "typed",
 				frame: "nested",
 				editable: "replaced",
 				clicked: "1",
+				textClicked: "1",
 			});
 		} finally {
 			await prelude.invoke({ action: "close", name: STARVED_TAB_NAME, kill: true }, context).catch(() => undefined);
@@ -701,6 +771,71 @@ return await tab.evaluate(() => ({
 			await prelude.invoke({ action: "close", name: tabName, kill: true }, context).catch(() => undefined);
 		}
 	}, 30_000);
+
+	test("scrolls below-the-fold text matches into view and clicks shadow-DOM buttons", async () => {
+		const session = makeSession();
+		const prelude = createBrowserPrelude(session);
+		const context = { session, toolCallId: "browser-text-click" };
+		const textHtml = `<!doctype html>
+<style>
+#covered-wrap { position: relative; width: max-content }
+#text-overlay { position: absolute; inset: 0; background: white }
+</style>
+<div id="covered-wrap"><button>Covered match</button><div id="text-overlay"></div></div>
+<button id="sliver" style="position: absolute; left: 0; top: calc(100vh - .5px)" onclick="window.clicks.sliver++">Sliver match</button>
+<div style="height: 4000px">Tall content</div>
+<button id="snippets" onclick="window.clicks.snippets++">View Snippets</button>
+<div style="height: 2000px"></div>
+<s-button id="save"></s-button>
+<script>
+window.clicks = { sliver: 0, snippets: 0, save: 0 };
+customElements.define("s-button", class extends HTMLElement {
+  constructor() {
+    super();
+    const root = this.attachShadow({ mode: "open" });
+    root.innerHTML = '<button id="inner-save">Save</button>';
+    root.querySelector("button").addEventListener("click", () => window.clicks.save++);
+  }
+});
+</script>`;
+		await prelude.invoke(
+			{ action: "open", name: TEXT_TAB_NAME, url: `data:text/html,${encodeURIComponent(textHtml)}` },
+			context,
+		);
+		try {
+			const result = await prelude.invoke(
+				{
+					action: "run",
+					name: TEXT_TAB_NAME,
+					code: `let blocked;
+try {
+	await tab.click("text/Covered match");
+} catch (error) {
+	blocked = error instanceof Error ? error.message : String(error);
+}
+await tab.click("text/Sliver match");
+await tab.evaluate(() => window.scrollTo(0, 0));
+await tab.click("text/View Snippets");
+const afterSnippets = await tab.evaluate(() => ({ ...window.clicks }));
+await tab.evaluate(() => window.scrollTo(0, 0));
+await tab.click("text/Save");
+await tab.evaluate(() => window.scrollTo(0, 0));
+await tab.click("pierce/#inner-save");
+return { blocked, afterSnippets, final: await tab.evaluate(() => window.clicks) };`,
+					timeout: 30,
+				},
+				context,
+			);
+			const { blocked, ...clicks } = valueFrom<{ blocked: string }>(result);
+			expect(blocked).toContain("covered by <div#text-overlay>");
+			expect(clicks).toEqual({
+				afterSnippets: { sliver: 1, snippets: 1, save: 0 },
+				final: { sliver: 1, snippets: 1, save: 2 },
+			});
+		} finally {
+			await prelude.invoke({ action: "close", name: TEXT_TAB_NAME, kill: true }, context).catch(() => undefined);
+		}
+	}, 40_000);
 });
 
 describe.skipIf(!CHROMIUM_AVAILABLE)("browser element handle clicks", () => {
