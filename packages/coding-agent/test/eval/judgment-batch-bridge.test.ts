@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import * as vm from "node:vm";
-import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
+import type { Api, AssistantMessage, ImageContent, Model } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
@@ -37,6 +37,21 @@ const SMOL: Model<Api> = {
 	contextWindow: 128000,
 	maxTokens: 4096,
 } as Model<Api>;
+const VISION: Model<Api> = {
+	...SMOL,
+	input: ["text", "image"],
+} as Model<Api>;
+
+const IMAGE_ONE: ImageContent = {
+	type: "image",
+	data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+	mimeType: "image/png",
+};
+const IMAGE_TWO: ImageContent = {
+	type: "image",
+	data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+	mimeType: "image/png",
+};
 
 const QUESTIONS = {
 	tests: { type: "bool", instructions: "Does the request mention tests?" },
@@ -49,7 +64,7 @@ interface BatchSession {
 	manager?: AsyncJobManager;
 }
 
-function makeSession(opts: { agentId?: string; jobs?: boolean } = {}): BatchSession {
+function makeSession(opts: { agentId?: string; jobs?: boolean; vision?: boolean } = {}): BatchSession {
 	const settings = Settings.isolated({
 		"async.enabled": false,
 		"task.isolation.enabled": false,
@@ -58,7 +73,7 @@ function makeSession(opts: { agentId?: string; jobs?: boolean } = {}): BatchSess
 	const authStorage = createInMemoryAuthStorage();
 	authStorage.keys.setRuntime("p", "test-key");
 	const modelRegistry = new ModelRegistry(authStorage, "/nonexistent/judgment-batch-models.yml");
-	vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([SMOL]);
+	vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([opts.vision ? VISION : SMOL]);
 	const session: Record<string, unknown> = {
 		settings,
 		modelRegistry,
@@ -190,7 +205,7 @@ describe("judge_batch bridge", () => {
 	});
 	it("validates items and options before starting", async () => {
 		const { session } = makeSession();
-		const spy = vi.spyOn(ai, "completeSimple");
+		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(reply("tests: yes"));
 		await expect(
 			runEvalJudgmentBatch({ op: "create", items: [], questions: QUESTIONS }, { session }),
 		).rejects.toThrow("items must not be empty");
@@ -231,7 +246,98 @@ describe("judge_batch bridge", () => {
 		await expect(runEvalJudgmentBatch({ op: "drain", id: "jdgb-missing" }, { session })).rejects.toThrow(
 			'unknown judge_batch "jdgb-missing"',
 		);
+		const unknownImages = {
+			op: "create",
+			items: [{ key: "a", state: "x" }],
+			questions: QUESTIONS,
+			images: { unknown: [IMAGE_ONE] },
+		};
+		await expect(runEvalJudgmentBatch(unknownImages, { session })).rejects.toThrow(
+			'images contains unknown input key "unknown"',
+		);
 		expect(spy).not.toHaveBeenCalled();
+	});
+
+	it("routes distinct image mappings to matching keyed batch items", async () => {
+		const completions: Array<{ prompt: string; images: unknown[] }> = [];
+		const complete = vi.spyOn(ai, "completeSimple").mockImplementation(async (_model, context, options) => {
+			const user = context.messages.find(message => message.role === "user");
+			const content = user?.content;
+			completions.push({
+				prompt: typeof content === "string" ? content : JSON.stringify(content),
+				images: Array.isArray(content) ? content.filter(block => block.type === "image") : [],
+			});
+			const message = reply("tests: yes");
+			options?.onAttempt?.(message);
+			return message;
+		});
+		const { session } = makeSession({ vision: true, jobs: false });
+		const created = (await runEvalJudgmentBatch(
+			{
+				op: "create",
+				items: [
+					{ key: 0, state: "state-zero" },
+					{ key: 1, state: "state-one" },
+				],
+				questions: QUESTIONS,
+				images: { "0": [IMAGE_ONE], "1": [IMAGE_TWO] },
+				concurrency: 2,
+				retries: 0,
+			},
+			{ session },
+		)) as JudgmentBatchStatus;
+
+		const items = await drain(session, created.id, 5_000);
+		expect(items.find(item => item.key === 0)?.answers).toEqual({ tests: { type: "bool", bool: 1 } });
+		expect(items.find(item => item.key === 1)?.answers).toEqual({ tests: { type: "bool", bool: 1 } });
+		expect(complete).toHaveBeenCalledTimes(2);
+		expect(completions.find(item => item.prompt.includes("state-zero"))?.images).toEqual([IMAGE_ONE]);
+		expect(completions.find(item => item.prompt.includes("state-one"))?.images).toEqual([IMAGE_TWO]);
+	});
+
+	it("keeps malformed images as per-item failures without dropping valid sibling judgments", async () => {
+		const tempDir = TempDir.createSync("@omp-eval-judge-batch-bad-image-");
+		try {
+			const brokenPath = path.join(tempDir.path(), "broken.png");
+			await Bun.write(brokenPath, "not an image");
+			const completions: Array<{ prompt: string; images: unknown[] }> = [];
+			const complete = vi.spyOn(ai, "completeSimple").mockImplementation(async (_model, context, options) => {
+				const user = context.messages.find(message => message.role === "user");
+				const content = user?.content;
+				completions.push({
+					prompt: typeof content === "string" ? content : JSON.stringify(content),
+					images: Array.isArray(content) ? content.filter(block => block.type === "image") : [],
+				});
+				const message = reply("tests: yes");
+				options?.onAttempt?.(message);
+				return message;
+			});
+			const { session } = makeSession({ vision: true, jobs: false });
+			const created = (await runEvalJudgmentBatch(
+				{
+					op: "create",
+					items: [
+						{ key: "valid", state: "state-valid" },
+						{ key: "broken", state: "state-broken" },
+					],
+					questions: QUESTIONS,
+					images: { valid: [IMAGE_ONE], broken: [brokenPath] },
+					concurrency: 2,
+					retries: 0,
+				},
+				{ session },
+			)) as JudgmentBatchStatus;
+			const items = await drain(session, created.id, 5_000);
+
+			expect(items.find(item => item.key === "valid")?.answers).toEqual({ tests: { type: "bool", bool: 1 } });
+			expect(items.find(item => item.key === "broken")?.error).toContain("invalid judgment image source");
+			expect(complete).toHaveBeenCalledTimes(1);
+			expect(completions).toHaveLength(1);
+			expect(completions[0]?.prompt).toContain("state-valid");
+			expect(completions[0]?.images).toEqual([IMAGE_ONE]);
+		} finally {
+			tempDir.removeSync();
+		}
 	});
 
 	it("drains settled items through a cursor, records failures per item, and settles the job", async () => {
@@ -439,6 +545,40 @@ describe("judgeBatch() JS prelude", () => {
 		expect(drainCalls[0]?.args.id).toBe("jdgb-1");
 		expect(drainCalls[0]?.args.timeoutMs).toBeLessThanOrEqual(30_000);
 	});
+	it("forwards image maps for array states using numeric index keys", async () => {
+		const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+		const sandbox: Record<string, unknown> = {
+			__omp_call_tool__: async (name: string, args: Record<string, unknown>) => {
+				calls.push({ name, args });
+				if (name !== "__judge_batch__") throw new Error(`unexpected bridge call ${name}`);
+				if (args.op === "create") return { id: "jdgb-images", total: 2 };
+				throw new Error(`unexpected op ${String(args.op)}`);
+			},
+		};
+		vm.createContext(sandbox);
+		vm.runInContext(JAVASCRIPT_PRELUDE_SOURCE, sandbox);
+		const imageMap = JSON.stringify({ 0: [IMAGE_ONE], 1: [IMAGE_TWO] });
+		const batch = await vm.runInContext(
+			`judgeBatch(["first", "second"], { ok: { type: "bool", instructions: "?" } }, { images: ${imageMap} })`,
+			sandbox,
+		);
+
+		expect(batch).toBeDefined();
+		expect(calls).toEqual([
+			{
+				name: "__judge_batch__",
+				args: {
+					op: "create",
+					items: [
+						{ key: 0, state: "first" },
+						{ key: 1, state: "second" },
+					],
+					questions: { ok: { type: "bool", instructions: "?" } },
+					images: { "0": [IMAGE_ONE], "1": [IMAGE_TWO] },
+				},
+			},
+		]);
+	});
 });
 
 async function runPythonJudgeBatchInSubprocess(tempDir: TempDir): Promise<PythonResult> {
@@ -458,7 +598,17 @@ async function runPythonJudgeBatchInSubprocess(tempDir: TempDir): Promise<Python
 		"second = await b.drain(timeout=30)",
 		"items = sorted(first + second, key=lambda kv: kv[0])",
 		"single = await judge('write tests', Q)",
-		'print(json.dumps({"id": b.id, "total": b.total, "items": [[k, i.ok, i.answers or i.error] for k, i in items], "single": single}))',
+		`image_batch = judge_batch({1.0: "image-float-one", "1": "image-string-one", 1.25: "image-fractional", 2.5: "image-invalid"}, Q, images={1.0: [${JSON.stringify(IMAGE_ONE)}], "1": [${JSON.stringify(IMAGE_TWO)}], 1.25: [${JSON.stringify(IMAGE_TWO)}], 2.5: "not an image list"}, retries=0)`,
+		"image_items = await image_batch.drain(timeout=30)",
+		"image_results = {repr(k): [i.ok, i.answers or i.error] for k, i in image_items}",
+		"image_batch.close()",
+		"try:",
+		'    judge_batch({"known": "state"}, Q, images={"unknown": []})',
+		"except ValueError as error:",
+		"    unknown_image_error = str(error)",
+		"else:",
+		'    raise AssertionError("unknown image key was accepted")',
+		'print(json.dumps({"id": b.id, "total": b.total, "items": [[k, i.ok, i.answers or i.error] for k, i in items], "single": single, "image_items": image_results, "unknown_image_error": unknown_image_error}))',
 	].join("\n");
 	const cellTwo = [
 		"import json",
@@ -472,30 +622,44 @@ async function runPythonJudgeBatchInSubprocess(tempDir: TempDir): Promise<Python
 		`
 import { vi } from "bun:test";
 import * as ai from ${JSON.stringify(aiPath)};
+import type { ImageContent } from ${JSON.stringify(aiPath)};
 import { executePython } from ${JSON.stringify(executorPath)};
 import { Settings } from ${JSON.stringify(settingsPath)};
 import { ModelRegistry } from ${JSON.stringify(registryPath)};
 import { createInMemoryAuthStorage } from ${JSON.stringify(setupPath)};
 
 const SMOL = ${JSON.stringify(SMOL)};
+const VISION = { ...SMOL, input: ["text", "image"] };
 const settings = Settings.isolated({ "async.enabled": false, "task.isolation.enabled": false, modelRoles: { judge: "p/smol" } });
 const authStorage = createInMemoryAuthStorage();
 authStorage.keys.setRuntime("p", "test-key");
 const modelRegistry = new ModelRegistry(authStorage, "/nonexistent/judgment-batch-py-models.yml");
-vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([SMOL]);
-const session = { cwd: ${JSON.stringify(tempDir.path())}, settings, modelRegistry, getSessionId: () => "sess-py", getAgentId: () => "Main" };
+vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([VISION]);
+const observedImageBlocks: Array<{ prompt: string; images: ImageContent[] }> = [];
 vi.spyOn(ai, "completeSimple").mockImplementation(async (_model, context) => {
 	const user = context.messages.find(message => message.role === "user");
-	const prompt = typeof user?.content === "string" ? user.content : JSON.stringify(user?.content);
+	const prompt = (typeof user?.content === "string" ? user.content : JSON.stringify(user?.content)) ?? "";
+	const images = Array.isArray(user?.content)
+		? user.content.filter((block): block is ImageContent => block.type === "image")
+		: [];
+	if (images.length > 0) observedImageBlocks.push({ prompt, images });
 	return {
 		role: "assistant",
 		api: "openai-responses",
 		provider: "p",
 		model: "smol",
 		stopReason: "stop",
-		content: [{ type: "text", text: prompt.includes("tests") ? "tests: yes" : "tests: no" }],
+		content: [{ type: "text", text: prompt.includes("tests") || prompt.includes("image-") ? "tests: yes" : "tests: no" }],
 	};
 });
+const session = {
+	cwd: ${JSON.stringify(tempDir.path())},
+	hasUI: false,
+	getSessionFile: () => ${JSON.stringify(path.join(tempDir.path(), "session.jsonl"))},
+	getSessionSpawns: () => null,
+	settings,
+	modelRegistry,
+};
 const options = {
 	cwd: ${JSON.stringify(tempDir.path())},
 	sessionId: "py-judge-batch",
@@ -504,7 +668,8 @@ const options = {
 };
 const one = await executePython(${JSON.stringify(cellOne)}, options);
 const two = await executePython(${JSON.stringify(cellTwo)}, options);
-await Bun.write(${JSON.stringify(resultPath)}, JSON.stringify({ exitCode: one.exitCode || two.exitCode, output: one.output + "\\n" + two.output }));
+const imageReport = "\\n__IMAGE_BLOCKS__" + JSON.stringify(observedImageBlocks);
+await Bun.write(${JSON.stringify(resultPath)}, JSON.stringify({ exitCode: one.exitCode || two.exitCode, output: one.output + "\\n" + two.output + imageReport }));
 process.exit(0);
 `,
 	);
@@ -537,6 +702,24 @@ describe("judge_batch() Python prelude", () => {
 			});
 			expect(String(one.id)).toMatch(/^jdgb-/);
 			expect(two).toEqual({ rest: [], status: 2, results: ["a", "b"] });
+			expect(one.image_items).toEqual({
+				"1": [true, { tests: { type: "bool", bool: 1 } }],
+				"'1'": [true, { tests: { type: "bool", bool: 1 } }],
+				"1.25": [true, { tests: { type: "bool", bool: 1 } }],
+				"2.5": [false, 'images for input "2.5" must be an array of paths or image attachments'],
+			});
+			expect(one.unknown_image_error).toBe('images contains unknown input key "unknown"');
+			const imageReport = result.output.split("\n").find(line => line.startsWith("__IMAGE_BLOCKS__"));
+			expect(imageReport).toBeDefined();
+			const imageCaptures = JSON.parse(imageReport?.slice("__IMAGE_BLOCKS__".length) ?? "null");
+			expect(imageCaptures).toHaveLength(3);
+			expect(imageCaptures).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ prompt: expect.stringContaining("image-float-one"), images: [IMAGE_ONE] }),
+					expect.objectContaining({ prompt: expect.stringContaining("image-string-one"), images: [IMAGE_TWO] }),
+					expect.objectContaining({ prompt: expect.stringContaining("image-fractional"), images: [IMAGE_TWO] }),
+				]),
+			);
 		} finally {
 			tempDir.removeSync();
 		}

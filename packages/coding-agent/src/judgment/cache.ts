@@ -67,9 +67,9 @@ CREATE INDEX IF NOT EXISTS idx_usage_state ON usage(state);
 
 /** Cached answers for one request, plus the state identity {@link JudgmentCache.record} reuses. */
 export interface CachedAnswers {
-	/** `sha256` of the canonical state JSON. */
+	/** `sha256` of canonical state JSON or the namespaced multimodal identity. */
 	stateId: string;
-	/** Canonical state JSON, stored once per distinct state. */
+	/** Canonical state JSON or a digest-only image envelope, stored once per identity. */
 	state: string;
 	/** Answers already known for the request's questions, keyed by question id. */
 	answers: Record<string, Answer>;
@@ -90,6 +90,17 @@ function questionKey(name: string, question: Question): QuestionKey {
 		// `null`, not SQL NULL: NULLs never collide under UNIQUE, which would let duplicates in.
 		criteria: stableStringifyJson(question.criteria ?? null),
 	};
+}
+
+function cacheStateIdentity(request: JudgmentRequest): string {
+	const state = stableStringifyJson(request.state);
+	if (!request.images?.length) return state;
+
+	const images = request.images.map(image => ({
+		mimeType: image.mimeType,
+		digest: new Bun.CryptoHasher("sha256").update(Buffer.from(image.data, "base64")).digest("hex"),
+	}));
+	return `multimodal-judgment-cache-v1:${stableStringifyJson({ state, images })}`;
 }
 
 function unixSeconds(): number {
@@ -160,7 +171,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
 	 * a database failure is logged and reported as no cached answers.
 	 */
 	lookup(model: string, request: JudgmentRequest): CachedAnswers {
-		const state = stableStringifyJson(request.state);
+		const state = cacheStateIdentity(request);
 		const stateId = new Bun.CryptoHasher("sha256").update(state).digest("hex");
 		const answers: Record<string, Answer> = {};
 		try {

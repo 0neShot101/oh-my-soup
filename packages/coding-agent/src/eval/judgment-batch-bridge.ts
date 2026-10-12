@@ -16,7 +16,7 @@
  * batch survives kernel resets (`attach(id)`) until `close()` or its owner
  * session releases it.
  */
-import type { JudgmentState, Question } from "@oh-my-pi/pi-ai";
+import type { ImageContent, JudgmentState, Question } from "@oh-my-pi/pi-ai";
 import { isRecord, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { formatCost } from "@oh-my-pi/pi-tui/overlays/agent-hub-renderer";
 import type { ChainJudge } from "../judgment";
@@ -27,7 +27,14 @@ import { withBridgeTimeoutPause } from "./bridge-timeout";
 import { EVAL_HANDLE_CONCURRENCY, evalRequestSlots } from "./completion-bridge";
 import { JUDGMENT_BATCH_PROGRESS_EVENT_CHANNEL, type JudgmentBatchProgress } from "./judgment-batch-events";
 import type { JsStatusEvent } from "./js/shared/types";
-import { type CellAnswer, parseQuestions, parseState, sessionJudge, toEvalJudgmentResult } from "./judgment-bridge";
+import {
+	type CellAnswer,
+	loadEvalJudgmentImages,
+	parseQuestions,
+	parseState,
+	sessionJudge,
+	toEvalJudgmentResult,
+} from "./judgment-bridge";
 
 /** Synthetic bridge name reserved for the `judge_batch()` helper across both runtimes. */
 export const EVAL_JUDGMENT_BATCH_BRIDGE_NAME = "__judge_batch__";
@@ -94,6 +101,8 @@ export type EvalJudgmentBatchResult =
 interface BatchInput {
 	key: BatchKey;
 	state: JudgmentState;
+	imageSources?: unknown;
+	imageSourceError?: string;
 }
 
 interface BatchOptions {
@@ -118,8 +127,33 @@ function parseItems(value: unknown): BatchInput[] {
 		if (!isRecord(entry) || !isBatchKey(entry.key)) throw invalid(`item ${index} needs a string or number key`);
 		if (seen.has(entry.key)) throw invalid(`duplicate item key ${JSON.stringify(entry.key)}`);
 		seen.add(entry.key);
-		return { key: entry.key, state: parseState(entry.state) };
+		const input: BatchInput = { key: entry.key, state: parseState(entry.state) };
+		if (Object.prototype.hasOwnProperty.call(entry, "images")) {
+			if (Array.isArray(entry.images)) {
+				input.imageSources = entry.images;
+			} else {
+				input.imageSourceError = `images for input ${JSON.stringify(String(entry.key))} must be an array of paths or image attachments`;
+			}
+		}
+		return input;
 	});
+}
+
+function assignImageSources(inputs: BatchInput[], value: unknown): void {
+	if (value === undefined) return;
+	if (!isRecord(value)) throw invalid("images must be an object keyed by input key");
+
+	const inputByKey = new Map(inputs.map(input => [String(input.key), input]));
+	for (const key of Object.keys(value)) {
+		const input = inputByKey.get(key);
+		if (!input) throw invalid(`images contains unknown input key ${JSON.stringify(key)}`);
+		const sources = value[key];
+		if (!Array.isArray(sources)) {
+			input.imageSourceError = `images for input ${JSON.stringify(key)} must be an array of paths or image attachments`;
+			continue;
+		}
+		input.imageSources = sources;
+	}
 }
 
 function parseCount(value: unknown, name: string, fallback: number, max = Number.POSITIVE_INFINITY): number {
@@ -379,6 +413,15 @@ export class JudgmentBatch {
 	}
 
 	async #judgeItem(judge: ChainJudge, input: BatchInput, signal: AbortSignal): Promise<JudgmentBatchItem> {
+		if (signal.aborted) return { key: input.key, error: "cancelled" };
+		if (input.imageSourceError) return { key: input.key, error: input.imageSourceError };
+		let images: ImageContent[] | undefined;
+		try {
+			images = await loadEvalJudgmentImages(input.imageSources, this.#session.cwd);
+		} catch (error) {
+			return { key: input.key, error: error instanceof Error ? error.message : String(error) };
+		}
+
 		let lastError: unknown;
 		for (let attempt = 0; attempt <= this.#options.retries; attempt++) {
 			if (signal.aborted) return { key: input.key, error: "cancelled" };
@@ -389,7 +432,14 @@ export class JudgmentBatch {
 			}
 			try {
 				const result = toEvalJudgmentResult(
-					await judge.judge({ state: input.state, questions: this.#questions }, { signal }),
+					await judge.judge(
+						{
+							state: input.state,
+							questions: this.#questions,
+							...(images === undefined ? {} : { images }),
+						},
+						{ signal },
+					),
 				);
 				return { key: input.key, answers: result.answers, model: result.model };
 			} catch (error) {
@@ -496,6 +546,7 @@ export async function runEvalJudgmentBatch(
 	switch (args.op) {
 		case "create": {
 			const items = parseItems(args.items);
+			assignImageSources(items, args.images);
 			const questions = parseQuestions(args.questions);
 			const batch = new JudgmentBatch(
 				session,

@@ -149,7 +149,13 @@ const kRejections = Symbol("judgment.rejections");
 const kRoleChain = Symbol("judgment.roleChain");
 interface RegistryWithRejections extends ModelRegistry {
 	[kRejections]?: Map<string, number>;
-	[kRoleChain]?: { settings: Settings; revision: number; list: RoleChainCandidate[]; expiresAt: number };
+	[kRoleChain]?: {
+		settings: Settings;
+		revision: number;
+		list: RoleChainCandidate[];
+		imageList: RoleChainCandidate[];
+		expiresAt: number;
+	};
 }
 
 /**
@@ -157,16 +163,21 @@ interface RegistryWithRejections extends ModelRegistry {
  * A settings change (e.g. a new judge role) resolves afresh; registry or credential changes still wait out the TTL,
  * so {@link hasNativeJudge} (uncached) can briefly see a different chain after a login or discovery change.
  */
-function cachedJudgeRoleChain(settings: Settings, registry: RegistryWithRejections): RoleChainCandidate[] {
+function cachedJudgeRoleChain(
+	settings: Settings,
+	registry: RegistryWithRejections,
+	requiresImages = false,
+): RoleChainCandidate[] {
 	const now = Date.now();
 	const revision = settings.revision;
 	const cached = registry[kRoleChain];
 	if (cached && cached.settings === settings && cached.revision === revision && now < cached.expiresAt) {
-		return cached.list;
+		return requiresImages ? cached.imageList : cached.list;
 	}
-	const list = judgeRoleChain(settings, registry);
-	registry[kRoleChain] = { settings, revision, list, expiresAt: now + CANDIDATE_TTL_MS };
-	return list;
+	const imageList = resolveRoleChain("judge", settings, roleCandidatePool("judge", settings, registry));
+	const list = textJudgeRoleChain(imageList);
+	registry[kRoleChain] = { settings, revision, list, imageList, expiresAt: now + CANDIDATE_TTL_MS };
+	return requiresImages ? imageList : list;
 }
 
 /** Append the session model when no candidate is native and the chain does not already route to it. */
@@ -198,11 +209,14 @@ export function kindOf(value: RoleChainCandidate | Model): JudgeKind {
  * candidates remain: a prompted model never stands in for a failed native
  * judgment, whose calibrated probabilities it cannot reproduce.
  */
-function judgeRoleChain(settings: Settings, registry: ModelRegistry): RoleChainCandidate[] {
-	const chain = resolveRoleChain("judge", settings, roleCandidatePool("judge", settings, registry));
+function textJudgeRoleChain(chain: RoleChainCandidate[]): RoleChainCandidate[] {
 	const firstNative = chain.findIndex(candidate => kindOf(candidate) === "native");
 	if (firstNative < 0) return chain;
 	return chain.filter((candidate, index) => index < firstNative || kindOf(candidate) === "native");
+}
+
+function judgeRoleChain(settings: Settings, registry: ModelRegistry): RoleChainCandidate[] {
+	return textJudgeRoleChain(resolveRoleChain("judge", settings, roleCandidatePool("judge", settings, registry)));
 }
 
 /**
@@ -230,7 +244,7 @@ export class ChainJudge implements Judge {
 	readonly label = "judge role chain";
 	readonly #deps: JudgeDeps;
 	readonly #telemetry: AgentTelemetry | undefined;
-	#candidates: { chain: RoleChainCandidate[]; list: RoleChainCandidate[] } | undefined;
+	#candidates: { chain: RoleChainCandidate[]; list: RoleChainCandidate[]; requiresImages: boolean } | undefined;
 
 	constructor(deps: JudgeDeps) {
 		this.#deps = deps;
@@ -241,7 +255,11 @@ export class ChainJudge implements Judge {
 		request: JudgmentRequest<Q>,
 		options: JudgeOptions = {},
 	): Promise<JudgmentResult<Q>> {
-		return this.withCandidate(candidate => candidate.judge(request, options), options);
+		return this.#withCandidate(
+			candidate => candidate.judge(request, options),
+			options,
+			request.images !== undefined && request.images.length > 0,
+		);
 	}
 
 	/**
@@ -254,10 +272,20 @@ export class ChainJudge implements Judge {
 	}
 
 	async withCandidate<T>(run: (judge: Judge, kind: JudgeKind) => Promise<T>, options: JudgeOptions = {}): Promise<T> {
+		return this.#withCandidate(run, options, false);
+	}
+
+	async #withCandidate<T>(
+		run: (judge: Judge, kind: JudgeKind) => Promise<T>,
+		options: JudgeOptions,
+		requiresImages: boolean,
+	): Promise<T> {
 		const signal = options.signal;
 		let lastFailure: string | undefined;
 		let lastUnavailable: string | undefined;
-		const candidates = this.#resolveCandidates();
+		let compatibleCandidate = false;
+		let unsupportedCandidate = false;
+		const candidates = this.#resolveCandidates(requiresImages);
 		const rejections = this.#rejections();
 		for (const candidate of candidates) {
 			if (signal?.aborted) {
@@ -278,6 +306,12 @@ export class ChainJudge implements Judge {
 					lastUnavailable = `no API key for ${candidate.model.provider}/${candidate.model.id}`;
 					continue;
 				}
+				if (requiresImages && judge.supportsImages !== true) {
+					unsupportedCandidate = true;
+					lastUnavailable = `${identity} does not support image inputs`;
+					continue;
+				}
+				compatibleCandidate = true;
 				return await run(judge, kindOf(candidate));
 			} catch (error) {
 				if (signal?.aborted) {
@@ -295,7 +329,13 @@ export class ChainJudge implements Judge {
 				});
 			}
 		}
-		if (candidates.length === 0) throw new Error("judgment: no judge model available");
+		if (requiresImages && !compatibleCandidate && unsupportedCandidate) {
+			throw new Error("judgment: no compatible judge candidate supports images");
+		}
+		if (candidates.length === 0) {
+			if (requiresImages) throw new Error("judgment: no compatible judge candidate supports images");
+			throw new Error("judgment: no judge model available");
+		}
 		throw new Error(`judgment: every judge candidate failed: ${lastFailure ?? lastUnavailable ?? "unknown error"}`);
 	}
 
@@ -323,12 +363,14 @@ export class ChainJudge implements Judge {
 		return (registry[kRejections] ??= new Map());
 	}
 
-	#resolveCandidates(): RoleChainCandidate[] {
+	#resolveCandidates(requiresImages = false): RoleChainCandidate[] {
 		const { settings, registry, sessionModel } = this.#deps;
-		const candidates = cachedJudgeRoleChain(settings, registry);
-		if (candidates === this.#candidates?.chain) return this.#candidates.list;
+		const candidates = cachedJudgeRoleChain(settings, registry, requiresImages);
+		if (candidates === this.#candidates?.chain && requiresImages === this.#candidates.requiresImages) {
+			return this.#candidates.list;
+		}
 		const list = withSessionFallback(candidates, sessionModel);
-		this.#candidates = { chain: candidates, list };
+		this.#candidates = { chain: candidates, list, requiresImages };
 		return list;
 	}
 
@@ -413,6 +455,7 @@ function nativeJudge(
 	const cacheModel = `${model.provider}/${model.id}`;
 	return {
 		label: judge.label,
+		...(judge.supportsImages === undefined ? {} : { supportsImages: judge.supportsImages }),
 		async judge<Q extends Questions>(
 			request: JudgmentRequest<Q>,
 			options?: JudgeOptions,
@@ -443,7 +486,11 @@ function nativeJudge(
 				let partial = tokenUsage(0, 0);
 				try {
 					fresh = await judge.judge(
-						{ state: request.state, questions: pending },
+						{
+							state: request.state,
+							questions: pending,
+							...(request.images === undefined ? {} : { images: request.images }),
+						},
 						{
 							signal: options?.signal,
 							onPartialUsage: usage => {
