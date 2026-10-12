@@ -62,6 +62,7 @@ describe("SessionAnonymizer", () => {
 					provider: "anthropic",
 					model: "claude-opus-5-5",
 					usage,
+					elidedOutputTokens: 12,
 					stopReason: "toolUse",
 					providerPayload: {
 						items: [
@@ -136,6 +137,7 @@ describe("SessionAnonymizer", () => {
 			model: "claude-opus-5-5",
 			provider: "anthropic",
 			usage,
+			elidedOutputTokens: 12,
 			stopReason: "toolUse",
 		});
 
@@ -160,6 +162,16 @@ describe("SessionAnonymizer", () => {
 
 		expect(at(toolResult, "message", "content", 0, "text")).toMatch(/^\[redacted #\d+: 53 chars, 1 line\]$/);
 		expect(at(toolResult, "message", "details")).toEqual({ matchCount: 1, searchPath: cwd });
+	});
+
+	test("preserves the suppressed Bash timing flag", () => {
+		const anonymizer = new SessionAnonymizer();
+		const result = anonymizer.entry({
+			type: "message",
+			message: { role: "toolResult", toolName: "bash", details: { wallTimeNoticeEmitted: false } },
+		});
+
+		expect(at(result, "message", "details")).toEqual({ wallTimeNoticeEmitted: false });
 	});
 
 	test("rewrites shell commands keeping programs, flags, and operators", () => {
@@ -421,6 +433,7 @@ describe("SessionAnonymizer", () => {
 					details: {
 						status: "customer-acme",
 						jobId: "account_12345",
+						wallTimeNoticeEmitted: "customer-acme",
 						results: [{ structuredOutput: { data: { status: "customer-acme" } } }],
 						progress: [{ status: "completed", tokens: 12 }],
 					},
