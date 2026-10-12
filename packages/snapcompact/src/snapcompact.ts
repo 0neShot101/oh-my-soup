@@ -32,11 +32,9 @@
  *   billing (32px × 1.2, 10k-patch budget at `detail: "original"`) is
  *   area-proportional, so resolution cannot improve chars/$ — 1568 stays.
  *   `detail: "high"` would downgrade (2,500-patch cap); `original` is sent.
- * - **Unknown providers** default to `8on22-bw`. `providerImageBudget` still
- *   caps per-request images per provider so inline imaging cannot flood a
- *   request with attachments, but the old OpenRouter-specific 8-image cap is
- *   gone; routers now use the same permissive budget as direct
- *   Anthropic/Claude lines unless configured otherwise upstream.
+ * - **Unknown providers** default to `8on22-bw`. `providerImageBudget` caps
+ *   per-request images at the deployment's catalog `image-count-budget`, so
+ *   inline imaging cannot flood a request with attachments.
  *
  * The per-frame token estimate follows the reading model's catalog
  * `image-tokenization` rule (its lineage, not the gateway), so Claude behind
@@ -51,7 +49,8 @@
  * re-attached to the compaction summary message on every context rebuild.
  */
 
-import type { Api, ImageContent, Message, TextContent } from "@oh-my-pi/pi-ai";
+import type { Api, ImageContent, Message, Model, TextContent } from "@oh-my-pi/pi-ai";
+import { reachesOfficialEndpoint } from "@oh-my-pi/pi-ai/providers/anthropic-state";
 import {
 	type ImageSize,
 	type ImageTokenization,
@@ -59,6 +58,7 @@ import {
 	imageTokens,
 	resolveImageTokenization,
 } from "@oh-my-pi/pi-catalog/compat/image-tokenization";
+import { resolveImageCountBudget, resolveInlineImageByteBudget } from "@oh-my-pi/pi-catalog/compat/request-size";
 import { classifyModel, compareRevision, parseRevision } from "@oh-my-pi/pi-catalog/identity";
 import { renderSnapcompactPng, snapcompactSupportedChars } from "@oh-my-pi/pi-natives";
 import { formatGroupedPaths, prompt } from "@oh-my-pi/pi-utils";
@@ -496,22 +496,32 @@ export const FRAME_TOKEN_ESTIMATE = 5024;
  *  standing request bodies at large context windows. */
 export const FRAME_DATA_BYTES_ESTIMATE = 170_000;
 
-/** Maximum snapcompact image base64 carried in every rebuilt provider request.
- *  Above this, provider backends can accept the HTTP body but fail mid-stream
+/** Frame payload cap for a deployment without a catalog `inline-image-byte-budget`:
+ *  an unmeasured backend can accept the HTTP body and still fail mid-stream
  *  with opaque 5xx errors. Keep this independent from visual-token budgeting:
  *  a 1M-token model can afford 70 images on paper, but not the resulting
  *  ~11 MB JSON payload on every turn. */
-export const FRAME_DATA_BYTES_BUDGET = 3_000_000;
+export const DEFAULT_FRAME_DATA_BYTES_BUDGET = 3_000_000;
+
+/** Base64 image bytes the archive frames riding every request to `model` may
+ *  carry: half the deployment's inline-image byte budget, else
+ *  {@link DEFAULT_FRAME_DATA_BYTES_BUDGET}. Frames are the oldest images in the
+ *  request, so the send-time byte clamp evicts them first; the other half stays
+ *  free for live screenshots. */
+export function frameDataBytesBudget(model: Model | undefined): number {
+	const inlineBudget = model ? resolveInlineImageByteBudget(model, reachesOfficialEndpoint(model)) : undefined;
+	return inlineBudget === undefined ? DEFAULT_FRAME_DATA_BYTES_BUDGET : Math.floor(inlineBudget / 2);
+}
 
 /** Default edge variants whose frames shrink with pixel area. Inkier variants
  *  keep the full {@link FRAME_DATA_BYTES_ESTIMATE} at any frame size. */
 const AREA_PRICED_VARIANTS: readonly ShapeGeometry[] = [SHAPE_VARIANTS["8on22-bw"], SHAPE_VARIANTS["11on16-bw"]];
 
-/** Frame-count cap implied by {@link FRAME_DATA_BYTES_BUDGET} for frames
- *  rendered by `shape`. {@link AREA_PRICED_VARIANTS} below 1932px are charged
+/** Frame-count cap a `budget` of base64 bytes implies for frames rendered by
+ *  `shape`. {@link AREA_PRICED_VARIANTS} below 1932px are charged
  *  {@link FRAME_DATA_BYTES_ESTIMATE} scaled by pixel area; every other shape
  *  pays the full estimate. */
-export function maxFramesForDataBudget(shape: ShapeGeometry): number {
+export function maxFramesForDataBudget(shape: ShapeGeometry, budget: number): number {
 	const areaPriced = AREA_PRICED_VARIANTS.some(
 		variant =>
 			variant.font === shape.font &&
@@ -525,7 +535,7 @@ export function maxFramesForDataBudget(shape: ShapeGeometry): number {
 	);
 	const areaRatio = areaPriced ? (shape.frameSize / HIGH_RES_ANTHROPIC_VARIANT.frameSize) ** 2 : 1;
 	const frameBytes = Math.min(FRAME_DATA_BYTES_ESTIMATE, Math.ceil(FRAME_DATA_BYTES_ESTIMATE * areaRatio));
-	return Math.max(1, Math.floor(FRAME_DATA_BYTES_BUDGET / frameBytes));
+	return Math.max(1, Math.floor(budget / frameBytes));
 }
 
 /** Base64 byte length for persisted snapcompact frames. */
@@ -533,36 +543,22 @@ export function frameDataBytes(frames: readonly Pick<Frame, "data">[]): number {
 	return frames.reduce((sum, frame) => sum + frame.data.length, 0);
 }
 
-/**
- * Per-request image-count budgets by provider id. These cap how many images an
- * entire request may carry (archive/system-prompt/tool-result imaging combined).
- * The values are conservative policy caps under the vendor hard limits
- * (Anthropic 100, OpenAI 500, Gemini ~2500); unknown providers fall to a safe
- * floor rather than sending unbounded attachments.
- */
-export const PROVIDER_IMAGE_BUDGETS: Record<string, number> = {
-	anthropic: 90,
-	"amazon-bedrock": 90,
-	openai: 200,
-	"openai-codex": 200,
-	google: 200,
-	"google-vertex": 200,
-	"google-gemini-cli": 200,
-	openrouter: 90,
-	umans: 10,
-};
-
-/** Safe floor for unknown providers (strictest mainstream measured: Groq ~5). */
+/** Safe floor for a deployment whose catalog rules set no `image-count-budget`
+ *  (strictest mainstream measured: Groq ~5). */
 export const DEFAULT_PROVIDER_IMAGE_BUDGET = 5;
 
-/** Per-request image budget for `provider`; unknown providers get the floor. */
-export function providerImageBudget(provider: string | undefined): number {
-	return (provider !== undefined ? PROVIDER_IMAGE_BUDGETS[provider] : undefined) ?? DEFAULT_PROVIDER_IMAGE_BUDGET;
+/** Most images one request to `model`'s deployment may carry, archive,
+ *  system-prompt and tool-result imaging combined. */
+export function providerImageBudget(model: Model | undefined): number {
+	return (
+		(model ? resolveImageCountBudget(model, reachesOfficialEndpoint(model)) : undefined) ??
+		DEFAULT_PROVIDER_IMAGE_BUDGET
+	);
 }
 
-/** Archive frame cap for `provider`: image budget, never above {@link MAX_FRAMES_DEFAULT}. */
-export function providerFrameBudget(provider: string | undefined): number {
-	return Math.min(providerImageBudget(provider), MAX_FRAMES_DEFAULT);
+/** Archive frame cap for `model`: its image budget, never above {@link MAX_FRAMES_DEFAULT}. */
+export function providerFrameBudget(model: Model | undefined): number {
+	return Math.min(providerImageBudget(model), MAX_FRAMES_DEFAULT);
 }
 
 /** Key under `CompactionEntry.preserveData` holding the frame archive. */
@@ -1969,6 +1965,53 @@ export function historyBlocks(archive: Archive, options: HistoryBlockOptions = {
 		}
 	}
 	return blocks;
+}
+
+/**
+ * Re-applies a smaller frame byte budget to blocks {@link historyBlocks} already built: keeps the newest frames that
+ * fit, priced as {@link historyBlocks} prices them, and replaces each run of dropped frames with one omission notice.
+ * Returns `blocks` itself when every frame fits.
+ */
+export function capFrameDataBytes(
+	blocks: (TextContent | ImageContent)[],
+	maxFrameDataBytes: number,
+): (TextContent | ImageContent)[] {
+	const kept = new Set<number>();
+	let usedBytes = 0;
+	let dropped = false;
+	for (let index = blocks.length - 1; index >= 0; index--) {
+		const block = blocks[index];
+		if (block.type !== "image") continue;
+		if (usedBytes + block.data.length > maxFrameDataBytes) {
+			dropped = true;
+			continue;
+		}
+		usedBytes += block.data.length;
+		kept.add(index);
+	}
+	if (!dropped) return blocks;
+
+	const capped: (TextContent | ImageContent)[] = [];
+	let omittedFrames = 0;
+	let omittedBytes = 0;
+	const flushOmitted = (): void => {
+		if (omittedFrames === 0) return;
+		capped.push({ type: "text", text: omittedFrameNotice(omittedFrames, omittedBytes) });
+		omittedFrames = 0;
+		omittedBytes = 0;
+	};
+	for (let index = 0; index < blocks.length; index++) {
+		const block = blocks[index];
+		if (block.type === "image" && !kept.has(index)) {
+			omittedFrames++;
+			omittedBytes += block.data.length;
+			continue;
+		}
+		flushOmitted();
+		capped.push(block);
+	}
+	flushOmitted();
+	return capped;
 }
 
 // ============================================================================

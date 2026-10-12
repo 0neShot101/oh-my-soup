@@ -15,12 +15,12 @@ Built for [omp](https://github.com/can1357/oh-my-pi)'s compaction pipeline, but 
 
 Frame shapes are provider-aware, chosen by SQuAD recall evals (see `research/`) against real provider billing:
 
-| Reader | Default shape | Notes |
-| --- | --- | --- |
-| Anthropic | `11on16-bw` | X.org 8x13 glyphs on an 11px advance; high-res Claude lines get 1932px frames |
-| Google | `8on22-bw` @2048 | X.org 8x13 glyphs on a 22px pitch; Gemini bills a fixed per-image budget, so larger frames are free chars |
-| OpenAI | `8on22-bw` | X.org 8x13 glyphs on a 22px pitch, sent at `detail: "original"` |
-| Unknown | Anthropic shape | Per-provider image-count budgets guard against gateways that silently drop frames |
+| Reader    | Default shape    | Notes                                                                                                     |
+| --------- | ---------------- | --------------------------------------------------------------------------------------------------------- |
+| Anthropic | `11on16-bw`      | X.org 8x13 glyphs on an 11px advance; high-res Claude lines get 1932px frames                             |
+| Google    | `8on22-bw` @2048 | X.org 8x13 glyphs on a 22px pitch; Gemini bills a fixed per-image budget, so larger frames are free chars |
+| OpenAI    | `8on22-bw`       | X.org 8x13 glyphs on a 22px pitch, sent at `detail: "original"`                                           |
+| Unknown   | Anthropic shape  | Per-provider image-count budgets guard against gateways that silently drop frames                         |
 
 `resolveShape({ api, id })` matches the model id, not just the wire API — a Claude routed through Vertex or OpenRouter keeps its Claude shape. Frames are priced by the reading model's lineage: its catalog `image-tokenization` rule (so that Claude is billed as Claude, and Opus 4.6 under the standard 1,568-token tier), falling back to the catalog rule for the wire API carrying the request when the lineage has none. A reader with neither costs `FRAME_TOKEN_ESTIMATE` per frame.
 
@@ -42,8 +42,8 @@ Render arbitrary text into LLM image blocks:
 import { renderMany, frames, resolveShape } from "@oh-my-pi/snapcompact";
 
 const images = renderMany(longText, { model }); // ImageContent[], first page first
-const count = frames(longText, { model });      // frame count without rendering
-const shape = resolveShape(model);              // eval-optimal Shape for the reader
+const count = frames(longText, { model }); // frame count without rendering
+const shape = resolveShape(model); // eval-optimal Shape for the reader
 ```
 
 Run a full compaction pass over prepared messages:
@@ -58,11 +58,11 @@ const result = await compact(preparation, { model });
 
 ## API surface
 
-- **Compaction**: `compact`, `CompactionPreparation`, `CompactionResult`, `getPreservedArchive`, `images`, `historyBlocks`
+- **Compaction**: `compact`, `CompactionPreparation`, `CompactionResult`, `getPreservedArchive`, `images`, `historyBlocks`, `capFrameDataBytes`
 - **Rendering**: `render`, `renderMany`, `frames`, `geometry`
 - **Shapes**: `SHAPES`, `SHAPE_VARIANTS`, `resolveShape`, `resolveShapeForText`, `idealShapeVariant`, `isShape`, `isShapeVariantName`
 - **Text**: `serializeConversation`, `normalize`, `scanRenderability`, `renderabilityProbeText`, `dimStopwords`, `wrap`
-- **Budgets**: `providerImageBudget`, `MAX_FRAMES_DEFAULT`, `FRAME_TOKEN_ESTIMATE`, `frameBilling`, `frameTokens`, `frameBillingKey`, `HQ_EDGE_FRAMES`
+- **Budgets**: `providerImageBudget`, `frameDataBytesBudget`, `MAX_FRAMES_DEFAULT`, `FRAME_TOKEN_ESTIMATE`, `frameBilling`, `frameTokens`, `frameBillingKey`, `HQ_EDGE_FRAMES`
 - **File ops**: `createFileOps`, `computeFileLists`, `upsertFileOperations`
 
 ## References

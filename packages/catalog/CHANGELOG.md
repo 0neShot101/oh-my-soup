@@ -7,6 +7,15 @@
 ### Added
 
 - Added the `honors-claude-code-beta-kill-switch` axis (`compat.honorsClaudeCodeBetaKillSwitch`), on for the `anthropic` provider, so a rule or `models.yml` override decides which providers honor `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` ([#15458](https://github.com/can1357/oh-my-pi/pull/15458) by [@H4vC](https://github.com/H4vC))
+### Breaking Changes
+
+- `resolveInlineImageByteBudget(model, officialEndpoint)` and `resolveImageCountBudget(model, officialEndpoint)` take whether the request reaches the official endpoint instead of reading `compat.officialEndpoint`, which misses request-time reroutes such as `ANTHROPIC_BASE_URL`; pass pi-ai's `reachesOfficialEndpoint(model)` ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Added
+
+- Added the `image-count-budget` rule for how many images one request may carry (Anthropic 90, Codex 200, other hosts unchanged) and the `official-image-count-budget` override that applies only on the official endpoint: Anthropic 600 (100 on 200k-window Claude models), Codex 2,000 ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+- Added a 24 MB inline-image byte budget for the Codex backend, which now counts as its official endpoint at its default URL and at paths under it such as `/codex/responses` ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+- Added `isOfficialCodexApiUrl` to `wire/codex`, moved from pi-ai ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.10.0] - 2026-10-12
 

@@ -8,7 +8,9 @@ import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -219,7 +221,31 @@ describe("snapcompact archive sized by the compaction trigger", () => {
 		expect(frames).toBeGreaterThan(0);
 		expect(frames * framePrice(model)).toBeLessThanOrEqual(SHARE * 60_000);
 		// The window alone would allow the full payload cap.
-		expect(frames).toBeLessThan(snapcompact.maxFramesForDataBudget(snapcompact.resolveShape(model)));
+		expect(frames).toBeLessThan(
+			snapcompact.maxFramesForDataBudget(snapcompact.resolveShape(model), snapcompact.frameDataBytesBudget(model)),
+		);
+	});
+
+	it("lets a large trigger plan past 3 MB of frames on the official endpoint, but not through a proxy", async () => {
+		const official = opus(1_000_000);
+		const proxied = {
+			...buildModel({ ...toModelSpec(official), baseUrl: "https://anthropic-proxy.example" }),
+			maxTokens: 64_000,
+		};
+		const settings = { "compaction.thresholdTokens": 600_000 };
+		const officialFrames = await requestedFrames(official, settings);
+		const proxiedFrames = await requestedFrames(proxied, settings);
+
+		const shape = snapcompact.resolveShape(official);
+		expect(proxiedFrames).toBe(
+			snapcompact.maxFramesForDataBudget(shape, snapcompact.DEFAULT_FRAME_DATA_BYTES_BUDGET),
+		);
+		expect(officialFrames).toBeGreaterThan(proxiedFrames);
+		// The trigger, not the 12 MB frame share, decides the official count.
+		expect(officialFrames).toBeLessThan(
+			snapcompact.maxFramesForDataBudget(shape, snapcompact.frameDataBytesBudget(official)),
+		);
+		expect(officialFrames * framePrice(official)).toBeLessThanOrEqual(SHARE * 600_000);
 	});
 
 	it("sizes from the active model's compaction.modelThresholds entry", async () => {
