@@ -2426,6 +2426,25 @@ const streamAnthropicOnce = (
 				options.fallbackCreditRedemption.params
 					? options.fallbackCreditRedemption
 					: undefined;
+			// A body frozen before the kill switch was set still carries the fields
+			// it withholds; the credit token is bound to that body, so forfeit it
+			// and build a fresh request. Server tools that already ran would re-run
+			// and re-bill on a tokenless retry, so surface that case instead.
+			const frozenBody = frozenRedemption?.params as MessageCreateParamsStreaming | undefined;
+			const forfeitFrozenForKillSwitch =
+				killSwitchActive &&
+				frozenBody !== undefined &&
+				(carriesThinkingBinding(frozenBody.thinking) ||
+					frozenBody.context_management !== undefined ||
+					carriesSignedCompaction(frozenBody));
+			if (
+				forfeitFrozenForKillSwitch &&
+				frozenRedemption?.refusedContent?.some(block => block.type === "anthropicServerTool")
+			) {
+				throw new AIError.ConfigurationError(
+					"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS was set after a refused turn that ran server tools; its fallback credit cannot be redeemed without the experimental fields the switch withholds.",
+				);
+			}
 			// Collected at most once, on first params build; a frozen redemption
 			// body never builds params.
 			let controlRecords: AnthropicControlRecord[] | undefined;
@@ -2582,7 +2601,9 @@ const streamAnthropicOnce = (
 				if (!isOAuth && isOfficialAnthropicApiUrl(baseUrl) && !extraBetas.includes(fallbackCreditBeta)) {
 					extraBetas.push(fallbackCreditBeta);
 				}
-				if (options?.fallbackCreditRedemption) {
+				// A forfeited frozen body is rebuilt fresh, so it keeps the betas
+				// computed above instead of the saved list describing the old body.
+				if (options?.fallbackCreditRedemption && !forfeitFrozenForKillSwitch) {
 					const frozenBetas = (options.fallbackCreditRedemption.betas ?? []).filter(
 						b => !b.startsWith("server-side-fallback-"),
 					);
@@ -2678,6 +2699,8 @@ const streamAnthropicOnce = (
 				if (replacementPayload !== undefined) {
 					nextParams = replacementPayload as typeof nextParams;
 				}
+				// After `onPayload`, so a hook cannot restore a field the switch withholds.
+				if (killSwitchActive) withholdKillSwitchFields(nextParams);
 				if (nextParams.compaction) stripCompactionIncompatibleParams(nextParams);
 				// After `onPayload`, so a hook cannot restore a field Bedrock rejects.
 				if (model.compat.bedrockMessagesApi) fitBedrockAnthropicPayload(nextParams);
@@ -2713,25 +2736,6 @@ const streamAnthropicOnce = (
 			let fallbackCreditShape: "continuation" | "unchanged" | undefined = undefined;
 			let fallbackCreditTransientRetries = 0;
 			let params: MessageCreateParamsStreaming;
-			// A body frozen before the kill switch was set still carries the fields
-			// it withholds; the credit token is bound to that body, so forfeit it
-			// and build a fresh request. Server tools that already ran would re-run
-			// and re-bill on a tokenless retry, so surface that case instead.
-			const frozenBody = frozenRedemption?.params as MessageCreateParamsStreaming | undefined;
-			const forfeitFrozenForKillSwitch =
-				killSwitchActive &&
-				frozenBody !== undefined &&
-				(carriesThinkingBinding(frozenBody.thinking) ||
-					frozenBody.context_management !== undefined ||
-					carriesSignedCompaction(frozenBody));
-			if (
-				forfeitFrozenForKillSwitch &&
-				frozenRedemption?.refusedContent?.some(block => block.type === "anthropicServerTool")
-			) {
-				throw new AIError.ConfigurationError(
-					"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS was set after a refused turn that ran server tools; its fallback credit cannot be redeemed without the experimental fields the switch withholds.",
-				);
-			}
 			// Recheck expiry here: preparation (image resizing) is async, and an
 			// expired token must fall back to a fresh request as before.
 			if (frozenRedemption && !forfeitFrozenForKillSwitch && Date.now() <= frozenRedemption.expiresAt) {
@@ -4053,6 +4057,28 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (model, con
 /** Whether Claude Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` applies to this model's provider. */
 function experimentalBetasDisabled(model: Model<"anthropic-messages">): boolean {
 	return model.compat.honorsClaudeCodeBetaKillSwitch === true && $flag("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS");
+}
+
+/**
+ * Remove every field the kill switch withholds from a final request body, for
+ * payloads an `onPayload` hook replaced after compat already shaped them.
+ * Compaction blocks keep their readable summary as text, the same form an
+ * endpoint without compaction support receives.
+ */
+function withholdKillSwitchFields(params: MessageCreateParamsStreaming): void {
+	if (params.thinking && "block_binding" in params.thinking) delete params.thinking.block_binding;
+	delete params.context_management;
+	delete params.compaction;
+	for (const message of params.messages) {
+		if (!Array.isArray(message.content)) continue;
+		for (let i = 0; i < message.content.length; i++) {
+			const block = message.content[i];
+			if (block.type === "compaction") message.content[i] = { type: "text", text: block.content };
+		}
+	}
+	if (params.anthropic_beta) {
+		params.anthropic_beta = params.anthropic_beta.filter(beta => killSwitchBetas[beta] !== true);
+	}
 }
 
 /**

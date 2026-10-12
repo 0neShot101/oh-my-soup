@@ -150,6 +150,35 @@ describe("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", () => {
 			expect(request.body.context_management).toBeUndefined();
 			expect(request.beta).not.toContain(BINDING_BETA);
 			expect(request.beta).not.toContain(CONTEXT_MANAGEMENT_BETA);
+			// The fresh body's own betas ride, not the saved list describing the old body.
+			expect(request.beta).toContain("effort-2025-11-24");
+		});
+	});
+
+	it("withholds fields an onPayload hook puts back", async () => {
+		await withEnv({ ...GATEWAY_ENV, CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1" }, async () => {
+			const request = await captureRequest(anthropicModel(), {
+				onPayload: payload => {
+					const body = payload as Record<string, unknown>;
+					return {
+						...body,
+						thinking: { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } },
+						context_management: { edits: [{ type: "clear_thinking_20251015", keep: "all" }] },
+						messages: [
+							{ role: "user", content: [{ type: "compaction", content: "Earlier summary.", signature: "sig" }] },
+							{ role: "user", content: "hi" },
+						],
+					};
+				},
+			});
+			expect(request.body.thinking).toEqual({ type: "adaptive" });
+			expect(request.body.context_management).toBeUndefined();
+			expect(request.body.messages).toEqual([
+				{ role: "user", content: [{ type: "text", text: "Earlier summary." }] },
+				{ role: "user", content: "hi" },
+			]);
+			expect(request.beta).not.toContain(BINDING_BETA);
+			expect(request.beta).not.toContain("compact-2026-09-04");
 		});
 	});
 
