@@ -128,6 +128,8 @@ export function googleAntigravityModelManagerOptions(
 								});
 								continue;
 							}
+							// Caches written under older rules fail the compiled-rules hash in
+							// the model cache, so filtering fresh rosters covers every source.
 							catalogs.push({
 								accountKey,
 								models: result.models.filter(model => !isExcludedModel("google-antigravity", model.id)),
