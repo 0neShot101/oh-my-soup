@@ -84,6 +84,7 @@ import * as AIError from "@oh-my-pi/pi-ai/error";
 import { resetOpenAICodexHistoryAfterCompaction } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { resolveCatalogPolicy } from "@oh-my-pi/pi-catalog/compat/catalog-policy";
 import { supportsOutputTokenLimit } from "@oh-my-pi/pi-catalog/compat/output-limits";
 import { requiresNativeTools, requiresToolFreeHistoryForToolOptOut } from "@oh-my-pi/pi-catalog/compat/tools";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
@@ -1040,6 +1041,7 @@ export class AgentSession implements SettingsScope {
 	#lazyContextRefreshed = new Set<string>();
 	#onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
 	#sideStreamFn: StreamFn;
+	readonly #taskPromptCacheKey: string | undefined;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
 
@@ -1916,6 +1918,7 @@ export class AgentSession implements SettingsScope {
 		this.#autoTitle = config.autoTitle === true;
 		this.#transformContext = config.transformContext ?? (messages => messages);
 		this.#sideStreamFn = config.sideStreamFn ?? streamSimple;
+		this.#taskPromptCacheKey = config.taskPromptCacheKey;
 		this.#onPayload = config.onPayload;
 		this.rawSseDebugBuffer = config.rawSseDebugBuffer ?? new RawSseDebugBuffer();
 		// Avoid wrapping in an `async` closure when no user callback is configured: the
@@ -2427,6 +2430,7 @@ export class AgentSession implements SettingsScope {
 			model: () => this.model,
 			thinkingLevel: () => this.thinkingLevel,
 			sessionId: () => this.sessionId,
+			getPromptCacheKeyForModel: model => this.getPromptCacheKeyForModel(model),
 			baseSystemPrompt: () => this.#tools.baseSystemPrompt,
 			setSkipPostTurnMaintenance: timestamp => {
 				this.#maintenance.skipPostTurnMaintenanceAssistantTimestamp = timestamp;
@@ -6671,6 +6675,18 @@ export class AgentSession implements SettingsScope {
 	/** Apply session-level stream hooks to a direct side request. */
 	prepareSimpleStreamOptions(options: SimpleStreamOptions, provider = "anthropic"): SimpleStreamOptions {
 		return this.#providerBoundary.prepareSimpleStreamOptions(options, provider);
+	}
+
+	/** Cache identity for the main loop and side requests that reuse its context. */
+	getPromptCacheKeyForModel(model: Model | undefined): string | undefined {
+		return (
+			this.agent.promptCacheKey ??
+			(this.#taskPromptCacheKey !== undefined &&
+			model !== undefined &&
+			resolveCatalogPolicy(model).taskSiblingPromptCache === true
+				? this.#taskPromptCacheKey
+				: undefined)
+		);
 	}
 
 	/** Current steering mode */
@@ -11183,7 +11199,7 @@ export class AgentSession implements SettingsScope {
 				// Request controls (OpenAI effort updates) still replay the main
 				// conversation's, so the side request keeps its cached prefix.
 				parentSessionId: cacheSessionId,
-				promptCacheKey: this.agent.promptCacheKey ?? this.agent.sessionId,
+				promptCacheKey: this.getPromptCacheKeyForModel(model) ?? this.agent.sessionId,
 				preferWebsockets: this.preferWebsockets,
 				providerSessionState: this.#providerSessionState,
 				reasoning: toReasoningEffort(this.thinkingLevel),
