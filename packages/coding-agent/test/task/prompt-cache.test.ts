@@ -146,6 +146,7 @@ describe("task sibling prompt-cache routing", () => {
 					sessionManager: SessionManager.inMemory(directory.path()),
 					settings: Settings.isolated({
 						"async.enabled": false,
+						"task.structured": true,
 						"marketplace.autoUpdate": "off",
 						"compaction.enabled": false,
 					}),

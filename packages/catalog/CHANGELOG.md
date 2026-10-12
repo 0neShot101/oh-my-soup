@@ -5,6 +5,11 @@
 ### Added
 
 - Added a KDL opt-in for sibling subagent prompt-cache sharing, enabled for Muse Code's Muse Spark 1.3 and 1.3 Contributor over the Responses API ([#15467](https://github.com/can1357/oh-my-pi/pull/15467) by [@iliaal](https://github.com/iliaal))
+
+## [18.10.2] - 2026-10-12
+
+### Added
+
 - Added the `honors-claude-code-beta-kill-switch` axis (`compat.honorsClaudeCodeBetaKillSwitch`), on for the `anthropic` provider, so a rule or `models.yml` override decides which providers honor `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` ([#15458](https://github.com/can1357/oh-my-pi/pull/15458) by [@H4vC](https://github.com/H4vC))
 
 ## [18.10.0] - 2026-10-12
