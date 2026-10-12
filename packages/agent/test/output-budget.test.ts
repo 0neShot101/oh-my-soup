@@ -144,12 +144,17 @@ describe("fitOutputTokensToContextWindow", () => {
 		);
 	});
 
-	test("charges a kept Claude turn's summarized reasoning at the size it billed as output", () => {
+	test.each([
+		// Summarized display shows one line of the reasoning.
+		["summarized", "Checked the call sites."],
+		// Omitted display shows none of it.
+		["omitted", ""],
+	] as const)("charges a kept Claude turn's %s reasoning at the size it billed as output", (_display, thinking) => {
 		// Compaction at 10 kept a turn from 5, so its usage report is stale and the
-		// whole context is counted locally. Claude's summarized display shows one
-		// line of the 12,000 reasoning tokens that turn billed as output, and the
-		// replay bills all of them: counting the visible line, or the signature's
-		// 2,000 byte-tokens, leaves the 32k cap in place and overflows the window.
+		// whole context is counted locally. The turn billed 12,000 reasoning tokens
+		// as output and the replay bills all of them, whatever the display showed:
+		// counting the visible text, or the signature's 2,000 byte-tokens, leaves
+		// the 32k cap in place and overflows the window.
 		const model: Model = {
 			...getBundledModel("amazon-bedrock", "global.anthropic.claude-opus-5"),
 			contextWindow: 40_000,
@@ -158,7 +163,7 @@ describe("fitOutputTokensToContextWindow", () => {
 		const kept: AssistantMessage = {
 			role: "assistant",
 			content: [
-				{ type: "thinking", thinking: "Checked the call sites.", thinkingSignature: signature },
+				{ type: "thinking", thinking, thinkingSignature: signature },
 				{ type: "text", text: "Done." },
 			],
 			api: model.api,
