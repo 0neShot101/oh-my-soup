@@ -7,12 +7,22 @@
 ### Changed Files ({{len files}} files, +{{totalAdded}}/-{{totalRemoved}} lines)
 
 {{#if files.length}}
+{{#if prDiffUrl}}
+Index is the file's 1-based position in the full PR diff; excluded files leave gaps. Assign each file with its exact Diff URL below.
+
+{{#table files headers="Index|File|+/-|Type|Diff URL"}}
+{{diffIndex}} | {{path}} | +{{linesAdded}}/-{{linesRemoved}} | {{ext}} | `{{diffUrl}}`
+{{/table}}
+{{else}}
 {{#table files headers="File|+/-|Type"}}
 {{path}} | +{{linesAdded}}/-{{linesRemoved}} | {{ext}}
 {{/table}}
+{{/if}}
 {{else}}
 _No files to review._
 {{/if}}
+
+
 {{#if excluded.length}}
 ### Excluded Files ({{len excluded}})
 
