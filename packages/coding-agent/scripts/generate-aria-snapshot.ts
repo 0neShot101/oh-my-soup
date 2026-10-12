@@ -44,6 +44,7 @@ const VENDOR_FILES: Array<[string, string]> = [
 // `window`.
 const ENTRY_SOURCE = `
 import { generateAriaTree, renderAriaTree } from "./injected/ariaSnapshot";
+import type { AriaNode } from "./isomorphic/ariaSnapshot";
 import { normalizeWhiteSpace } from "./isomorphic/stringUtils";
 
 export interface AriaSnapshotRequest {
@@ -63,6 +64,18 @@ function walkElements(fn: (el: Element) => void): void {
 }
 type RefElement = Element & { _ariaRef?: { role: string; name: string; ref: string } };
 
+// Replaces each [text, bullets] pair in every name, prop and text child of the tree.
+function maskAriaNode(node: AriaNode, forms: Array<[string, string]>): void {
+	const mask = (text: string) => forms.reduce((out, [form, bullets]) => out.replaceAll(form, bullets), text);
+	node.name = mask(node.name);
+	for (const key of Object.keys(node.props)) node.props[key] = mask(node.props[key]);
+	node.children = node.children.map(child => {
+		if (typeof child === "string") return mask(child);
+		maskAriaNode(child, forms);
+		return child;
+	});
+}
+
 export function ariaSnapshot(root: Element | null, request: AriaSnapshotRequest = {}): string {
 	walkElements(el => {
 		if ((el as RefElement)._ariaRef) delete (el as RefElement)._ariaRef;
@@ -76,37 +89,29 @@ export function ariaSnapshot(root: Element | null, request: AriaSnapshotRequest 
 	// tree do, so a typed or saved password never reaches a snapshot. Matching by local
 	// name covers XHTML pages and inputs adopted from another frame. No page task runs
 	// before the getters are removed; an own \`value\` property the page installed (React
-	// tracks input changes with one) is put back as it was, and a value the page made
-	// non-configurable is masked in the rendered text instead.
+	// tracks input changes with one) is put back as it was. A value the page made
+	// unpatchable (non-configurable, or a non-extensible input) is masked in the built tree
+	// instead, before rendering escapes it, in its raw and whitespace-normalized forms.
 	const masked: Array<[HTMLInputElement, PropertyDescriptor | undefined]> = [];
-	const pinned: string[] = [];
+	const pinned: Array<[string, string]> = [];
 	try {
 		walkElements(el => {
 			const input = el as HTMLInputElement;
 			if (input.localName !== "input" || input.type !== "password") return;
 			const own = Object.getOwnPropertyDescriptor(input, "value");
 			const value = input.value;
-			if (own && !own.configurable) {
-				if (value) pinned.push(value);
+			const bullets = "\\u2022".repeat(value.length);
+			if (own ? !own.configurable : !Object.isExtensible(input)) {
+				for (const form of new Set([value, normalizeWhiteSpace(value)])) if (form) pinned.push([form, bullets]);
 				return;
 			}
-			const bullets = "\\u2022".repeat(value.length);
 			Object.defineProperty(input, "value", { configurable: true, get: () => bullets });
 			masked.push([input, own]);
 		});
-		let text = renderAriaTree(generateAriaTree(target, options), options).text;
-		// Names are whitespace-normalized and JSON-quoted, then a key with a quote is YAML
-		// single-quoted; child text escapes backslashes and quotes the same way JSON does.
-		for (const value of pinned) {
-			const bullets = "\\u2022".repeat(value.length);
-			for (const plain of new Set([value, normalizeWhiteSpace(value)])) {
-				const escaped = JSON.stringify(plain).slice(1, -1);
-				for (const form of [escaped.replaceAll("'", "''"), escaped, plain]) {
-					if (form) text = text.replaceAll(form, bullets);
-				}
-			}
-		}
-		return text;
+		const tree = generateAriaTree(target, options);
+		// Longest first, so a password containing another one is masked whole.
+		if (pinned.length) maskAriaNode(tree.root, pinned.sort((a, b) => b[0].length - a[0].length));
+		return renderAriaTree(tree, options).text;
 	} finally {
 		for (const [input, own] of masked) {
 			if (own) Object.defineProperty(input, "value", own);
