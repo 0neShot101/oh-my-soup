@@ -17,6 +17,8 @@
 
 ### Added
 
+- Added `thinking-unverified` axis for offering reasoning ladders on unclassified model IDs
+- Added `Muse Wonder 1.0` model definition to Meta provider
 - Added the opt-in `snapcompact-image-reads` axis: snapcompact images a fresh `read` result only for readers whose rule sets it; Claude Opus 5.5 and later opt in ([#14249](https://github.com/can1357/oh-my-pi/pull/14249) by [@will-bogusz](https://github.com/will-bogusz))
 - Added the `image-count-budget` rule for how many images one request may carry (Anthropic 90, Codex 200, other hosts unchanged) and the `official-image-count-budget` override that applies only on the official endpoint: Anthropic 600 (100 on 200k-window Claude models), Codex 2,000 ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
 - Added a 24 MB inline-image byte budget for the Codex backend, which now counts as its official endpoint at its default URL and at paths under it such as `/codex/responses` ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))

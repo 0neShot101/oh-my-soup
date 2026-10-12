@@ -189,6 +189,14 @@ export interface ThinkingConfig {
 	 * provides an explicit wire off-path.
 	 */
 	requiresEffort?: boolean;
+	/**
+	 * The catalog has no evidence this model reasons (unclassified id, no
+	 * capability metadata). The ladder is offered for the user to opt into:
+	 * sessions leave thinking unset until the user picks an effort, and a
+	 * request without an effort goes out as non-reasoning (see
+	 * `withoutUnverifiedThinking`).
+	 */
+	unverified?: boolean;
 }
 
 // `Provider` is any provider-id string; `KnownProvider` (re-exported above) enumerates
