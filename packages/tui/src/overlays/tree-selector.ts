@@ -243,7 +243,6 @@ class TreeList implements Component {
 				rows: readonly TreeRow<TreeSelectorNode, string>[];
 				targets: readonly TreeSelectorNode[];
 				targetIndexByRootId: ReadonlyMap<string, number>;
-				firstVisibleById: ReadonlyMap<string, TreeSelectorNode>;
 		  }
 		| undefined;
 	#previewMemo: { node: TreeSelectorNode | undefined; labels: number; preview: NativeChild[] } | undefined;
@@ -378,11 +377,10 @@ class TreeList implements Component {
 		return [...children].sort((a, b) => Number(this.#containsActive.get(b)) - Number(this.#containsActive.get(a)));
 	}
 
-	/** Visible branch targets, keyed by every raw branch head, and each raw subtree's first selectable row. */
+	/** Visible branch targets in rendered order, keyed by every raw branch head. */
 	#visibleBranchProjection(rows: readonly TreeRow<TreeSelectorNode, string>[]): {
 		targets: readonly TreeSelectorNode[];
 		targetIndexByRootId: ReadonlyMap<string, number>;
-		firstVisibleById: ReadonlyMap<string, TreeSelectorNode>;
 	} {
 		const visibleIndex = new Map<string, number>();
 		for (let index = 0; index < rows.length; index++) visibleIndex.set(rows[index]!.key, index);
@@ -431,7 +429,7 @@ class TreeList implements Component {
 		for (let index = 0; index < ordered.length; index++) {
 			for (const rootId of ordered[index]!.rootIds) targetIndexByRootId.set(rootId, index);
 		}
-		return { targets: ordered.map(entry => entry.target), targetIndexByRootId, firstVisibleById };
+		return { targets: ordered.map(entry => entry.target), targetIndexByRootId };
 	}
 
 	/** Raw branch root containing `entryId` at its nearest ancestor fork. */
@@ -459,20 +457,8 @@ class TreeList implements Component {
 		// Projection is O(nodes); reuse it across presses until filtering replaces the rows.
 		const rows = this.#tree.rows;
 		if (this.#branchTargets?.rows !== rows) this.#branchTargets = { rows, ...this.#visibleBranchProjection(rows) };
-		const { targets, targetIndexByRootId, firstVisibleById } = this.#branchTargets;
+		const { targets, targetIndexByRootId } = this.#branchTargets;
 
-		// At a fork itself, enter its first/last visible child branch.
-		const selectedChildren = this.#orderedChildren(selected);
-		if (selectedChildren.length > 1) {
-			for (let offset = 0; offset < selectedChildren.length; offset++) {
-				const index = direction > 0 ? offset : selectedChildren.length - 1 - offset;
-				const target = firstVisibleById.get(selectedChildren[index]!.entry.id);
-				if (target) {
-					this.#tree.setSelectedKey(target.entry.id);
-					return;
-				}
-			}
-		}
 		if (targets.length === 0) return;
 		const currentRootId = this.#nearestBranchRootId(selected.entry.id);
 		const currentIndex = currentRootId === undefined ? -1 : (targetIndexByRootId.get(currentRootId) ?? -1);
@@ -1686,6 +1672,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 			hintsRow([
 				{ keys: ["enter"], label: "switch" },
 				{ keys: ["alt+up", "alt+down"], label: "previous/next turn" },
+				{ keys: ["shift+left", "shift+right"], label: "previous/next branch" },
 				actionHint(["tui.select.pageUp", "tui.select.pageDown"], "page"),
 				{ keys: ["home", "end"], label: "first/last" },
 				{ keys: ["shift+enter"], label: "summarize & switch" },

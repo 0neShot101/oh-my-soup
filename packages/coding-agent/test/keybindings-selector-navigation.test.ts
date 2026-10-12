@@ -319,39 +319,29 @@ describe("selector navigation keybindings", () => {
 		expect(selected).toEqual(["promoted-message", "active-branch"]);
 	});
 
-	it("enters the first or last visible child when selection is a fork", () => {
+	it("wraps Shift+Left past a branch head that is itself a fork", () => {
 		const root = createMessageNode("root", null, "Root");
-		const activeBranch = createMessageNode("active-branch", "root", "Active branch");
-		const filteredBranch = createModelNode("filtered-branch", "root");
-		const promotedHead = createModelNode("promoted-head", "root");
-		const promotedMessage = createMessageNode("promoted-message", "promoted-head", "Promoted branch");
-		promotedHead.children.push(promotedMessage);
-		root.children.push(activeBranch, filteredBranch, promotedHead);
+		const forkA = createMessageNode("a", "root", "Branch A");
+		const a1 = createMessageNode("a1", "a", "Branch A1");
+		const a2 = createMessageNode("a2", "a", "Branch A2");
+		const branchB = createMessageNode("b", "root", "Branch B");
+		forkA.children.push(a1, a2);
+		root.children.push(forkA, branchB);
 
-		const movedRight: string[] = [];
-		const rightSelector = new TreeSelectorComponent(
+		const selected: string[] = [];
+		const selector = new TreeSelectorComponent(
 			[root],
-			"root",
+			"a1",
 			40,
-			id => movedRight.push(id),
+			id => selected.push(id),
 			() => {},
 		);
-		rightSelector.handleInput("\x1b[1;2C");
-		rightSelector.handleInput("\n");
+		for (let press = 0; press < 5; press++) {
+			selector.handleInput("\x1b[1;2D");
+			selector.handleInput("\n");
+		}
 
-		const movedLeft: string[] = [];
-		const leftSelector = new TreeSelectorComponent(
-			[root],
-			"root",
-			40,
-			id => movedLeft.push(id),
-			() => {},
-		);
-		leftSelector.handleInput("\x1b[1;2D");
-		leftSelector.handleInput("\n");
-
-		expect(movedRight).toEqual(["active-branch"]);
-		expect(movedLeft).toEqual(["promoted-message"]);
+		expect(selected).toEqual(["a", "b", "a2", "a1", "a"]);
 	});
 
 	it("recomputes branch targets after the filter changes", () => {
