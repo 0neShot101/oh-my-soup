@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import * as path from "node:path";
 import * as zlib from "node:zlib";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { type Api, type AssistantMessage, type Context, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { type Api, type AssistantMessage, type Context, Effort, type ImageContent, type Model } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -631,57 +631,76 @@ describe("AgentSession model persistence", () => {
 		expect(archiveImages(result.session.messages)).toBe(3);
 	});
 
-	it.each([
-		["setModel", "openrouter", "anthropic/claude-sonnet-4.5", 1],
-		["setModelTemporary", "amazon-bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", 1],
-		["setModel", "anthropic", "claude-sonnet-4-5-20250929", 3],
-	] as const)(
-		"after %s to %s/%s the next request carries only the archive frames that model's budget allows",
-		async (switchPath, provider, id, frames) => {
-			const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-			try {
-				for (const keyed of ["anthropic", "openrouter", "amazon-bedrock"])
-					authStorage.keys.setRuntime(keyed, "test-key");
-				const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
-				const target = getBundledModel(provider, id);
-				if (!target) throw new Error(`Expected ${provider}/${id}`);
-				const result = await resumeArchivedSession(authStorage, modelRegistry);
-				session = result.session;
-				const summary = session.messages.find(message => message.role === "compactionSummary");
-
-				if (switchPath === "setModel") await session.setModel(target);
-				else await session.setModelTemporary(target, undefined, { ephemeral: true });
-				let request: Context | undefined;
-				session.agent.streamFn = (_model, context) => {
-					request = context;
-					const stream = new AssistantMessageEventStream();
-					const message = createAssistantMessage("done");
-					stream.push({ type: "done", reason: "stop", message });
-					stream.end(message);
-					return stream;
-				};
-				await session.agent.continue();
-
-				const requestSummary = request?.messages.find(
-					message => message.role === "user" && message.historyRewriteAt !== undefined,
-				);
-				if (requestSummary?.role !== "user" || !Array.isArray(requestSummary.content)) {
-					throw new Error("Expected the archive summary in the request");
-				}
-				const requestFrames = requestSummary.content.filter(block => block.type === "image");
-				expect(requestFrames).toHaveLength(frames);
-				expect(requestFrames.reduce((bytes, frame) => bytes + frame.data.length, 0)).toBeLessThanOrEqual(
-					snapcompact.frameDataBytesBudget(target),
-				);
-				// The agent keeps the archive it was built with; only the request is capped.
-				expect(session.messages.find(message => message.role === "compactionSummary")).toBe(summary);
-			} finally {
-				await session?.dispose();
-				session = undefined;
-				authStorage.close();
+	/** Switches a session archived on the official Anthropic API to `target`, then returns the archive frames of its next request. */
+	async function archiveFramesAfterSwitch(
+		target: Model<Api>,
+		switchModel: (session: AgentSession, target: Model<Api>) => Promise<unknown>,
+	): Promise<ImageContent[]> {
+		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
+		try {
+			for (const provider of ["anthropic", "openrouter", "amazon-bedrock"]) {
+				authStorage.keys.setRuntime(provider, "test-key");
 			}
+			const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+			const result = await resumeArchivedSession(authStorage, modelRegistry);
+			session = result.session;
+			const summary = session.messages.find(message => message.role === "compactionSummary");
+
+			await switchModel(session, target);
+			let request: Context | undefined;
+			session.agent.streamFn = (_model, context) => {
+				request = context;
+				const stream = new AssistantMessageEventStream();
+				const message = createAssistantMessage("done");
+				stream.push({ type: "done", reason: "stop", message });
+				stream.end(message);
+				return stream;
+			};
+			await session.agent.continue();
+
+			// The agent keeps the archive it was built with; only the request is capped.
+			expect(session.messages.find(message => message.role === "compactionSummary")).toBe(summary);
+			const requestSummary = request?.messages.find(
+				message => message.role === "user" && message.historyRewriteAt !== undefined,
+			);
+			if (requestSummary?.role !== "user" || !Array.isArray(requestSummary.content)) {
+				throw new Error("Expected the archive summary in the request");
+			}
+			return requestSummary.content.filter((block): block is ImageContent => block.type === "image");
+		} finally {
+			await session?.dispose();
+			session = undefined;
+			authStorage.close();
+		}
+	}
+
+	it.each([
+		["setModel", getBundledModel("openrouter", "anthropic/claude-sonnet-4.5")],
+		["setModelTemporary", getBundledModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")],
+	] as const)(
+		"after %s from the official Anthropic API to a host without a byte budget, the next request carries only the newest archive frame",
+		async (switchPath, target) => {
+			const frames = await archiveFramesAfterSwitch(target, (active, model) =>
+				switchPath === "setModel"
+					? active.setModel(model)
+					: active.setModelTemporary(model, undefined, { ephemeral: true }),
+			);
+
+			expect(frames).toHaveLength(1);
+			expect(frames.reduce((bytes, frame) => bytes + frame.data.length, 0)).toBeLessThanOrEqual(
+				snapcompact.DEFAULT_FRAME_DATA_BYTES_BUDGET,
+			);
 		},
 	);
+
+	it("keeps every archive frame in the next request after a switch between official Anthropic models", async () => {
+		const frames = await archiveFramesAfterSwitch(
+			getAnthropicModelOrThrow("claude-sonnet-4-5-20250929"),
+			(active, model) => active.setModel(model),
+		);
+
+		expect(frames).toHaveLength(3);
+	});
 
 	it.each([
 		["a proxy to the official Anthropic API", "anthropic-proxy", "anthropic", 3],
