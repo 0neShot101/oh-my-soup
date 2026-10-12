@@ -273,12 +273,20 @@ const promptCacheBetas: Record<string, true> = {
 	[promptCachingScopeBeta]: true,
 };
 
-/** Betas withheld under the kill switch: they gate the body fields it removes. */
+/**
+ * Betas withheld under the kill switch: they gate the pre-release body fields
+ * it removes (Claude Code's gateway contract: context management, beta tool
+ * fields, structured-output format, task budgets, tool search), plus the
+ * thinking-binding and compaction controls omp also withholds.
+ */
 const killSwitchBetas: Record<string, true> = {
 	[THINKING_BINDING_CONTROLS_BETA]: true,
 	[contextManagementBeta]: true,
 	[COMPACTION_BETA]: true,
 	[LEGACY_COMPACTION_BETA]: true,
+	[structuredOutputsBeta]: true,
+	[taskBudgetBeta]: true,
+	[midConversationToolChangesBeta]: true,
 };
 
 /**
@@ -2432,11 +2440,7 @@ const streamAnthropicOnce = (
 			// and re-bill on a tokenless retry, so surface that case instead.
 			const frozenBody = frozenRedemption?.params as MessageCreateParamsStreaming | undefined;
 			const forfeitFrozenForKillSwitch =
-				killSwitchActive &&
-				frozenBody !== undefined &&
-				(carriesThinkingBinding(frozenBody.thinking) ||
-					frozenBody.context_management !== undefined ||
-					carriesSignedCompaction(frozenBody));
+				killSwitchActive && frozenBody !== undefined && carriesKillSwitchField(frozenBody);
 			if (
 				forfeitFrozenForKillSwitch &&
 				frozenRedemption?.refusedContent?.some(block => block.type === "anthropicServerTool")
@@ -4060,15 +4064,47 @@ function experimentalBetasDisabled(model: Model<"anthropic-messages">): boolean 
 }
 
 /**
+ * Whether a request body carries a field the kill switch withholds. A frozen
+ * fallback-credit body that does cannot be redeemed under the switch.
+ */
+function carriesKillSwitchField(params: MessageCreateParamsStreaming): boolean {
+	return (
+		carriesThinkingBinding(params.thinking) ||
+		params.context_management !== undefined ||
+		carriesSignedCompaction(params) ||
+		params.output_config?.task_budget !== undefined ||
+		params.output_config?.format !== undefined ||
+		(params.tools?.some(
+			tool =>
+				("strict" in tool && tool.strict !== undefined) ||
+				("defer_loading" in tool && tool.defer_loading !== undefined) ||
+				("eager_input_streaming" in tool && tool.eager_input_streaming !== undefined),
+		) ??
+			false)
+	);
+}
+
+/**
  * Remove every field the kill switch withholds from a final request body, for
- * payloads an `onPayload` hook replaced after compat already shaped them.
- * Compaction blocks keep their readable summary as text, the same form an
- * endpoint without compaction support receives.
+ * payloads an `onPayload` hook replaced after compat already shaped them, and
+ * for the switch's fields compat has no axis for (task budgets). Compaction
+ * blocks keep their readable summary as text, the same form an endpoint
+ * without compaction support receives.
  */
 function withholdKillSwitchFields(params: MessageCreateParamsStreaming): void {
 	if (params.thinking && "block_binding" in params.thinking) delete params.thinking.block_binding;
 	delete params.context_management;
 	delete params.compaction;
+	if (params.output_config) {
+		delete params.output_config.task_budget;
+		delete params.output_config.format;
+		if (Object.keys(params.output_config).length === 0) delete params.output_config;
+	}
+	for (const tool of params.tools ?? []) {
+		if ("strict" in tool) delete tool.strict;
+		if ("defer_loading" in tool) delete tool.defer_loading;
+		if ("eager_input_streaming" in tool) delete tool.eager_input_streaming;
+	}
 	for (const message of params.messages) {
 		if (!Array.isArray(message.content)) continue;
 		for (let i = 0; i < message.content.length; i++) {
@@ -4084,12 +4120,16 @@ function withholdKillSwitchFields(params: MessageCreateParamsStreaming): void {
 /**
  * Honor Claude Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` kill switch on
  * providers whose compat opts in (`honors-claude-code-beta-kill-switch`).
- * Gateways behind `ANTHROPIC_BASE_URL` often reject beta-only body fields,
- * so the switch withholds `thinking.block_binding`, `context_management`, and
- * server compaction (whose legacy replay needs a `context_management` edit)
- * together with their betas. Applied through compat so every request builder
- * and retry rung sees one decision; caller-supplied and frozen-redemption
- * betas are filtered against {@link killSwitchBetas} where they are merged.
+ * Gateways behind `ANTHROPIC_BASE_URL` often reject pre-release body fields,
+ * so the switch withholds what Claude Code's gateway contract lists — context
+ * management, beta tool fields (`strict`, `defer_loading`,
+ * `eager_input_streaming`), tool search (mid-conversation tool changes),
+ * structured-output format, task budgets — plus `thinking.block_binding` and
+ * server compaction (whose legacy replay needs a `context_management` edit),
+ * together with their betas. Effort, adaptive thinking, interleaved thinking
+ * and extended context stay, as in Claude Code. Applied through compat so every
+ * request builder and retry rung sees one decision; {@link withholdKillSwitchFields}
+ * and {@link killSwitchBetas} cover the rest where bodies and betas are finalized.
  */
 function withoutDisabledExperimentalBetas(model: Model<"anthropic-messages">): Model<"anthropic-messages"> {
 	if (!experimentalBetasDisabled(model)) return model;
@@ -4100,6 +4140,9 @@ function withoutDisabledExperimentalBetas(model: Model<"anthropic-messages">): M
 			supportsContextManagement: false,
 			supportsThinkingBindingControls: false,
 			supportsServerCompaction: false,
+			disableStrictTools: true,
+			supportsEagerToolInputStreaming: false,
+			supportsMidConversationToolChanges: false,
 		},
 	};
 }

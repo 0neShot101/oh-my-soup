@@ -35,6 +35,8 @@ interface CapturedRequest {
 		context_management?: unknown;
 		fallback_credit_token?: string;
 		messages?: unknown;
+		output_config?: { effort?: string; task_budget?: unknown };
+		tools?: Array<Record<string, unknown>>;
 	};
 	beta: string;
 }
@@ -43,11 +45,12 @@ async function captureRequest(
 	model: Model<"anthropic-messages">,
 	extra: AnthropicOptions = {},
 	messages: Context["messages"] = [{ role: "user", content: "hi", timestamp: 1 }],
+	tools?: Context["tools"],
 ): Promise<CapturedRequest> {
 	let captured: CapturedRequest | undefined;
 	await streamAnthropic(
 		model,
-		{ messages },
+		{ messages, tools },
 		{
 			apiKey: "sk-ant-api-test",
 			thinkingEnabled: true,
@@ -86,6 +89,54 @@ describe("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", () => {
 			expect(disabled.beta).not.toContain(BINDING_BETA);
 			expect(disabled.beta).not.toContain(CONTEXT_MANAGEMENT_BETA);
 		});
+	});
+
+	it("withholds beta tool fields and task budgets but keeps effort, per Claude Code's gateway contract", async () => {
+		const tools: Context["tools"] = [
+			// `edit` is strict-eligible; `find` is deferred.
+			{ name: "edit", description: "Edit a file.", parameters: { type: "object", properties: {} } },
+			{
+				name: "find",
+				description: "Find files.",
+				parameters: { type: "object", properties: {} },
+				deferLoading: true,
+			},
+		];
+		const options: AnthropicOptions = { taskBudget: { type: "tokens", total: 50_000 } };
+		const messages: Context["messages"] = [{ role: "user", content: "hi", timestamp: 1 }];
+
+		await withEnv({ CLAUDE_CODE_USE_FOUNDRY: undefined, ANTHROPIC_BASE_URL: undefined }, async () => {
+			const enabled = await captureRequest(anthropicModel(), options, messages, tools);
+			expect(enabled.body.output_config?.task_budget).toBeDefined();
+			expect(enabled.beta).toContain("task-budgets-2026-03-13");
+			expect(enabled.body.tools?.some(tool => "defer_loading" in tool)).toBe(true);
+		});
+
+		await withEnv(
+			{
+				CLAUDE_CODE_USE_FOUNDRY: undefined,
+				ANTHROPIC_BASE_URL: undefined,
+				CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
+			},
+			async () => {
+				const disabled = await captureRequest(anthropicModel(), options, messages, tools);
+				expect(disabled.body.output_config).toEqual({ effort: "high" });
+				expect(disabled.beta).toContain("effort-2025-11-24");
+				expect(disabled.beta).not.toContain("task-budgets-2026-03-13");
+				expect(disabled.beta).not.toContain("structured-outputs-2025-12-15");
+				expect(disabled.beta).not.toContain("mid-conversation-tool-changes-2026-07-01");
+				// Only the standard tool fields stay, as in Claude Code.
+				const standard: Record<string, true> = {
+					name: true,
+					description: true,
+					input_schema: true,
+					cache_control: true,
+				};
+				for (const tool of disabled.body.tools ?? []) {
+					expect(Object.keys(tool).filter(key => standard[key] !== true)).toEqual([]);
+				}
+			},
+		);
 	});
 
 	it("strips the withheld betas from caller-supplied options.betas", async () => {
