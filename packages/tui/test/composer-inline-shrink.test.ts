@@ -18,6 +18,27 @@ const COLUMNS = 100;
 const TRANSCRIPT_ROWS = 60;
 const TRANSCRIPT_PREFIX = "Settled transcript row ";
 
+/** A settled assistant turn carrying one text block, typed so schema drift fails at compile time. */
+function reply(text: string): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [{ type: "text", text }],
+		api: "openai-codex-responses",
+		provider: "openai-codex",
+		model: "gpt-5.6-sol",
+		stopReason: "stop",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		timestamp: 1,
+	};
+}
+
 /** Below-transcript chrome that inflates on demand, mimicking a confirmation dialog or a tall multi-line editor swapped in above the input. */
 class InlineWidget implements Component {
 	rows = 0;
@@ -387,23 +408,6 @@ describe("composer inline shrink (#11007)", () => {
 		const message = new AssistantMessageComponent();
 		h.transcript.addChild(message);
 		h.hud.rows = 2; // the working loader, up for the whole turn
-		const reply = (text: string): AssistantMessage => ({
-			role: "assistant",
-			content: [{ type: "text", text }],
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			model: "gpt-5.6-sol",
-			stopReason: "stop",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			timestamp: 1,
-		});
 		let text = "";
 		for (let p = 0; p < 12; p++) {
 			const words = Array.from({ length: 25 + (p % 4) * 10 }, (_, w) => `p${p}w${w}`).join(" ");
@@ -467,24 +471,6 @@ describe("composer inline shrink (#11007)", () => {
 			`| 2024-08→ | **Kursk** | ${"Joined the Kursk counterattack after Ukraine's incursion; the unit retook territory; in Feb 2025 awarded a medal. ".repeat(3)} |`,
 		].join("\n");
 		const text = `**What the sources describe** — his own account, as printed in the interviews.\n\n${table}\n\n**Motivation.** Another paragraph of the reply, long enough to wrap at this width.\n`;
-		const reply = (body: string): AssistantMessage =>
-			({
-				role: "assistant",
-				content: [{ type: "text", text: body }],
-				api: "openai-codex-responses",
-				provider: "openai-codex",
-				model: "gpt-5.6-sol",
-				stopReason: "stop",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
-				timestamp: 1,
-			}) as AssistantMessage;
 		for (let i = 1; i <= text.length; i += 24) {
 			if (i / text.length > 0.7) card.rows = 1;
 			message.updateContent(reply(text.slice(0, i)), { transient: true });

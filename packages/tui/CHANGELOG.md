@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A collapsing live block no longer leaves its slack as a band of blank rows between the retired history and the live rows: the slack falls below the transcript, so a streamed reply stays contiguous and the input keeps the bottom row ([#15499](https://github.com/can1357/oh-my-pi/pull/15499) by [@iacore](https://github.com/iacore))
+
 ## [18.10.2] - 2026-10-12
 
 ### Added
