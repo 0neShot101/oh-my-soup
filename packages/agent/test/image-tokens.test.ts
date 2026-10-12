@@ -46,14 +46,18 @@ describe("image pricing by the reading model", () => {
 
 	test.each([
 		// Claude's 28px patches: ⌈1000/28⌉² = 36².
-		["Claude", () => new Tokenizer(reader("anthropic", "claude-opus-5-5")), 1296],
+		["Claude", reader("anthropic", "claude-opus-5-5"), 1296],
 		// Gemini 3 bills a fixed budget per image.
-		["Gemini", () => new Tokenizer(reader("google", "gemini-3-pro-preview")), 1120],
-		// No reader: the OpenAI wire's 32px patches × 1.2.
-		["an unknown model", () => new Tokenizer(), 1229],
-	])("a user image costs what %s bills for it", (_reader, tokenizer, expected) => {
+		["Gemini", reader("google", "gemini-3-pro-preview"), 1120],
+	] as const)("a user image costs what %s bills for it", (_reader, model, expected) => {
 		const message: UserMessage = { role: "user", content: [image], timestamp: 0 };
-		expect(tokenizer().countMessage(message)).toBe(expected);
+		expect(new Tokenizer(model).countMessage(message)).toBe(expected);
+	});
+
+	test("a user image without a reader keeps the OpenAI wire's estimate", () => {
+		// 32px patches × 1.2, the generic estimate main applied to every reader.
+		const message: UserMessage = { role: "user", content: [image], timestamp: 0 };
+		expect(new Tokenizer().countMessage(message)).toBe(1229);
 	});
 
 	test("the remote-compaction probe charges an image what the local count charges", () => {
