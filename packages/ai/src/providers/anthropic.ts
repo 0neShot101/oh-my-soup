@@ -117,10 +117,12 @@ import {
 	type MessageCreateParams,
 	type MessageCreateParamsStreaming,
 	type MessageParam,
+	type OutputConfig,
 	parseAnthropicInputTransformations,
 	type RawMessageStreamEvent,
 	THINKING_BINDING_CONTROLS_BETA,
 	type TextBlockParam,
+	type ThinkingConfigParam,
 } from "./anthropic-wire";
 import {
 	claudeCodeSdkVersion,
@@ -2439,8 +2441,11 @@ const streamAnthropicOnce = (
 			// and build a fresh request. Server tools that already ran would re-run
 			// and re-bill on a tokenless retry, so surface that case instead.
 			const frozenBody = frozenRedemption?.params as MessageCreateParamsStreaming | undefined;
+			// The redemption drops `fallbacks` before sending, so they cannot force a forfeit.
 			const forfeitFrozenForKillSwitch =
-				killSwitchActive && frozenBody !== undefined && carriesKillSwitchField(frozenBody);
+				killSwitchActive &&
+				frozenBody !== undefined &&
+				carriesKillSwitchField({ ...frozenBody, fallbacks: undefined });
 			if (
 				forfeitFrozenForKillSwitch &&
 				frozenRedemption?.refusedContent?.some(block => block.type === "anthropicServerTool")
@@ -4065,23 +4070,13 @@ function experimentalBetasDisabled(model: Model<"anthropic-messages">): boolean 
 
 /**
  * Whether a request body carries a field the kill switch withholds. A frozen
- * fallback-credit body that does cannot be redeemed under the switch.
+ * fallback-credit body that does cannot be redeemed under the switch. Defined
+ * as "the sanitizer would change it" so detection and stripping cannot drift.
  */
 function carriesKillSwitchField(params: MessageCreateParamsStreaming): boolean {
-	return (
-		carriesThinkingBinding(params.thinking) ||
-		params.context_management !== undefined ||
-		carriesSignedCompaction(params) ||
-		params.output_config?.task_budget !== undefined ||
-		params.output_config?.format !== undefined ||
-		(params.tools?.some(
-			tool =>
-				("strict" in tool && tool.strict !== undefined) ||
-				("defer_loading" in tool && tool.defer_loading !== undefined) ||
-				("eager_input_streaming" in tool && tool.eager_input_streaming !== undefined),
-		) ??
-			false)
-	);
+	const sanitized = structuredClone(params);
+	withholdKillSwitchFields(sanitized);
+	return !Bun.deepEquals(sanitized, params);
 }
 
 /**
@@ -4092,20 +4087,19 @@ function carriesKillSwitchField(params: MessageCreateParamsStreaming): boolean {
  * without compaction support receives.
  */
 function withholdKillSwitchFields(params: MessageCreateParamsStreaming): void {
-	if (params.thinking && "block_binding" in params.thinking) delete params.thinking.block_binding;
+	withholdKillSwitchControls(params);
 	delete params.context_management;
 	delete params.compaction;
-	if (params.output_config) {
-		delete params.output_config.task_budget;
-		delete params.output_config.format;
-		if (Object.keys(params.output_config).length === 0) delete params.output_config;
-	}
+	// Server-side fallback entries carry their own per-attempt controls.
+	for (const entry of params.fallbacks ?? []) withholdKillSwitchControls(entry);
 	for (const tool of params.tools ?? []) {
 		if ("strict" in tool) delete tool.strict;
 		if ("defer_loading" in tool) delete tool.defer_loading;
 		if ("eager_input_streaming" in tool) delete tool.eager_input_streaming;
 	}
 	for (const message of params.messages) {
+		// Per-message `output_config` (mid-conversation effort) may carry the same controls.
+		if ("output_config" in message && message.output_config) withholdKillSwitchControls(message);
 		if (!Array.isArray(message.content)) continue;
 		for (let i = 0; i < message.content.length; i++) {
 			const block = message.content[i];
@@ -4115,6 +4109,15 @@ function withholdKillSwitchFields(params: MessageCreateParamsStreaming): void {
 	if (params.anthropic_beta) {
 		params.anthropic_beta = params.anthropic_beta.filter(beta => killSwitchBetas[beta] !== true);
 	}
+}
+
+/** Withhold the kill switch's thinking/output controls on a body, fallback entry, or message. */
+function withholdKillSwitchControls(holder: { thinking?: ThinkingConfigParam; output_config?: OutputConfig }): void {
+	if (holder.thinking && "block_binding" in holder.thinking) delete holder.thinking.block_binding;
+	if (!holder.output_config) return;
+	delete holder.output_config.task_budget;
+	delete holder.output_config.format;
+	if (Object.keys(holder.output_config).length === 0) delete holder.output_config;
 }
 
 /**

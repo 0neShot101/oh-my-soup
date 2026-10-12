@@ -34,6 +34,7 @@ interface CapturedRequest {
 		thinking?: { type: string; block_binding?: unknown };
 		context_management?: unknown;
 		fallback_credit_token?: string;
+		fallbacks?: unknown;
 		messages?: unknown;
 		output_config?: { effort?: string; task_budget?: unknown };
 		tools?: Array<Record<string, unknown>>;
@@ -203,6 +204,24 @@ describe("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", () => {
 			expect(request.beta).not.toContain(CONTEXT_MANAGEMENT_BETA);
 			// The fresh body's own betas ride, not the saved list describing the old body.
 			expect(request.beta).toContain("effort-2025-11-24");
+		});
+	});
+
+	it("withholds the switch's controls inside server-side fallback entries", async () => {
+		await withEnv({ ...GATEWAY_ENV, CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1" }, async () => {
+			const request = await captureRequest(anthropicModel(), {
+				fallbacks: [
+					{
+						model: "claude-opus-5",
+						thinking: { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } },
+						output_config: { effort: "high", task_budget: { type: "tokens", total: 50_000 } },
+					},
+				],
+			});
+			expect(request.body.fallbacks).toEqual([
+				{ model: "claude-opus-5", thinking: { type: "adaptive" }, output_config: { effort: "high" } },
+			]);
+			expect(request.beta).not.toContain("task-budgets-2026-03-13");
 		});
 	});
 
