@@ -5,6 +5,7 @@
 ### Added
 
 - Added Muse Code's subscription-only Muse Wonder Full and Wonder contributor tiers with the `max` effort, recording Muse Wonder's $4 input, $0.20 cached input, and $20 output per 1M tokens as their API-equivalent cost instead of $0 ([#15522](https://github.com/can1357/oh-my-pi/pull/15522) by [@eggpeat](https://github.com/eggpeat))
+
 ### Removed
 
 - Removed the Codex `toolMode` model field (`code_mode_only`); Codex discovery no longer maps `tool_mode`
