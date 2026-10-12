@@ -449,6 +449,141 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(prompt.mock.calls.find(isPlanApprovedCall)).toBeDefined();
 	});
 
+	it("executes a remote approval on the extension's selected tier and reports the tiers", async () => {
+		const slow = session.modelRegistry.find("anthropic", "claude-opus-4-5");
+		const def = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		if (!slow || !def) throw new Error("Expected sonnet + opus to exist in registry");
+
+		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
+		session.settings.setModelRole("slow", "anthropic/claude-opus-4-5");
+		session.settings.setModelRole("plan", "anthropic/claude-sonnet-4-5");
+
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nRun this on the slow tier.");
+
+		await mode.handlePlanModeCommand();
+		expect(session.getPlanModeState()?.enabled).toBe(true);
+		expect(session.model?.id).toBe(def.id);
+
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+		let answered: boolean | undefined;
+		const recorder = planReviewRecorder("remote", (event, ctx) => {
+			answered = ctx.resolvePlanReview(event.reviewId, "keep", { role: "slow" });
+		});
+		await loadExtensions(recorder.extension);
+
+		await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+		const resolved = await recorder.resolved;
+
+		const requested = recorder.events.find(
+			(event): event is PlanReviewRequestedEvent => event.type === "plan_review_requested",
+		);
+		expect(answered).toBe(true);
+		expect(requested?.tiers).toEqual([
+			{ role: "default", model: def.id },
+			{ role: "slow", model: slow.id },
+		]);
+		expect(resolved).toMatchObject({ reviewId: requested?.reviewId, choice: "keep", by: "extension" });
+		expect(session.model?.id).toBe(slow.id);
+	});
+
+	it("refuses a remote approval naming no selectable tier and keeps the review open", async () => {
+		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
+		session.settings.setModelRole("slow", "anthropic/claude-opus-4-5");
+
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nDo the thing.");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+		const refused: boolean[] = [];
+		let stayedOpen = false;
+		let accepted: boolean | undefined;
+		const recorder = planReviewRecorder("remote", (event, ctx) => {
+			refused.push(
+				ctx.resolvePlanReview(event.reviewId, "execute", { role: "ultra" }),
+				ctx.resolvePlanReview(event.reviewId, "keep", { role: "ultra" }),
+			);
+			stayedOpen = mode.ui.hasOverlay();
+			accepted = ctx.resolvePlanReview(event.reviewId, "execute");
+		});
+		await loadExtensions(recorder.extension);
+
+		await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+		await recorder.resolved;
+
+		expect(refused).toEqual([false, false]);
+		expect(stayedOpen).toBe(true);
+		expect(accepted).toBe(true);
+	});
+
+	it("reopens a dismissed review from an extension and answers it", async () => {
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nDo the thing.");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(mode, "handleClearCommand").mockResolvedValue();
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+		const requestedEvents: PlanReviewRequestedEvent[] = [];
+		const resolvedEvents: PlanReviewResolvedEvent[] = [];
+		const firstOpened = Promise.withResolvers<PlanReviewRequestedEvent>();
+		const secondOpened = Promise.withResolvers<PlanReviewRequestedEvent>();
+		const secondResolved = Promise.withResolvers<PlanReviewResolvedEvent>();
+		let ctxForLater: ExtensionContext | undefined;
+		const answer = (event: PlanReviewRequestedEvent, ctx: ExtensionContext): void => {
+			requestedEvents.push(event);
+			ctxForLater = ctx;
+			if (requestedEvents.length === 1) firstOpened.resolve(event);
+			else secondOpened.resolve(event);
+		};
+		const observer = planReviewExtension("resolved", event => {
+			if (event.type === "plan_review_resolved") {
+				resolvedEvents.push(event);
+				if (resolvedEvents.length === 2) secondResolved.resolve(event);
+			}
+		});
+		await loadExtensions(
+			planReviewExtension("remote", (event, ctx) => {
+				if (event.type === "plan_review_requested") answer(event, ctx);
+			}),
+			observer,
+		);
+
+		const approval = mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+		const first = await firstOpened.promise;
+
+		expect(mode.ui.hasOverlay()).toBe(true);
+		// Dismiss the review like a pinned error does: the pending plan survives, the overlay does not.
+		mode.showPinnedError("test dismissal");
+		expect(mode.ui.hasOverlay()).toBe(false);
+		expect(ctxForLater?.getPendingPlanReview()).toBeUndefined();
+
+		const opened = await ctxForLater!.openPlanReview();
+		expect(opened).toBe(true);
+		const second = await secondOpened.promise;
+		expect(second.reviewId).not.toBe(first.reviewId);
+		expect(ctxForLater!.resolvePlanReview(second.reviewId, "execute")).toBe(true);
+		const resolved = await secondResolved.promise;
+		await approval;
+		expect(resolvedEvents[0]).toMatchObject({ reviewId: first.reviewId, choice: undefined, by: "local" });
+	});
+
 	it("sends remote refinement feedback verbatim as the next planning prompt", async () => {
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {

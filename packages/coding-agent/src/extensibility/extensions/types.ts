@@ -657,18 +657,25 @@ export interface ExtensionContext {
 	 * Answer the open interactive plan review as if the operator picked `choice` in it.
 	 * `refine` needs non-empty `input.feedback`, which is sent as the next planning prompt.
 	 * `save` writes the plan under its default file name without the path prompt.
-	 * Approvals run on the tier selected in the overlay's model slider, and execute the plan
-	 * as it is when picked (in-overlay edits, else the plan file), which may differ from
-	 * the `planContent` that `plan_review_requested` reported.
+	 * Approvals execute the plan as it is when picked (in-overlay edits, else the plan
+	 * file), which may differ from the `planContent` that `plan_review_requested` reported.
+	 * `input.role` selects the execution tier, matched against `plan_review_requested`'s
+	 * `tiers` by role name; without it the approval runs on the tier selected in the
+	 * overlay's model slider.
 	 * False when that review is not open, the choice is disabled or missing its feedback,
-	 * or the mode has no plan review.
+	 * `input.role` names no selectable tier, or the mode has no plan review.
 	 */
-	resolvePlanReview(reviewId: string, choice: PlanReviewChoice, input?: { feedback?: string }): boolean;
+	resolvePlanReview(reviewId: string, choice: PlanReviewChoice, input?: { feedback?: string; role?: string }): boolean;
 	/**
 	 * The open interactive plan review still awaiting an answer, as `plan_review_requested` reported it,
 	 * or `undefined`. Lets an extension that loaded or reconnected after the event answer the review.
 	 */
 	getPendingPlanReview(): PlanReviewRequestedEvent | undefined;
+	/**
+	 * (Re-)open the interactive plan review, like `/plan-review` — for a plan still pending
+	 * after the review was dismissed. False when plan mode is not active or no plan file exists.
+	 */
+	openPlanReview(): Promise<boolean>;
 	/** Identity of the agent this session runs: the top-level session or a subagent. */
 	agent: ExtensionAgentIdentity;
 	/**
@@ -1227,6 +1234,12 @@ export interface PlanReviewOption {
 	label: string;
 	disabled: boolean;
 }
+/** An execution tier selectable in the plan review's model slider; pass `role` back as `input.role` to `ctx.resolvePlanReview`. */
+export interface PlanReviewTier {
+	role: string;
+	model: string;
+}
+
 /**
  * The interactive plan review opened (interactive mode only). Resolve it with `ctx.resolvePlanReview`.
  * `plan_review_resolved` waits until every handler of this event returns, so handlers should hand
@@ -1240,6 +1253,8 @@ export interface PlanReviewRequestedEvent {
 	planFilePath: string;
 	planContent: string;
 	options: PlanReviewOption[];
+	/** Execution tiers the model slider offers, first entry selected; omitted when fewer than two resolve. */
+	tiers?: PlanReviewTier[];
 }
 /**
  * The plan review closed: a choice, or `undefined` when it was dismissed or cancelled (session switch,
@@ -2090,8 +2105,13 @@ export interface ExtensionContextActions {
 	abort: () => void;
 	hasPendingMessages: () => boolean;
 	shutdown: () => void;
-	resolvePlanReview?: (reviewId: string, choice: PlanReviewChoice, input?: { feedback?: string }) => boolean;
+	resolvePlanReview?: (
+		reviewId: string,
+		choice: PlanReviewChoice,
+		input?: { feedback?: string; role?: string },
+	) => boolean;
 	getPendingPlanReview?: () => PlanReviewRequestedEvent | undefined;
+	openPlanReview?: () => Promise<boolean>;
 	getContextUsage: () => ContextUsage | undefined;
 	compact: (instructionsOrOptions?: string | CompactOptions) => Promise<void>;
 	getSystemPrompt: () => string[];

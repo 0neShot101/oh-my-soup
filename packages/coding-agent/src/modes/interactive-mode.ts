@@ -1568,6 +1568,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		| {
 				request: PlanReviewRequestedEvent;
 				remote?: { choice: PlanReviewChoice; feedback?: string };
+				/** Applies a remote tier pick to the review's slider selection; undefined when the slider is hidden. */
+				selectTier?: (role: string) => boolean;
 		  }
 		| undefined;
 	/** Serializable review annotations keyed by the resolved plan file path. */
@@ -5393,9 +5395,14 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/**
 	 * Answers the open plan review as if the operator picked `choice`: backs `ctx.resolvePlanReview`.
-	 * Refine feedback is sent verbatim; it only has to be non-blank.
+	 * Refine feedback is sent verbatim; it only has to be non-blank. `input.role` moves an
+	 * approval's execution-tier selection before the pick and is refused when it names no tier.
 	 */
-	resolvePlanReview(reviewId: string, choice: PlanReviewChoice, input?: { feedback?: string }): boolean {
+	resolvePlanReview(
+		reviewId: string,
+		choice: PlanReviewChoice,
+		input?: { feedback?: string; role?: string },
+	): boolean {
 		const pending = this.#pendingPlanReview;
 		const pick = this.#planReviewPick;
 		if (!pending || pending.request.reviewId !== reviewId || !pick) return false;
@@ -5403,6 +5410,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!option || option.disabled) return false;
 		const feedback = input?.feedback;
 		if (choice === "refine" && !feedback?.trim()) return false;
+		const approves = choice === "execute" || choice === "compact" || choice === "keep";
+		if (approves && input?.role !== undefined && !pending.selectTier?.(input.role)) return false;
 		pending.remote = { choice, feedback };
 		pick(option.label);
 		return true;
@@ -6510,24 +6519,29 @@ export class InteractiveMode implements InteractiveModeContext {
 	 *  not survive a restart), so this drives off the newest `local://<slug>-plan.md`
 	 *  the agent wrote — the files persist in the session artifacts dir, so the scan
 	 *  works before any review and across restarts. */
-	async openPlanReview(): Promise<void> {
+	async openPlanReview(): Promise<boolean> {
 		if (!this.planModeEnabled) {
 			this.showWarning("Plan mode is not active.");
-			return;
+			return false;
 		}
 		const noPlan = "No plan to review yet — write one to a local://<slug>-plan.md file first.";
 		const [planFilePath] = await this.#listLocalPlanFiles();
 		if (!planFilePath) {
 			this.showWarning(noPlan);
-			return;
+			return false;
 		}
 		const planContent = await this.#readPlanFile(planFilePath);
 		if (planContent === null) {
 			this.showWarning(noPlan);
-			return;
+			return false;
 		}
 		const { title } = resolvePlanTitle({ planContent, planFilePath });
-		await this.handlePlanApproval({ planFilePath, title, planExists: true });
+		// Fire-and-forget: callers get the review via `plan_review_requested` /
+		// `getPendingPlanReview`; awaiting here would hold them until it closes.
+		void this.handlePlanApproval({ planFilePath, title, planExists: true }).catch(error => {
+			this.showError(`Failed to open plan review: ${error instanceof Error ? error.message : String(error)}`);
+		});
+		return true;
 	}
 
 	async handlePlanApproval(details: PlanApprovalDetails): Promise<void> {
@@ -6616,9 +6630,24 @@ export class InteractiveMode implements InteractiveModeContext {
 			planFilePath,
 			planContent,
 			options: reviewOptions,
+			tiers: slider ? cycle!.models.map(entry => ({ role: entry.role, model: entry.model.id })) : undefined,
 		};
 		const reviewId = request.reviewId;
-		this.#pendingPlanReview = { request };
+		this.#pendingPlanReview = {
+			request,
+			// Mirrors the slider's onChange for remote answers: a pick in `resolvePlanReview`
+			// moves the same `selectedTierIndex` the approval branch reads after the choice.
+			// Undefined when the slider is hidden — a lone tier is no selection, and pinning
+			// it would switch the session back to the plan model.
+			selectTier: slider
+				? role => {
+						const index = cycle!.models.findIndex(entry => entry.role === role);
+						if (index < 0) return false;
+						selectedTierIndex = index;
+						return true;
+					}
+				: undefined,
+		};
 		const pending = this.#pendingPlanReview;
 		const extensionRunner = this.session.extensionRunner;
 		// `plan_review_resolved` reports the overlay closing, not the pick: a pick can
