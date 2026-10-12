@@ -10,6 +10,10 @@
 
 - `UserMessageComponent`'s native hover toolbar (`omp.user.tools`) leads with Copy and Rewind icon buttons (`copy`, `rewind`) instead of text labels, then a dot and the time, like the turn usage footer
 
+### Fixed
+
+- `CountdownTimer`'s native `elapsed` no longer sends `stopped: 0`, which froze every native countdown (extension input, selector and editor prompts) at zero from the start
+
 ## [18.10.0] - 2026-10-12
 
 ### Breaking Changes
