@@ -73,17 +73,17 @@ export function ariaSnapshot(root: Element | null, request: AriaSnapshotRequest 
 	// accessible name of any control that labels itself by it (aria-labelledby, embedded
 	// controls), password fields included. While the tree is built, every password input
 	// reports one bullet per character instead, as the screen and Chrome's accessibility
-	// tree do, so a typed or saved password never reaches a snapshot. The tag check works
-	// for inputs adopted from another frame. No page task runs before the getters are
-	// removed; an own \`value\` property the page installed (React tracks input changes with
-	// one) is put back as it was, and a value the page made non-configurable is masked in
-	// the rendered text instead.
+	// tree do, so a typed or saved password never reaches a snapshot. Matching by local
+	// name covers XHTML pages and inputs adopted from another frame. No page task runs
+	// before the getters are removed; an own \`value\` property the page installed (React
+	// tracks input changes with one) is put back as it was, and a value the page made
+	// non-configurable is masked in the rendered text instead.
 	const masked: Array<[HTMLInputElement, PropertyDescriptor | undefined]> = [];
 	const pinned: string[] = [];
 	try {
 		walkElements(el => {
 			const input = el as HTMLInputElement;
-			if (input.tagName !== "INPUT" || input.type !== "password") return;
+			if (input.localName !== "input" || input.type !== "password") return;
 			const own = Object.getOwnPropertyDescriptor(input, "value");
 			const value = input.value;
 			if (own && !own.configurable) {

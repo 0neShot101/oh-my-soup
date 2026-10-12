@@ -257,4 +257,25 @@ await tab.evaluate((s, p) => {
 			await invoke({ action: "close", name, kill: true }).catch(() => undefined);
 		}
 	}, 60_000);
+
+	test("masks password fields on XHTML pages, whose tag names are lowercase", async () => {
+		const invoke = createHost();
+		const name = `snapshot-password-xhtml-${crypto.randomUUID()}`;
+		const secret = "Fake-Xhtml-Secret-4417";
+		const xhtml = `<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Sign in</title></head><body><form>
+			<label>Password <input id="pw" type="password"/></label>
+		</form></body></html>`;
+		await invoke({ action: "open", name, url: `data:application/xhtml+xml,${encodeURIComponent(xhtml)}` });
+		try {
+			await invoke({ action: "run", name, code: `await tab.fill("#pw", ${JSON.stringify(secret)});` });
+			const snapshot = valueFrom<string>(
+				await invoke({ action: "run", name, code: "return await tab.ariaSnapshot();" }),
+			);
+			expect(snapshot).not.toContain(secret);
+			expect(snapshot).toContain(`textbox "Password" [active] [ref=`);
+			expect(snapshot).toContain(`: ${"•".repeat(secret.length)}`);
+		} finally {
+			await invoke({ action: "close", name, kill: true }).catch(() => undefined);
+		}
+	}, 60_000);
 });
