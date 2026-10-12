@@ -65,6 +65,6 @@ export function dropRejectedCodexAccessPrograms(
 function isAccessProgramRejection(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
 	const code = "code" in error && typeof error.code === "string" ? error.code : undefined;
-	if (code !== undefined && Object.hasOwn(REJECTION_CODES, code)) return true;
+	if (code !== undefined) return Object.hasOwn(REJECTION_CODES, code);
 	return REJECTION_PATTERN.test(error.message);
 }

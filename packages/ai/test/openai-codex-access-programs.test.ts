@@ -100,4 +100,34 @@ describe("openai-codex cyber access programs", () => {
 		expect((await run("acct-daybreak", [200])).stopReason).toBe("stop");
 		expect(sent).toEqual([undefined]);
 	});
+
+	it("surfaces cyber policy errors without replaying or disabling Daybreak", async () => {
+		const accountId = "acct-daybreak-cyber-policy";
+		const policyModel = createCodexModel("gpt-6-sol-cyber-policy", {
+			preferWebsockets: false,
+			accountAccess: { [accountId]: { cyberPrograms: ["standard", "daybreak_blue"] } },
+		});
+		const message =
+			"This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. Otherwise, confirm that the access_programs.cyber parameter is set to the appropriate tier, and note that some cybersecurity requests are still limited, even when Daybreak is on.";
+		const errorSse = `data: ${JSON.stringify({ type: "error", code: "cyber_policy", message })}\n\n`;
+		const sent: unknown[] = [];
+		const fetch = (async (input: string | URL, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (!url.endsWith("/responses")) return new Response("not found", { status: 404 });
+			sent.push(decodeBody(init?.body).access_programs);
+			return new Response(sent.length === 1 ? errorSse : COMPLETED_SSE, {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		}) as FetchImpl;
+		const options = { apiKey: createCodexTestToken(accountId), fetch };
+
+		const failed = await streamOpenAICodexResponses(policyModel, context, options).result();
+		expect(failed.stopReason).toBe("error");
+		expect(failed.errorMessage).toContain("cyber_policy");
+		expect(sent).toEqual([{ cyber: "daybreak_blue" }]);
+
+		expect((await streamOpenAICodexResponses(policyModel, context, options).result()).stopReason).toBe("stop");
+		expect(sent).toEqual([{ cyber: "daybreak_blue" }, { cyber: "daybreak_blue" }]);
+	});
 });
