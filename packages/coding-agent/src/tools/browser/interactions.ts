@@ -1,10 +1,11 @@
 import type { Protocol } from "devtools-protocol";
-import * as path from "node:path";
 import { untilAborted } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import type { ElementHandle, KeyInput, KeyPressOptions, MouseButton, Page } from "puppeteer-core";
+import type { ElementHandle, JSHandle, KeyInput, KeyPressOptions, MouseButton, Page } from "puppeteer-core";
 import { ToolAbortError, throwIfAborted } from "../tool-errors";
 import { splitKeyCombo, ternKey } from "./tern/keys";
+import { devtoolsFrameId } from "./frames";
+import { openUploadSource, readFilePayloads, type UploadFileInfo, type UploadSource } from "./upload-files";
 
 /** Options accepted by coordinate-based mouse clicks. */
 export interface ClickAtOptions {
@@ -52,13 +53,6 @@ interface ClickPoint {
 }
 
 type ActionabilityResult = { ok: true; x: number; y: number } | { ok: false; reason: string; coveredBy?: string };
-
-interface FilePayload {
-	name: string;
-	type: string;
-	lastModified: number;
-	data: string;
-}
 
 interface PageRect {
 	left: number;
@@ -633,55 +627,80 @@ export type UploadDelivery = "paths" | "contents";
 /** How long a click has to open a file chooser before the target counts as a drop zone. */
 const FILE_CHOOSER_WAIT_MS = 400;
 
-/** Assign files to a file input and fire the events a user's pick would; returns why it refused. Runs in the page. */
-function assignFilePayloads(el: unknown, payloads: FilePayload[]): string | null {
+/**
+ * Raw bytes per call into the page. Each call is one CDP message carrying its chunk base64-encoded, so an upload of any
+ * size stays far below the websocket message caps on the way (the relay's is 256 MiB).
+ */
+const UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
+
+/** Append one base64 chunk to file `index` of a page-side upload. Runs in the page. */
+function appendUploadChunk(parts: Uint8Array[][], index: number, data: string): void {
+	parts[index] ??= [];
+	parts[index].push(Uint8Array.from(atob(data), character => character.charCodeAt(0)));
+}
+
+/**
+ * Check that a file input takes `files`, and with `parts` assign them and fire the events a user's pick would.
+ * Returns why it refused. Runs in the page.
+ */
+function assignUploadParts(el: unknown, files: UploadFileInfo[], parts: Uint8Array[][] | null): string | null {
 	const element = el as PageElement & { multiple: boolean };
 	const page = globalThis as unknown as PageGlobals;
-	if (payloads.length > 1 && !element.multiple)
-		return "Multiple file uploads only work with <input type=file multiple>";
+	if (files.length > 1 && !element.multiple) return "Multiple file uploads only work with <input type=file multiple>";
 	if (element.tagName !== "INPUT" || element.type?.toLowerCase() !== "file") return "Node is not a file input element";
+	if (!parts) return null;
 	const transfer = new page.DataTransfer();
-	for (const payload of payloads) {
-		const bytes = Uint8Array.from(atob(payload.data), character => character.charCodeAt(0));
-		// A browser picking the file itself reports the bare MIME type and the file's modification time.
-		const type = payload.type.split(";")[0];
-		transfer.items.add(new page.File([bytes], payload.name, { type, lastModified: payload.lastModified }));
-	}
+	files.forEach((file, index) => {
+		transfer.items.add(
+			new page.File(parts[index] ?? [], file.name, { type: file.type, lastModified: file.lastModified }),
+		);
+	});
 	element.files = transfer.files;
 	element.dispatchEvent(new page.Event("input", { bubbles: true, composed: true }));
 	element.dispatchEvent(new page.Event("change", { bubbles: true }));
 	return null;
 }
 
-async function readFilePayloads(absolutePaths: string[], signal?: AbortSignal): Promise<FilePayload[]> {
-	const files: FilePayload[] = [];
-	for (const absolute of absolutePaths) {
-		throwIfAborted(signal);
-		const file = Bun.file(absolute);
-		const data = Buffer.from(await file.arrayBuffer()).toString("base64");
-		files.push({
-			name: path.basename(absolute),
-			type: file.type || "application/octet-stream",
-			lastModified: file.lastModified,
-			data,
-		});
-	}
-	return files;
-}
-
-/** Give a file input the files' contents instead of their paths. */
+/**
+ * Give a file input the files' contents instead of their paths, streamed in chunks. `handle` evaluates in the
+ * isolated world, so the DataTransfer, File, Event and atob a page may replace are never the ones used.
+ */
 export async function uploadFileContents(
 	handle: ElementHandle,
 	absolutePaths: string[],
 	signal?: AbortSignal,
 ): Promise<void> {
-	const payloads = await readFilePayloads(absolutePaths, signal);
-	const refused = await untilAborted(signal, () => handle.evaluate(assignFilePayloads, payloads));
+	const sources: UploadSource[] = [];
+	for (const absolute of absolutePaths) {
+		throwIfAborted(signal);
+		sources.push(await openUploadSource(absolute));
+	}
+	const files = sources.map(source => source.info);
+	const refused = await untilAborted(signal, () => handle.evaluate(assignUploadParts, files, null));
 	if (refused) throw new ToolError(refused);
+	const parts = await untilAborted(signal, () => handle.evaluateHandle(() => [] as Uint8Array[][]));
+	try {
+		for (const [index, { file, size }] of sources.entries()) {
+			for (let start = 0; start < size; start += UPLOAD_CHUNK_BYTES) {
+				const chunk = await untilAborted(signal, () => file.slice(start, start + UPLOAD_CHUNK_BYTES).arrayBuffer());
+				const data = Buffer.from(chunk).toString("base64");
+				await untilAborted(signal, () => parts.evaluate(appendUploadChunk, index, data));
+			}
+		}
+		const late = await untilAborted(signal, () => handle.evaluate(assignUploadParts, files, parts));
+		if (late) throw new ToolError(late);
+	} finally {
+		await parts.dispose().catch(() => undefined);
+	}
 }
 
 /** Pages with a chooser-trigger upload in flight: a second one would catch the first one's chooser. */
 const pagesAwaitingChooser = new WeakSet<Page>();
+
+/** A frame's isolated realm, `@internal` upstream and stripped from Puppeteer's published types. */
+interface IsolatedRealmFrame {
+	isolatedRealm(): { adoptBackendNode(backendNodeId: number): Promise<JSHandle> };
+}
 
 /**
  * Click `handle` and hand the file chooser it opens the files' contents; false when no chooser opened.
@@ -721,24 +740,20 @@ async function fillClickedFileChooserWithContents(
 				`${label} opened a File System Access picker (showOpenFilePicker), which automation cannot fill; upload through the page's <input type=file> or drop zone instead`,
 			);
 		}
-		const payloads = await readFilePayloads(absolutePaths, signal);
-		const { object } = await untilAborted(signal, () =>
-			session.send("DOM.resolveNode", { backendNodeId: chooser.backendNodeId }),
-		);
-		const { result, exceptionDetails } = await untilAborted(signal, () =>
-			session.send("Runtime.callFunctionOn", {
-				objectId: object.objectId,
-				functionDeclaration: `function (payloads) { return (${assignFilePayloads.toString()})(this, payloads); }`,
-				arguments: [{ value: payloads }],
-				returnByValue: true,
-			}),
-		);
-		if (exceptionDetails) {
-			throw new ToolError(
-				`${label} could not fill its file chooser: ${exceptionDetails.exception?.description ?? exceptionDetails.text}`,
-			);
+		const { backendNodeId } = chooser;
+		const frame = page.frames().find(candidate => devtoolsFrameId(candidate) === chooser.frameId);
+		if (!frame) throw new ToolError(`${label} opened a file chooser in a frame that has since gone away`);
+		// The isolated world, like the direct-input route, so the page's own globals never touch the files.
+		// Puppeteer keeps the isolated realm and node adoption on internal APIs its public types omit.
+		const realm = (frame as unknown as IsolatedRealmFrame).isolatedRealm();
+		const node = await untilAborted(signal, () => realm.adoptBackendNode(backendNodeId));
+		try {
+			const input = node.asElement();
+			if (!input) throw new ToolError("Node is not a file input element");
+			await uploadFileContents(input, absolutePaths, signal);
+		} finally {
+			await node.dispose().catch(() => undefined);
 		}
-		if (typeof result.value === "string") throw new ToolError(result.value);
 		return true;
 	} finally {
 		clearTimeout(timer);

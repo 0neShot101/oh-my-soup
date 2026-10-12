@@ -39,6 +39,57 @@ document.getElementById("swap").addEventListener("click", () => {
 });
 </script>`;
 
+// A page that replaces the globals an upload builds its files with, as polyfills and monitoring scripts do.
+const poisonedHtml = `<!doctype html>
+<input id="direct" type="file">
+<button id="trigger" type="button">Upload</button><input id="trigger-input" type="file" hidden>
+<script>
+for (const name of ["DataTransfer", "File", "Event", "atob"])
+  window[name] = function () { throw new Error("the page replaced " + name); };
+document.getElementById("trigger").addEventListener("click", () => document.getElementById("trigger-input").click());
+</script>`;
+
+interface ProxiedSocket {
+	path: string;
+	upstream?: WebSocket;
+	pending: (string | Buffer)[];
+}
+
+/** Forward CDP to Chrome and, like the relay, drop the connection on a websocket message over `maxMessageBytes`. */
+function startCappedCdpProxy(chromePort: number, maxMessageBytes: number): Bun.Server<ProxiedSocket> {
+	return Bun.serve<ProxiedSocket>({
+		hostname: "127.0.0.1",
+		port: 0,
+		async fetch(req, server) {
+			const { pathname } = new URL(req.url);
+			if (server.upgrade(req, { data: { path: pathname, pending: [] } })) return undefined;
+			const response = await fetch(`http://127.0.0.1:${chromePort}${pathname}`);
+			const body = (await response.text()).replaceAll(`127.0.0.1:${chromePort}`, `127.0.0.1:${server.port}`);
+			return new Response(body, { status: response.status, headers: { "content-type": "application/json" } });
+		},
+		websocket: {
+			maxPayloadLength: maxMessageBytes,
+			open(ws) {
+				const upstream = new WebSocket(`ws://127.0.0.1:${chromePort}${ws.data.path}`);
+				ws.data.upstream = upstream;
+				upstream.onopen = () => {
+					for (const message of ws.data.pending.splice(0)) upstream.send(message);
+				};
+				upstream.onmessage = event => ws.send(event.data);
+				upstream.onclose = () => ws.close();
+			},
+			message(ws, message) {
+				const { upstream } = ws.data;
+				if (upstream?.readyState === WebSocket.OPEN) upstream.send(message);
+				else ws.data.pending.push(message);
+			},
+			close(ws) {
+				ws.data.upstream?.close();
+			},
+		},
+	});
+}
+
 let tempDir = "";
 let site: Bun.Server<undefined> | undefined;
 let url = "";
@@ -59,8 +110,11 @@ function makeSession(): ToolSession {
 	};
 }
 
-/** Launch a Chrome omp did not start, open the fixture in it over `app.cdp_url`, and run cells there. */
-async function openConnectedTab(toolCallId: string) {
+/**
+ * Launch a Chrome omp did not start, open a fixture page in it over `app.cdp_url`, and run cells there. With
+ * `maxMessageBytes`, omp reaches Chrome through a proxy that caps websocket messages the way the relay does.
+ */
+async function openConnectedTab(toolCallId: string, options: { page?: string; maxMessageBytes?: number } = {}) {
 	const exe = await ensureChromiumExecutable();
 	if (!exe) throw new Error("Expected a Chromium executable");
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-upload-connected-"));
@@ -76,19 +130,25 @@ async function openConnectedTab(toolCallId: string) {
 		],
 		{ stdin: "ignore", stdout: "ignore", stderr: "ignore" },
 	);
+	const proxy = options.maxMessageBytes ? startCappedCdpProxy(port, options.maxMessageBytes) : undefined;
+	const cdpUrl = `http://127.0.0.1:${proxy?.port ?? port}`;
 	const session = makeSession();
 	const prelude = createBrowserPrelude(session);
 	const context = { session, toolCallId };
 	const name = `upload-${crypto.randomUUID()}`;
 	const close = async () => {
 		await prelude.invoke({ action: "close", name }, context).catch(() => undefined);
+		proxy?.stop(true);
 		child.kill();
 		await child.exited;
 		await fs.rm(root, { recursive: true, force: true });
 	};
 	try {
 		await waitForCdp(`http://127.0.0.1:${port}`, 15_000);
-		await prelude.invoke({ action: "open", name, url, app: { cdp_url: `http://127.0.0.1:${port}` } }, context);
+		await prelude.invoke(
+			{ action: "open", name, url: `${url}${options.page ?? ""}`, app: { cdp_url: cdpUrl } },
+			context,
+		);
 	} catch (error) {
 		await close();
 		throw error;
@@ -107,7 +167,10 @@ beforeAll(async () => {
 	site = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
-		fetch: () => new Response(html, { headers: { "content-type": "text/html" } }),
+		fetch: req =>
+			new Response(new URL(req.url).pathname === "/poisoned" ? poisonedHtml : html, {
+				headers: { "content-type": "text/html" },
+			}),
 	});
 	url = `http://127.0.0.1:${site.port}/`;
 });
@@ -196,6 +259,57 @@ return {
 			await close();
 		}
 	}, 60_000);
+	test("builds the files in the isolated world, untyped when the extension names no type", async () => {
+		const { run, close } = await openConnectedTab("browser-upload-connected-poisoned", { page: "poisoned" });
+		try {
+			await Bun.write(path.join(tempDir, "notes"), "no extension");
+			const errors = await run(`const errors = [];
+for (const selector of ["#direct", "#trigger"]) {
+	try { await tab.uploadFile(selector, "notes"); } catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
+}
+return errors;`);
+			expect(errors).toEqual([]);
+			const received =
+				await run(`return await tab.evaluate(() => Promise.all(["#direct", "#trigger-input"].map(async id => {
+	const file = document.querySelector(id).files[0];
+	return [await file.text(), file.type];
+})));`);
+			// A browser's own pick of a file whose extension names no MIME type reports an empty type.
+			expect(received).toEqual([
+				["no extension", ""],
+				["no extension", ""],
+			]);
+		} finally {
+			await close();
+		}
+	}, 60_000);
+
+	test("streams a file larger than one websocket message allows", async () => {
+		const maxMessageBytes = 16 * 1024 * 1024;
+		const { run, close } = await openConnectedTab("browser-upload-connected-capped", { maxMessageBytes });
+		try {
+			// Base64 in a single message would come to 4/3 of the file, over the cap.
+			const bytes = new Uint8Array(maxMessageBytes);
+			for (let offset = 0; offset < bytes.length; offset += 65_536)
+				crypto.getRandomValues(bytes.subarray(offset, offset + 65_536));
+			const digest = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+			await Bun.write(path.join(tempDir, "large.bin"), bytes);
+			const errors = await run(`const errors = [];
+for (const selector of ["#direct", "#trigger"]) {
+	try { await tab.uploadFile(selector, "large.bin"); } catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
+}
+return errors;`);
+			expect(errors).toEqual([]);
+			const digests =
+				await run(`return await tab.evaluate(() => Promise.all(["#direct", "#trigger-input"].map(async id => {
+	const digest = await crypto.subtle.digest("SHA-256", await document.querySelector(id).files[0].arrayBuffer());
+	return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+})));`);
+			expect(digests).toEqual([digest, digest]);
+		} finally {
+			await close();
+		}
+	}, 90_000);
 });
 
 test("detaches a chooser session that attaches after the upload was cancelled", async () => {
