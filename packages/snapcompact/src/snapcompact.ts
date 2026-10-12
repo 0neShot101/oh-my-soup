@@ -65,7 +65,6 @@ import {
 	resolveImageTokenization,
 } from "@oh-my-pi/pi-catalog/compat/image-tokenization";
 import { resolveImageCountBudget, resolveInlineImageByteBudget } from "@oh-my-pi/pi-catalog/compat/request-size";
-import { resolveModelPolicy } from "@oh-my-pi/pi-catalog/compat/resolve";
 import { classifyModel, compareRevision, parseRevision } from "@oh-my-pi/pi-catalog/identity";
 import { renderSnapcompactPng, snapcompactSupportedChars } from "@oh-my-pi/pi-natives";
 import { formatGroupedPaths, isRecord, prompt } from "@oh-my-pi/pi-utils";
@@ -846,7 +845,8 @@ export interface SerializeOptions {
 	 *  louder than archived tool noise. Defaults to `true`. */
 	dimToolResults?: boolean;
 	/** Serialize assistant reasoning as `¶think:` sections. Defaults to `true`.
-	 *  Callers archiving for a Claude/Anthropic-dialect model set this `false`:
+	 *  Callers archiving for a reader whose classifier refuses quoted reasoning
+	 *  ({@link readerIncludesThinking} `false`) set this `false`:
 	 *  the archive frames are replayed as text into every later request, and
 	 *  reasoning rendered back to Claude trips its `reasoning_extraction`
 	 *  classifier (issue #6093). */
@@ -2250,7 +2250,7 @@ function stripThinkingSections(text: string): string {
  * `¶think:` sections and their legend left out.
  */
 export function readerIncludesThinking(model: Model): boolean {
-	return resolveModelPolicy(model).catalog.classifierCotExtraction !== true;
+	return resolveCatalogPolicy(model).classifierCotExtraction !== true;
 }
 
 /** Whether a snapcompact summary declares `¶think:` reasoning scopes: true for

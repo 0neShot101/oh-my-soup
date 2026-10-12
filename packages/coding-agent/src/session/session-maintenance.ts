@@ -4415,8 +4415,9 @@ export class SessionMaintenance {
 	 * context and in `activeMessages` (a running loop's context).
 	 * `includeThinking` is fixed when an archive is rendered, so one built under
 	 * another model still carries `¶think:` sections and the reasoning legend
-	 * once the session moves to Claude; an Anthropic-dialect model gets the
-	 * archive's no-reasoning view instead, and any other model the original.
+	 * once the session moves to Claude; a model whose classifier refuses quoted
+	 * reasoning (the `classifier-cot-extraction` catalog axis) gets the archive's
+	 * no-reasoning view instead, and any other model the original.
 	 *
 	 * Runs on every model change and before every model call; side requests
 	 * read through {@link messagesForModel}.
