@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Muse Wonder (`muse-wonder-1.0`) on Meta Model API and Muse Code at $4 input, $0.20 cached input, and $20 output per 1M tokens, and Muse Code's subscription-only Muse Wonder Full and Wonder contributor tiers as included usage; every Wonder tier offers the `max` effort
+
 ## [18.10.2] - 2026-10-12
 
 ### Added

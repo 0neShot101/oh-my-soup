@@ -64,6 +64,19 @@ provider "meta" {
 			supports-reasoning-effort #true
 			include-encrypted-reasoning #true
 		}
+		// Muse Wonder: Standard mode only on Model API (no contributor tier),
+		// $4 input / $0.20 cached / $20 output per 1M tokens with no long-context
+		// premium. `max` effort is documented and accepted (verified 2026-10-12).
+		model "muse-wonder-1.0" name="Muse Wonder 1.0" {
+			reasoning #true
+			input "text" "image"
+			cost input=4 output=20 cache-read=0.2 cache-write=0
+			limits context=1048576 max-tokens=131072
+			thinking-mode "effort"
+			thinking-efforts "minimal" "low" "medium" "high" "xhigh" "max"
+			supports-reasoning-effort #true
+			include-encrypted-reasoning #true
+		}
 	}
 
 	include-encrypted-reasoning #true

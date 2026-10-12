@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { getBundledModel, getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
 import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import {
@@ -120,6 +120,34 @@ describe("Muse Code subscription provider", () => {
 				maxTokens: 131_072,
 			}),
 		]);
+	});
+
+	test("prices Muse Wonder at the API rate and subscription-only Wonder tiers as included usage", async () => {
+		const options = museCodeModelManagerOptions({
+			apiKey: "LLM|subscription-key",
+			fetch: async () =>
+				modelListResponse([
+					"muse-wonder-1.0",
+					"muse-wonder-1.0-contributor",
+					"muse-wonder-full-1.0",
+					"muse-wonder-full-1.0-contributor",
+				]),
+		});
+		const discovered = new Map(
+			((await options.fetchDynamicModels?.()) ?? []).map(spec => [spec.id, buildModel(spec)]),
+		);
+		const wonder = discovered.get("muse-wonder-1.0")!;
+		expect(wonder.cost).toEqual({ input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 });
+		expect(getModelPricingStatus(wonder)).toBe("fixed");
+		// Meta publishes no token rate for Wonder Full or a Wonder contributor
+		// tier; they must read as included usage, not unknown or free.
+		for (const id of ["muse-wonder-1.0-contributor", "muse-wonder-full-1.0", "muse-wonder-full-1.0-contributor"]) {
+			expect(getModelPricingStatus(discovered.get(id)!)).toBe("included");
+		}
+		for (const model of discovered.values()) {
+			expect(model.reasoning).toBe(true);
+			expect(model.thinking).toEqual(MUSE_SPARK_MAX_THINKING);
+		}
 	});
 
 	test("selects the compact edit prompt only for the subscription tier", () => {
