@@ -68,8 +68,40 @@ export function ariaSnapshot(root: Element | null, request: AriaSnapshotRequest 
 	});
 	const target = root ?? document.body ?? document.documentElement;
 	const options = { mode: "ai", depth: request.depth, boxes: request.boxes } as const;
-	const tree = generateAriaTree(target, options);
-	return renderAriaTree(tree, options).text;
+	// Playwright reads a text input's live value for the textbox's child text and for the
+	// accessible name of any control that labels itself by it (aria-labelledby, embedded
+	// controls), password fields included. While the tree is built, every password input
+	// reports one bullet per character instead, as the screen and Chrome's accessibility
+	// tree do, so a typed or saved password never reaches a snapshot. The tag check works
+	// for inputs adopted from another frame. No page task runs before the getters are
+	// removed; an own \`value\` property the page installed (React tracks input changes with
+	// one) is put back as it was, and a value the page made non-configurable is masked in
+	// the rendered text instead.
+	const masked: Array<[HTMLInputElement, PropertyDescriptor | undefined]> = [];
+	const pinned: string[] = [];
+	try {
+		walkElements(el => {
+			const input = el as HTMLInputElement;
+			if (input.tagName !== "INPUT" || input.type !== "password") return;
+			const own = Object.getOwnPropertyDescriptor(input, "value");
+			const value = input.value;
+			if (own && !own.configurable) {
+				if (value) pinned.push(value);
+				return;
+			}
+			const bullets = "\\u2022".repeat(value.length);
+			Object.defineProperty(input, "value", { configurable: true, get: () => bullets });
+			masked.push([input, own]);
+		});
+		let text = renderAriaTree(generateAriaTree(target, options), options).text;
+		for (const value of pinned) text = text.replaceAll(value, "\\u2022".repeat(value.length));
+		return text;
+	} finally {
+		for (const [input, own] of masked) {
+			if (own) Object.defineProperty(input, "value", own);
+			else Reflect.deleteProperty(input, "value");
+		}
+	}
 }
 
 export function resolveAriaRef(ref: string): Element | null {
