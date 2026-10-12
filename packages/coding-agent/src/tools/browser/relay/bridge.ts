@@ -972,6 +972,10 @@ export class RelayBridge {
 				const activatedTab = parsed ? this.#tabs.get(parsed.key) : undefined;
 				if (parsed && activatedTab) {
 					await this.#rpc({ op: "activateTab", tabId: activatedTab.tabId }, this.#instanceFor(activatedTab));
+				} else if (near) {
+					// Raw, a page session's activate failed; don't turn an unknown id into success there.
+					this.#replyError(conn, msg, `No target with id ${String(msg.params?.targetId)}`);
+					return;
 				}
 				this.#reply(conn, msg, {});
 				return;

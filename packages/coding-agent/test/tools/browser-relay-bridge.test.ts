@@ -1368,6 +1368,37 @@ describe("RelayBridge page-session target lifecycle", () => {
 		expect(chrome.rpcs("removeTab").map(rpc => rpc.tabId)).toEqual([9]);
 		expect(reply(closeId)?.result).toEqual({ success: true });
 	});
+
+	it("fails a page session's activate or close of a target the relay does not know", async () => {
+		const bridge = new RelayBridge({});
+		const ext = new FakeExtSocket();
+		connect(bridge, ext, [tab({ tabId: 1 })]);
+		const cdp = new FakeCdpSocket();
+		const connId = bridge.cdpConnected(cdp);
+		const sessionId = await attachPage(bridge, ext, cdp, connId, 1);
+		const ids: number[] = [];
+		for (const [method, params] of [
+			["Target.activateTarget", { targetId: "2E08A730A7A82AC514A041D202746564" }],
+			["Target.activateTarget", { targetId: `PAGE${ANON}.9` }],
+			["Target.activateTarget", {}],
+			["Target.closeTarget", { targetId: "2E08A730A7A82AC514A041D202746564" }],
+		] as const) {
+			const id = ++msgSeq;
+			ids.push(id);
+			bridge.cdpMessage(connId, JSON.stringify({ id, sessionId, method, params }));
+		}
+		await flush();
+
+		for (const id of ids) {
+			expect(cdp.messages.find(message => message.id === id)).toMatchObject({
+				sessionId,
+				error: { message: expect.stringContaining("No target with id") },
+			});
+		}
+		expect(ext.rpcs("send")).toHaveLength(0);
+		expect(ext.rpcs("activateTab")).toHaveLength(0);
+		expect(ext.rpcs("removeTab")).toHaveLength(0);
+	});
 });
 describe("RelayBridge auto-attach gating", () => {
 	function destroyedIds(cdp: FakeCdpSocket): string[] {
