@@ -131,7 +131,8 @@ mod base32;
 mod base64;
 #[cfg(feature = "util.basename")]
 mod basename;
-/// Shared POSIX basic-regular-expression translation behind `grep` and `sed`.
+/// Shared POSIX basic-regular-expression translation behind `grep`, `sed`,
+/// and `nl`.
 #[cfg(feature = "util.bre")]
 mod bre;
 #[cfg(feature = "util.cat")]
@@ -196,6 +197,8 @@ mod mkdir;
 mod mktemp;
 #[cfg(feature = "util.mv")]
 mod mv;
+#[cfg(feature = "util.nl")]
+mod nl;
 #[cfg(feature = "util.nproc")]
 mod nproc;
 #[cfg(feature = "util.paste")]

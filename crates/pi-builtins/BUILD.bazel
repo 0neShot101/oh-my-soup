@@ -97,6 +97,7 @@ rust_library(
         "util.mkdir",
         "util.mktemp",
         "util.mv",
+        "util.nl",
         "util.nohup",
         "util.nproc",
         "util.paste",

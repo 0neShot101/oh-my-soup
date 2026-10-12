@@ -309,7 +309,7 @@ base = [
 "util.base32" = []
 "util.base64" = ["util.base32"]
 "util.basename" = []
-# Shared POSIX BRE translation behind grep/sed.
+# Shared POSIX BRE translation behind grep/sed/nl.
 "util.bre" = []
 "util.cat" = []
 "util.cksum" = []
@@ -338,6 +338,7 @@ base = [
 "util.sponge" = []
 "util.ts" = []
 "util.mv" = []
+"util.nl" = ["util.bre"]
 "util.nproc" = []
 "util.paste" = []
 "util.nohup" = ["util.procs"]
@@ -414,6 +415,7 @@ utils = [
   "util.sponge",
   "util.ts",
   "util.mv",
+  "util.nl",
   "util.nproc",
   "util.paste",
   "util.nohup",

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an in-process `nl` shell builtin (ported from uutils coreutils 0.8.0, matching GNU `nl`), with header/body/footer numbering styles including `pBRE` regex styles, logical-page section delimiters, `-l` blank-line grouping, and `ln`/`rn`/`rz` number formats.
+
 ## [18.10.0] - 2026-10-12
 
 ### Added

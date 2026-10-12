@@ -254,6 +254,8 @@ pub fn utility_builtins<SE: brush_core::ShellExtensions>()
 	m.push(("mktemp", mktemp::mktemp_builtin::<SE>()));
 	#[cfg(feature = "util.mv")]
 	m.push(("mv", mv::mv_builtin::<SE>()));
+	#[cfg(feature = "util.nl")]
+	m.push(("nl", nl::nl_builtin::<SE>()));
 	#[cfg(feature = "util.nproc")]
 	m.push(("nproc", nproc::nproc_builtin::<SE>()));
 	#[cfg(feature = "util.paste")]

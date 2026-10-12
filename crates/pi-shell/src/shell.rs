@@ -4630,6 +4630,7 @@ mod tests {
 			"mkdir",
 			"mktemp",
 			"mv",
+			"nl",
 			"nproc",
 			"paste",
 			"printenv",
