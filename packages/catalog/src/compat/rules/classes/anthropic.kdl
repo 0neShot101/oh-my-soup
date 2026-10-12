@@ -39,9 +39,17 @@ class "anthropic" {
 			}
 		}
 	}
-	// verified: billing matched the standard tier on Sonnet 4.6.
+	// Standard tier. verified: billing matched it on Sonnet 4.6 only; older
+	// Sonnet lines keep the floor until measured.
 	family "sonnet" {
-		revision "<4.7" {
+		revision "<4.6" {
+			image-tokenization {
+				regime "anthropic-patch"
+				max-edge 1568
+				max-tokens 1568
+			}
+		}
+		revision ">=4.6 <4.7" {
 			image-tokenization {
 				regime "anthropic-patch"
 				verified #true
@@ -49,7 +57,14 @@ class "anthropic" {
 				max-tokens 1568
 			}
 		}
-		revision ">=10 <47" {
+		revision ">=10 <46" {
+			image-tokenization {
+				regime "anthropic-patch"
+				max-edge 1568
+				max-tokens 1568
+			}
+		}
+		revision ">=46 <47" {
 			image-tokenization {
 				regime "anthropic-patch"
 				verified #true

@@ -345,7 +345,12 @@ describe("shape resolution", () => {
 		// geometry, billed under the standard tier's 1,568-token cap (39²).
 		const opus46 = snapcompact.resolveShape({ api: "anthropic-messages", id: "claude-opus-4-6" });
 		expect(opus46).toEqual({ ...snapcompact.SHAPES.anthropic, frameTokenEstimate: 1521 });
+		// Older Sonnet lines share that tier but only Sonnet 4.6 was billing-verified.
 		expect(snapcompact.resolveShape({ api: "anthropic-messages", id: "claude-3-5-sonnet" })).toEqual({
+			...snapcompact.SHAPES.anthropic,
+			frameTokenEstimate: 1521,
+		});
+		expect(snapcompact.resolveShape({ api: "anthropic-messages", id: "claude-sonnet-4-6" })).toEqual({
 			...snapcompact.SHAPES.anthropic,
 			frameTokenEstimate: 1521,
 			frameTokensVerified: true,
