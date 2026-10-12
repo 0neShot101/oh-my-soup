@@ -401,7 +401,10 @@ describe("snapcompact archive sized by the compaction trigger", () => {
 		expect(atCeiling.frames).toBe(Math.floor(atCeiling.room / snapcompact.FRAME_TOKEN_ESTIMATE));
 		expect(atPrice.frames).toBeGreaterThan(atCeiling.frames);
 		expect(atPrice.frames).toBeLessThan(
-			snapcompact.maxFramesForDataBudget(snapcompact.resolveShape(verified), snapcompact.frameDataBytesBudget(verified)),
+			snapcompact.maxFramesForDataBudget(
+				snapcompact.resolveShape(verified),
+				snapcompact.frameDataBytesBudget(verified),
+			),
 		);
 	});
 
