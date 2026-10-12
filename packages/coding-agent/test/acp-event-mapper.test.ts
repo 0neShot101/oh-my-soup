@@ -511,6 +511,7 @@ describe("ACP event mapper", () => {
 		expect(status("running")).toBe("in_progress");
 		expect(status("completed")).toBe("completed");
 		expect(status("failed")).toBe("failed");
+		expect(status("cancelled")).toBe("failed");
 	});
 
 	it("emits locations on tool_execution_update from args", () => {

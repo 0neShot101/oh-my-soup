@@ -218,18 +218,17 @@ export interface ToolExecutionOptions {
 	useBuiltInRenderer?: boolean;
 }
 
+/** A tool result or progress frame as a card shows it. */
+export interface ToolResultFrame {
+	content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+	details?: unknown;
+	isError?: boolean;
+}
+
 export interface ToolExecutionHandle extends Component {
 	updateArgs(args: unknown, toolCallId?: string): void;
 	updateStreamPreview?(update: unknown): void;
-	updateResult(
-		result: {
-			content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-			details?: unknown;
-			isError?: boolean;
-		},
-		isPartial?: boolean,
-		toolCallId?: string,
-	): void;
+	updateResult(result: ToolResultFrame, isPartial?: boolean, toolCallId?: string): void;
 	setArgsComplete(toolCallId?: string): void;
 	setExecutionStarted(toolCallId?: string): void;
 	setExpanded(expanded: boolean): void;
@@ -257,10 +256,31 @@ export function parksAsBackground(toolName: string, details: unknown): boolean {
 	return asyncJobState(details) === "running";
 }
 
-/** The background job state a tool result reports (`details.async.state`: running, completed, failed). */
+/** The background job state a tool result reports (`details.async.state`: running, completed, failed, cancelled). */
 export function asyncJobState(details: unknown): string | undefined {
 	if (!isRecord(details) || !isRecord(details.async)) return undefined;
 	return typeof details.async.state === "string" ? details.async.state : undefined;
+}
+
+/** Whether a frame is a background job's last one: it completed, failed or was cancelled. */
+export function isSettledJobFrame(details: unknown): boolean {
+	const state = asyncJobState(details);
+	return state === "completed" || state === "failed" || state === "cancelled";
+}
+
+/**
+ * Settle a parked card ({@link parksAsBackground}) with its job's last frame
+ * ({@link isSettledJobFrame}): a completed or failed job is the call's result;
+ * a cancelled one keeps the output it got to and seals the card as cancelled.
+ */
+export function settleWithJobFrame(component: ToolExecutionHandle, frame: ToolResultFrame, toolCallId: string): void {
+	const state = asyncJobState(frame.details);
+	if (state === "cancelled") {
+		component.updateResult(frame, true, toolCallId);
+		component.seal();
+		return;
+	}
+	component.updateResult({ ...frame, isError: state === "failed" }, false, toolCallId);
 }
 
 /** Card tone per status when the renderer doesn't choose one; settled cards stay neutral. */
@@ -604,15 +624,7 @@ export class ToolExecutionComponent extends Container {
 		return result !== undefined && !this.#isPartial && (result.isError === true || result.details != null);
 	}
 
-	updateResult(
-		result: {
-			content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-			details?: unknown;
-			isError?: boolean;
-		},
-		isPartial = false,
-		_toolCallId?: string,
-	): void {
+	updateResult(result: ToolResultFrame, isPartial = false, _toolCallId?: string): void {
 		const hadNoResult = this.#result === undefined;
 		const wasPartialResult = this.#result !== undefined && this.#isPartial;
 		const firstResultRepaintShapePainted = this.#firstResultViewportRepaintShapePainted;

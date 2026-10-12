@@ -20,7 +20,9 @@ import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import {
 	asyncJobState,
+	isSettledJobFrame,
 	parksAsBackground,
+	settleWithJobFrame,
 	ToolExecutionComponent,
 	type ToolExecutionHandle,
 	toolRenderName,
@@ -184,9 +186,9 @@ export class EventController {
 	/** Returned calls parked for their background job's frames ({@link parksAsBackground}). */
 	#backgroundCallIds = new Set<string>();
 	/**
-	 * A job's settled frame (`async.state` completed/failed) that landed while
-	 * its call was still executing, keyed by call id: a fast job can settle
-	 * before the call's `tool_execution_end` carries its `running` start result.
+	 * A job's settled frame ({@link isSettledJobFrame}) that landed while its
+	 * call was still executing, keyed by call id: a fast job can settle before
+	 * the call's `tool_execution_end` carries its `running` start result.
 	 */
 	#settledBeforeReturn = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	/** Tool calls waiting on the user (an approval prompt or `ask`), with the
@@ -1972,23 +1974,21 @@ export class EventController {
 		this.#ensureWorkingLoaderWhileStreaming();
 		const component = this.ctx.pendingTools.get(event.toolCallId);
 		if (component) {
-			const asyncState = asyncJobState(event.partialResult.details);
-			const isFinalAsyncState = asyncState === "completed" || asyncState === "failed";
+			const isFinalAsyncState = isSettledJobFrame(event.partialResult.details);
 			// A final async snapshot is terminal only for a parked background
 			// block (the call already returned and was kept alive for its jobs).
 			// While the call is still executing — a mixed blocking+async task
 			// call whose jobs settle before its blocking subset — treat it as a
 			// partial frame: `tool_execution_end` still owns the terminal result.
 			const isTerminal = isFinalAsyncState && this.#backgroundCallIds.has(event.toolCallId);
-			if (isFinalAsyncState && !isTerminal) this.#settledBeforeReturn.set(event.toolCallId, event);
-			component.updateResult(
-				{ ...event.partialResult, isError: asyncState === "failed" },
-				!isTerminal,
-				event.toolCallId,
-			);
 			if (isTerminal) {
+				settleWithJobFrame(component, event.partialResult, event.toolCallId);
 				this.ctx.pendingTools.delete(event.toolCallId);
 				this.#backgroundCallIds.delete(event.toolCallId);
+			} else {
+				if (isFinalAsyncState) this.#settledBeforeReturn.set(event.toolCallId, event);
+				const isError = asyncJobState(event.partialResult.details) === "failed";
+				component.updateResult({ ...event.partialResult, isError }, true, event.toolCallId);
 			}
 			this.ctx.ui.requestRender();
 		}
@@ -2048,8 +2048,7 @@ export class EventController {
 		if (parks && settled) {
 			// The job finished before the call returned: its settled frame, not the
 			// `running` start result, is the card's final state.
-			const isError = asyncJobState(settled.details) === "failed";
-			component.updateResult({ ...settled, isError }, false, event.toolCallId);
+			settleWithJobFrame(component, settled, event.toolCallId);
 			this.ctx.pendingTools.delete(event.toolCallId);
 			return;
 		}

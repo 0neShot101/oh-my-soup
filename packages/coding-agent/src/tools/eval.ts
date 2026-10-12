@@ -646,7 +646,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 				const showJobFrame = (
 					text: string,
 					details: EvalToolDetails | undefined,
-					state: "running" | "completed" | "failed",
+					state: "running" | "completed" | "failed" | "cancelled",
 				): void => {
 					if (backgrounded) emitToolUpdate?.(text, { ...details, async: { state, jobId, type: "eval" } });
 				};
@@ -682,7 +682,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					const message = error instanceof Error ? error.message : String(error);
 					latestText = message;
 					completion.resolve({ kind: "failed", error });
-					showJobFrame(message, latestDetails, "failed");
+					showJobFrame(message, latestDetails, runSignal.aborted ? "cancelled" : "failed");
 					await reportProgress(message, {
 						...latestDetails,
 						async: { state: "failed", jobId, type: "eval" },

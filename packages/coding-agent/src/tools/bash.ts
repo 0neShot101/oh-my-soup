@@ -915,9 +915,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					completion.resolve({ kind: "failed", error });
+					// Only a cancel aborts the job's own signal (deadlines end in a timed-out result).
 					await report(message, {
 						...latestProgressDetails,
-						async: { state: "failed", jobId, type: "bash" },
+						async: { state: runSignal.aborted ? "cancelled" : "failed", jobId, type: "bash" },
 					});
 					throw error;
 				}

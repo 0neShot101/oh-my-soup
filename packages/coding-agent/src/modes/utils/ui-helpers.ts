@@ -41,8 +41,9 @@ import { StrippedToolCallsPlaceholder } from "@oh-my-pi/pi-tui/chat/stripped-too
 import { imageContent, textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import { ToolActivityContainer } from "@oh-my-pi/pi-tui/chrome/tool-activity";
 import {
-	asyncJobState,
+	isSettledJobFrame,
 	parksAsBackground,
+	settleWithJobFrame,
 	ToolExecutionComponent,
 	type ToolExecutionHandle,
 	toolRenderName,
@@ -803,18 +804,19 @@ export class UiHelpers {
 					const frame = activeToolExecutionUpdates.find(
 						event => event.toolCallId === message.toolCallId,
 					)?.partialResult;
-					const frameState = asyncJobState(frame?.details);
 					const isBackground =
 						parksAsBackground(message.toolName, message.details) &&
 						(frame !== undefined || runningAsyncJobs.some(job => job.id === jobId));
-					const settled = isBackground && (frameState === "completed" || frameState === "failed");
+					const settled = isBackground && isSettledJobFrame(frame?.details);
 					// A background job call's persisted result is only its "still running"
 					// snapshot; the job's latest frame supersedes it. Until that frame
 					// settles, keep the card partial, parked, and in `pendingTools` so
 					// later live progress frames land on it instead of hitting the
 					// no-pending-component early return (#10447).
-					if (frame && isBackground) {
-						component.updateResult({ ...frame, isError: frameState === "failed" }, !settled, message.toolCallId);
+					if (settled) {
+						settleWithJobFrame(component, frame, message.toolCallId);
+					} else if (frame && isBackground) {
+						component.updateResult(frame, true, message.toolCallId);
 					} else {
 						component.updateResult(message, isBackground, message.toolCallId);
 					}

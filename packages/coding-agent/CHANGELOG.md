@@ -10,7 +10,7 @@
 ### Changed
 
 - Subagents spawned by the task tool now return their final message as plain text, with no `yield` tool, output schemas, or "Submit Result" fields; eval `agent()`/workpool spawns still return structured results
-- In Tern, a backgrounded `bash` command or `eval` cell keeps filling its own card with live output (In background, with a running clock) and settles it with the job's outcome; `wait` lists each job on one line (type, id, label, duration) instead of repeating its output
+- In Tern, a backgrounded `bash` command or `eval` cell keeps filling its own card with live output (In background, with a running clock) and settles it with the job's outcome, Cancelled when the job is killed; `wait` lists each job on one line (type, id, label, duration) instead of repeating its output
 - ACP clients now see a backgrounded call's job output stream into its tool call, which settles completed or failed with the job
 
 ### Fixed

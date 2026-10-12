@@ -75,8 +75,9 @@ export interface BashToolDetails {
 		timedOut: boolean;
 		pid?: number;
 	};
+	/** Background job behind the call; `cancelled`: killed (`proc://<id>/kill`) before it finished. */
 	async?: {
-		state: "running" | "completed" | "failed";
+		state: "running" | "completed" | "failed" | "cancelled";
 		jobId: string;
 		type: "bash";
 	};

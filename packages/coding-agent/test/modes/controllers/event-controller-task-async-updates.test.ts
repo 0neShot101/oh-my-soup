@@ -42,7 +42,11 @@ interface BashFrame {
 	details: BashToolDetails;
 }
 
-function bashResult(text: string, state: "running" | "completed" | "failed" = "running", exitCode?: number): BashFrame {
+function bashResult(
+	text: string,
+	state: "running" | "completed" | "failed" | "cancelled" = "running",
+	exitCode?: number,
+): BashFrame {
 	const details: BashToolDetails = {
 		async: { state, jobId: "bash-1", type: "bash" },
 		...(exitCode === undefined ? {} : { exitCode }),
@@ -290,6 +294,25 @@ describe("EventController async update finalization", () => {
 			await controller.handleEvent(jobFrame(bashResult("Benchmark 1\nBenchmark 2\nSummary", "failed", 1)));
 			expect(rendered(component)).toContain("Summary");
 			expect(rendered(component)).toContain("exit 1");
+			expect(pendingTools.has("tc-bash")).toBe(false);
+			expect(component.isTranscriptBlockFinalized()).toBe(true);
+		});
+
+		it("seals a backgrounded Bash card as cancelled when its job is killed, keeping its output", async () => {
+			const { controller, pendingTools } = createFixture();
+			const component = await backgroundBash(controller, pendingTools);
+			await controller.handleEvent({
+				type: "tool_execution_end",
+				toolCallId: "tc-bash",
+				toolName: "bash",
+				result: bashResult(formatBackgroundNotice("bash-1", 300)),
+				isError: false,
+			});
+			await controller.handleEvent(jobFrame(bashResult("[Command cancelled]\nBenchmark 1", "cancelled")));
+
+			expect(rendered(component)).toContain("Benchmark 1");
+			expect(rendered(component)).toContain('"Cancelled"');
+			expect(rendered(component)).not.toContain("In background");
 			expect(pendingTools.has("tc-bash")).toBe(false);
 			expect(component.isTranscriptBlockFinalized()).toBe(true);
 		});
