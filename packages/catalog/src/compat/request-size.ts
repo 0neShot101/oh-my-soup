@@ -8,12 +8,12 @@ const IMAGE_BUDGET_CACHE_MAX = 8192;
 
 /**
  * Maximum encoded inline-image bytes retained per request for a deployment with a documented body-size limit.
- * The axis is a host contract: a rerouted `baseUrl` (proxy, gateway) imposes its own limit, so the budget
- * applies only while the model targets its official endpoint.
+ * The axis is a host contract: a rerouted endpoint (proxy, gateway) imposes its own limit, so the budget applies
+ * only when `officialEndpoint` says the request reaches the model's official endpoint. `compat.officialEndpoint`
+ * classifies only the configured `baseUrl`; pi-ai's `reachesOfficialEndpoint` also follows request-time reroutes.
  */
-export function resolveInlineImageByteBudget(model: Model): number | undefined {
-	const compat = model.compat;
-	if (!compat || !("officialEndpoint" in compat) || !compat.officialEndpoint) return undefined;
+export function resolveInlineImageByteBudget(model: Model, officialEndpoint: boolean): number | undefined {
+	if (!officialEndpoint) return undefined;
 	const key = `${model.provider} ${model.id} ${model.api}`;
 	let budget = imageBudgetCache.get(key);
 	if (budget === undefined) {
@@ -27,13 +27,12 @@ export function resolveInlineImageByteBudget(model: Model): number | undefined {
 
 /**
  * Most images one request to this deployment may carry, or `undefined` when no rule names the host. The
- * `official-image-count-budget` axis replaces `image-count-budget` only while the model targets its official
- * endpoint: a rerouted `baseUrl` keeps the provider's generic budget.
+ * `official-image-count-budget` axis replaces `image-count-budget` only when `officialEndpoint` says the request
+ * reaches the model's official endpoint (see {@link resolveInlineImageByteBudget}); a rerouted endpoint keeps the
+ * provider's generic budget.
  */
-export function resolveImageCountBudget(model: Model): number | undefined {
+export function resolveImageCountBudget(model: Model, officialEndpoint: boolean): number | undefined {
 	const policy = resolveCatalogPolicy(model);
-	const compat = model.compat;
-	const official = !!compat && "officialEndpoint" in compat && compat.officialEndpoint;
-	const value = (official && policy.officialImageCountBudget) || policy.imageCountBudget;
+	const value = (officialEndpoint && policy.officialImageCountBudget) || policy.imageCountBudget;
 	return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }

@@ -5,6 +5,19 @@ import { getBundledModel, getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
 import type { Api, Model } from "@oh-my-pi/pi-catalog/types";
 
+/** The configured endpoint's classification; request-time env reroutes are pi-ai's to apply. */
+function configuredOfficial(model: Model): boolean {
+	return !!model.compat && "officialEndpoint" in model.compat && model.compat.officialEndpoint === true;
+}
+
+function imageCountBudget(model: Model): number | undefined {
+	return resolveImageCountBudget(model, configuredOfficial(model));
+}
+
+function inlineImageByteBudget(model: Model): number | undefined {
+	return resolveInlineImageByteBudget(model, configuredOfficial(model));
+}
+
 function rerouted<TApi extends Api>(model: Model<TApi>, baseUrl: string): Model<TApi> {
 	return buildModel({ ...toModelSpec(model), baseUrl }) as Model<TApi>;
 }
@@ -14,7 +27,7 @@ describe("image-count-budget", () => {
 		const rows = getBundledModels("anthropic").filter(model => model.input.includes("image"));
 		expect(rows.length).toBeGreaterThan(0);
 		for (const model of rows) {
-			expect({ id: model.id, budget: resolveImageCountBudget(model) }).toEqual({
+			expect({ id: model.id, budget: imageCountBudget(model) }).toEqual({
 				id: model.id,
 				budget: model.contextWindow !== null && model.contextWindow > 200_000 ? 600 : 100,
 			});
@@ -23,8 +36,8 @@ describe("image-count-budget", () => {
 
 	test("separator-collapsed Claude revisions keep the 200k-window budget", () => {
 		const opus = getBundledModel("anthropic", "claude-opus-4-5");
-		expect(resolveImageCountBudget(buildModel({ ...toModelSpec(opus), id: "claude-opus-45" }))).toBe(100);
-		expect(resolveImageCountBudget(buildModel({ ...toModelSpec(opus), id: "claude-opus-46" }))).toBe(600);
+		expect(imageCountBudget(buildModel({ ...toModelSpec(opus), id: "claude-opus-45" }))).toBe(100);
+		expect(imageCountBudget(buildModel({ ...toModelSpec(opus), id: "claude-opus-46" }))).toBe(600);
 	});
 
 	test.each([
@@ -36,10 +49,10 @@ describe("image-count-budget", () => {
 		(provider, id, official, custom) => {
 			const model = getBundledModel(provider, id);
 			const officialUrl = model.baseUrl;
-			expect(resolveImageCountBudget(model)).toBe(official);
-			expect(resolveImageCountBudget(rerouted(model, ""))).toBe(official);
-			expect(resolveImageCountBudget(rerouted(model, `${officialUrl}/`))).toBe(official);
-			expect(resolveImageCountBudget(rerouted(model, "https://llm-proxy.example/v1"))).toBe(custom);
+			expect(imageCountBudget(model)).toBe(official);
+			expect(imageCountBudget(rerouted(model, ""))).toBe(official);
+			expect(imageCountBudget(rerouted(model, `${officialUrl}/`))).toBe(official);
+			expect(imageCountBudget(rerouted(model, "https://llm-proxy.example/v1"))).toBe(custom);
 		},
 	);
 
@@ -48,12 +61,12 @@ describe("image-count-budget", () => {
 		["amazon-bedrock", "us.anthropic.claude-opus-5-5", 90],
 		["openrouter", "anthropic/claude-opus-5.5", 90],
 	] as const)("%s carries its budget", (provider, id, budget) => {
-		expect(resolveImageCountBudget(getBundledModel(provider, id))).toBe(budget);
+		expect(imageCountBudget(getBundledModel(provider, id))).toBe(budget);
 	});
 
 	test("an unlisted host has no budget", () => {
 		const ramp = buildModel({ ...toModelSpec(getBundledModel("anthropic", "claude-opus-5-5")), provider: "ramp" });
-		expect(resolveImageCountBudget(ramp)).toBeUndefined();
+		expect(imageCountBudget(ramp)).toBeUndefined();
 	});
 });
 
@@ -61,10 +74,10 @@ describe("inline-image-byte-budget", () => {
 	test("the Codex backend carries 24 MB; a rerouted Codex baseUrl carries none", () => {
 		const sol = getBundledModel<"openai-codex-responses">("openai-codex", "gpt-6.1-sol");
 		expect(sol.compat.officialEndpoint).toBe(true);
-		expect(resolveInlineImageByteBudget(sol)).toBe(24_000_000);
-		expect(resolveInlineImageByteBudget(rerouted(sol, "https://chatgpt.com/backend-api/"))).toBe(24_000_000);
+		expect(inlineImageByteBudget(sol)).toBe(24_000_000);
+		expect(inlineImageByteBudget(rerouted(sol, "https://chatgpt.com/backend-api/"))).toBe(24_000_000);
 		const proxied = rerouted(sol, "https://codex-proxy.example/backend-api");
 		expect(proxied.compat.officialEndpoint).toBe(false);
-		expect(resolveInlineImageByteBudget(proxied)).toBeUndefined();
+		expect(inlineImageByteBudget(proxied)).toBeUndefined();
 	});
 });

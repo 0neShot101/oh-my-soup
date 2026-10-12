@@ -50,6 +50,7 @@
  */
 
 import type { Api, ImageContent, Message, Model, TextContent } from "@oh-my-pi/pi-ai";
+import { reachesOfficialEndpoint } from "@oh-my-pi/pi-ai/providers/anthropic-state";
 import {
 	type ImageSize,
 	type ImageTokenization,
@@ -508,7 +509,7 @@ export const DEFAULT_FRAME_DATA_BYTES_BUDGET = 3_000_000;
  *  request, so the send-time byte clamp evicts them first; the other half stays
  *  free for live screenshots. */
 export function frameDataBytesBudget(model: Model | undefined): number {
-	const inlineBudget = model ? resolveInlineImageByteBudget(model) : undefined;
+	const inlineBudget = model ? resolveInlineImageByteBudget(model, reachesOfficialEndpoint(model)) : undefined;
 	return inlineBudget === undefined ? DEFAULT_FRAME_DATA_BYTES_BUDGET : Math.floor(inlineBudget / 2);
 }
 
@@ -549,7 +550,10 @@ export const DEFAULT_PROVIDER_IMAGE_BUDGET = 5;
 /** Most images one request to `model`'s deployment may carry, archive,
  *  system-prompt and tool-result imaging combined. */
 export function providerImageBudget(model: Model | undefined): number {
-	return (model ? resolveImageCountBudget(model) : undefined) ?? DEFAULT_PROVIDER_IMAGE_BUDGET;
+	return (
+		(model ? resolveImageCountBudget(model, reachesOfficialEndpoint(model)) : undefined) ??
+		DEFAULT_PROVIDER_IMAGE_BUDGET
+	);
 }
 
 /** Archive frame cap for `model`: its image budget, never above {@link MAX_FRAMES_DEFAULT}. */

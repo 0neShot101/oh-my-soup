@@ -14,6 +14,23 @@ function createUserMessage(content: string): Message {
 	return { role: "user", content, timestamp: 0 };
 }
 
+/** Runs `fn` with `overrides` applied to `Bun.env` (`undefined` deletes), then restores the previous values. */
+function withEnv(overrides: Readonly<Record<string, string | undefined>>, fn: () => void): void {
+	const previous = Object.keys(overrides).map(key => [key, Bun.env[key]] as const);
+	const apply = (entries: Iterable<readonly [string, string | undefined]>) => {
+		for (const [key, value] of entries) {
+			if (value === undefined) delete Bun.env[key];
+			else Bun.env[key] = value;
+		}
+	};
+	try {
+		apply(Object.entries(overrides));
+		fn();
+	} finally {
+		apply(previous);
+	}
+}
+
 const ZERO_USAGE: Usage = {
 	input: 0,
 	output: 0,
@@ -1273,6 +1290,36 @@ describe("frame data budget", () => {
 		expect(snapcompact.maxFramesForDataBudget(opusShape, budget)).toBe(17);
 		expect(snapcompact.maxFramesForDataBudget(opusShape, snapcompact.frameDataBytesBudget(opus))).toBe(70);
 	});
+
+	it.each([
+		["ANTHROPIC_BASE_URL", { ANTHROPIC_BASE_URL: "https://anthropic-proxy.example/v1" }],
+		[
+			"Foundry's FOUNDRY_BASE_URL",
+			{ CLAUDE_CODE_USE_FOUNDRY: "1", FOUNDRY_BASE_URL: "https://foundry-proxy.example" },
+		],
+	] as const)(
+		"an official Anthropic model rerouted by %s gets the proxy's 3 MB frame budget and 90 images",
+		(_, reroute) => {
+			const opus = getBundledModel("anthropic", "claude-opus-5-5");
+			const sol = getBundledModel("openai-codex", "gpt-6.1-sol");
+			const official = {
+				ANTHROPIC_BASE_URL: undefined,
+				CLAUDE_CODE_USE_FOUNDRY: undefined,
+				FOUNDRY_BASE_URL: undefined,
+			};
+			withEnv(official, () => {
+				expect(snapcompact.frameDataBytesBudget(opus)).toBe(12_000_000);
+				expect(snapcompact.providerImageBudget(opus)).toBe(600);
+			});
+			withEnv({ ...official, ...reroute }, () => {
+				expect(snapcompact.frameDataBytesBudget(opus)).toBe(budget);
+				expect(snapcompact.providerImageBudget(opus)).toBe(90);
+				// Anthropic's env reroute leaves the Codex backend official.
+				expect(snapcompact.frameDataBytesBudget(sol)).toBe(12_000_000);
+				expect(snapcompact.providerImageBudget(sol)).toBe(2000);
+			});
+		},
+	);
 });
 
 describe("archive helpers", () => {

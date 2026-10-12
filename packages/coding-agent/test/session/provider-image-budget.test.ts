@@ -451,6 +451,54 @@ describe("provider context image budgets", () => {
 		expect(clampProviderContextImageBytes(context, { ...ANTHROPIC_MODEL, input: ["text"] })).toBe(context);
 	});
 
+	it.each([
+		["ANTHROPIC_BASE_URL", { ANTHROPIC_BASE_URL: "https://anthropic-proxy.example/v1" }],
+		[
+			"Foundry's FOUNDRY_BASE_URL",
+			{ CLAUDE_CODE_USE_FOUNDRY: "1", FOUNDRY_BASE_URL: "https://foundry-proxy.example" },
+		],
+	] as const)("does not apply Anthropic's byte policy to an official model rerouted by %s", (_, reroute) => {
+		const frame = (fill: string) => image(fill.repeat(1_600_000));
+		const context: Context = {
+			systemPrompt: [],
+			tools: [],
+			messages: [
+				{
+					role: "user",
+					content: [text("summary"), frame("A"), frame("B"), frame("C")],
+					historyRewriteAt: 1,
+					timestamp: 0,
+				},
+				{
+					role: "user",
+					content: [image(HALF_ANTHROPIC_IMAGE_BUDGET), image(HALF_ANTHROPIC_IMAGE_BUDGET)],
+					timestamp: 1,
+				},
+			],
+		};
+		const keys = ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_FOUNDRY", "FOUNDRY_BASE_URL"] as const;
+		const previous = keys.map(key => [key, Bun.env[key]] as const);
+		try {
+			for (const key of keys) delete Bun.env[key];
+			expect(clampProviderContextImageBytes(context, ANTHROPIC_MODEL)).not.toBe(context);
+			expect(capArchiveFrameBytes(context, ANTHROPIC_MODEL)).toBe(context);
+			Object.assign(Bun.env, reroute);
+			expect(clampProviderContextImageBytes(context, ANTHROPIC_MODEL)).toBe(context);
+			// The proxy's 3 MB frame budget keeps only the newest frame.
+			const capped = capArchiveFrameBytes(context, ANTHROPIC_MODEL);
+			expect(imageData(capped)).toEqual([
+				"C".repeat(1_600_000),
+				HALF_ANTHROPIC_IMAGE_BUDGET,
+				HALF_ANTHROPIC_IMAGE_BUDGET,
+			]);
+		} finally {
+			for (const [key, value] of previous) {
+				if (value === undefined) delete Bun.env[key];
+				else Bun.env[key] = value;
+			}
+		}
+	});
+
 	it("keeps images that URL decoration moved off the inline wire", () => {
 		const context: Context = {
 			systemPrompt: [],
