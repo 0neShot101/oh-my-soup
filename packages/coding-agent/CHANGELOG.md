@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.10.1] - 2026-10-12
+
 ### Added
 
 - Added a Copy button that leads the turn footer under an answer in Tern (`⧉ · 2m13s · 71K tok · $0.85 this turn`, in place of the clock), which copies that answer
