@@ -348,6 +348,7 @@ describe("shape resolution", () => {
 		expect(snapcompact.resolveShape({ api: "anthropic-messages", id: "claude-3-5-sonnet" })).toEqual({
 			...snapcompact.SHAPES.anthropic,
 			frameTokenEstimate: 1521,
+			frameTokensVerified: true,
 		});
 
 		// Gemini reads 2048px frames at the same fixed bill, single-column with
@@ -492,11 +493,17 @@ describe("shape resolution", () => {
 		expect(
 			snapcompact.plannedFrameTokens(snapcompact.resolveShape({ api: "anthropic-messages", id: "claude-opus-5-5" })),
 		).toBe(4761);
-		// Same 2,882 price, but Grok is priced by the OpenAI-wire fallback and Opus 4.6 by the standard tier.
-		const grok = snapcompact.resolveShape({ api: "openai-responses", provider: "xai", id: "grok-4.7" });
+		// Same 2,882 price, but Grok 4.5 is priced by the OpenAI-wire fallback and Opus 4.6 by the standard tier.
+		const grok = snapcompact.resolveShape({ api: "openai-responses", provider: "xai", id: "grok-4.5" });
 		expect(grok.frameTokenEstimate).toBe(2882);
 		expect(grok.frameTokensVerified).toBeUndefined();
 		expect(snapcompact.plannedFrameTokens(grok)).toBe(snapcompact.FRAME_TOKEN_ESTIMATE);
+		// Grok 4.7's own rule is verified at its frame price.
+		expect(
+			snapcompact.plannedFrameTokens(
+				snapcompact.resolveShape({ api: "openai-responses", provider: "xai", id: "grok-4.7" }),
+			),
+		).toBe(2442);
 		expect(
 			snapcompact.plannedFrameTokens(snapcompact.resolveShape({ api: "anthropic-messages", id: "claude-opus-4-6" })),
 		).toBe(snapcompact.FRAME_TOKEN_ESTIMATE);
@@ -509,7 +516,7 @@ describe("shape resolution", () => {
 		).toBe(forced);
 		expect(
 			snapcompact.plannedFrameTokens(
-				snapcompact.resolveShape({ api: "openai-responses", provider: "xai", id: "grok-4.7" }, "5x8-bw"),
+				snapcompact.resolveShape({ api: "openai-responses", provider: "xai", id: "grok-4.5" }, "5x8-bw"),
 			),
 		).toBe(forced);
 	});

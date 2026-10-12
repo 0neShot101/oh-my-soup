@@ -32,8 +32,11 @@ function ruleFor(provider: string, id: string): ImageTokenization {
 
 describe("resolveImageTokenization", () => {
 	it("splits Claude at 4.7: Opus 4.6 and older on the standard tier, 4.7+ and Fable/Mythos high-res", () => {
-		for (const id of ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5", "claude-3-5-sonnet-20241022"]) {
+		for (const id of ["claude-opus-4-6", "claude-haiku-4-5"]) {
 			expect(resolveImageTokenization({ provider: "anthropic", id })).toEqual(STANDARD);
+		}
+		for (const id of ["claude-sonnet-4-6", "claude-3-5-sonnet-20241022"]) {
+			expect(resolveImageTokenization({ provider: "anthropic", id })).toEqual({ ...STANDARD, verified: true });
 		}
 		for (const id of [
 			"claude-opus-4-7",
@@ -82,7 +85,7 @@ describe("resolveImageTokenization", () => {
 				api: "openai-completions",
 				id: "anthropic/claude-sonnet-4.6",
 			}),
-		).toEqual(STANDARD);
+		).toEqual({ ...STANDARD, verified: true });
 		expect(
 			resolveImageTokenization({
 				provider: "amazon-bedrock",
@@ -123,6 +126,32 @@ describe("resolveImageTokenization", () => {
 			expect(rule.verified).toBeUndefined();
 			expect(imageTokens(rule, { width: 1568, height: 1562 }, "original")).toBe(2882);
 		}
+	});
+
+	it("marks the Gemini, Sonnet and Grok rules measured on Antigravity and xAI as verified", () => {
+		// Cloud Code Assist bills every Gemini image 1,089 tokens; Google's own API keeps the documented 1,120.
+		for (const id of ["gemini-2.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.8-flash"]) {
+			expect(ruleFor("google-antigravity", id)).toEqual({ regime: "fixed", verified: true, tokens: 1089 });
+		}
+		expect(ruleFor("google", "gemini-3.8-flash")).toEqual({ regime: "fixed", tokens: 1120 });
+		// Sonnet's standard tier is verified on every host; Opus 4.6 is not measured.
+		expect(ruleFor("google-antigravity", "claude-sonnet-4-6")).toEqual({ ...STANDARD, verified: true });
+		expect(ruleFor("anthropic", "claude-sonnet-4-6").verified).toBe(true);
+		expect(ruleFor("google-antigravity", "claude-opus-4-6").verified).toBeUndefined();
+		// Grok 4.6 through 4.20 bill 32px patches resized past 2,401, plus a few tokens per image.
+		for (const [provider, id] of [
+			["xai-oauth", "grok-4.6"],
+			["xai-oauth", "grok-4.7"],
+			["xai-oauth", "grok-4.20-0309-non-reasoning"],
+			["xai", "grok-4.20-0309-reasoning"],
+		] as const) {
+			const rule = ruleFor(provider, id);
+			expect(rule.verified).toBe(true);
+			expect(imageTokens(rule, { width: 1568, height: 1562 }, "original")).toBe(2442);
+			expect(imageTokens(rule, { width: 2048, height: 2048 }, "original")).toBe(2442);
+		}
+		// Older Grok lines keep the wire's unverified GPT pricing.
+		expect(resolveImageTokenization(getBundledModel("xai-oauth", "grok-4.5"))).toEqual(GPT_PATCH);
 	});
 
 	it("sizes each detail level the way the guide lists for that model", () => {

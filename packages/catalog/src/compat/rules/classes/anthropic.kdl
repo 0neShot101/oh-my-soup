@@ -39,10 +39,12 @@ class "anthropic" {
 			}
 		}
 	}
+	// verified: billing matched the standard tier on Sonnet 4.6.
 	family "sonnet" {
 		revision "<4.7" {
 			image-tokenization {
 				regime "anthropic-patch"
+				verified #true
 				max-edge 1568
 				max-tokens 1568
 			}
@@ -50,6 +52,7 @@ class "anthropic" {
 		revision ">=10 <47" {
 			image-tokenization {
 				regime "anthropic-patch"
+				verified #true
 				max-edge 1568
 				max-tokens 1568
 			}
