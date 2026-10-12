@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `/session pin` no longer describes itself backwards in the command palette: it pins a stored OAuth account for the current session, not the provider to an account ([#15479](https://github.com/can1357/oh-my-pi/pull/15479) by [@iacore](https://github.com/iacore))
+
 ## [18.10.2] - 2026-10-12
 
 ### Added
