@@ -757,7 +757,8 @@ export class RelayBridge {
 			return false;
 		}
 		// Sent raw, createTarget honors `newWindow` and answers with Chrome's id, which no relay command
-		// resolves; close and activate are refused ("Not allowed"). Run them in this tab's browser.
+		// resolves; close and activate are refused ("Not allowed"). Run them in this tab's browser, where a
+		// new tab lands like every relay-created tab: in that browser's current window.
 		if (
 			msg.method === "Target.createTarget" ||
 			msg.method === "Target.closeTarget" ||
