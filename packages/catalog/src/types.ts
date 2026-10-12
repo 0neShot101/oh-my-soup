@@ -1285,6 +1285,18 @@ export interface GoogleCompat {
 	antigravityUsageLabel?: string;
 	/** Strip image inputs before encoding (text-only serving of a multimodal id). */
 	stripImageInput?: boolean;
+	/**
+	 * Largest width or height a single image may carry for a Claude reader on
+	 * this host (see {@link AnthropicCompat.maxImageDimension}). Setting this or
+	 * {@link maxImagePayloadBytes} turns on Claude's image clamp, many-image
+	 * cap included; unset leaves images as sent.
+	 */
+	maxImageDimension?: number;
+	/**
+	 * Largest base64 payload a single image may carry, in bytes (see
+	 * {@link AnthropicCompat.maxImagePayloadBytes}).
+	 */
+	maxImagePayloadBytes?: number;
 	/** Thinking-loop watchdog guard family applied to streamed reasoning. */
 	thinkingLoopGuard?: "gemini" | "deepseek" | "xai";
 	/** See {@link BedrockCompat.supportsSamplingParams}. */
@@ -1300,6 +1312,8 @@ export type ResolvedGoogleCompat = Required<
 		| "thinkingLoopGuard"
 		| "antigravityUsageLabel"
 		| "supportsSamplingParams"
+		| "maxImageDimension"
+		| "maxImagePayloadBytes"
 	>
 > & {
 	streamFirstEventTimeoutMs?: number;
@@ -1307,6 +1321,8 @@ export type ResolvedGoogleCompat = Required<
 	thinkingLoopGuard?: GoogleCompat["thinkingLoopGuard"];
 	antigravityUsageLabel?: string;
 	supportsSamplingParams?: boolean;
+	maxImageDimension?: number;
+	maxImagePayloadBytes?: number;
 };
 
 /** Sparse, user-authored compat overrides for a given API (models.json / config vocabulary). */
