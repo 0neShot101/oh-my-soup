@@ -8,7 +8,10 @@ import { createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
 import { findFreeCdpPort, waitForCdp } from "@oh-my-pi/pi-coding-agent/tools/browser/attach";
 import { ensureChromiumExecutable } from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
 import { releaseAllTabs } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
+import { uploadFilesToElement } from "@oh-my-pi/pi-coding-agent/tools/browser/interactions";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
+import type { ElementHandle, Page } from "puppeteer-core";
+import { rejectionOf } from "../helpers/rejection";
 import { chromiumAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
@@ -130,7 +133,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser uploadFile", () => {
 for (const upload of [
 	() => tab.uploadFile("#direct", "gone.txt"),
 	() => tab.uploadFile("#trigger", "gone.txt"),
-	async () => (await tab.waitFor("#handle")).uploadFile(${JSON.stringify(gone)}),
+	async () => (await tab.waitFor("#handle")).uploadFile("gone.txt"),
 	() => tab.uploadFile("pierce/#shadow", "gone.txt"),
 ]) {
 	try { await upload(); } catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
@@ -166,24 +169,54 @@ return errors;`);
 		try {
 			await Bun.write(path.join(tempDir, "alpha.txt"), "alpha");
 			await Bun.write(path.join(tempDir, "beta.txt"), "beta");
-			// The page swaps its input out from under the chooser; two overlapping uploads would both take the
-			// first chooser, so the second is refused.
+			// The page swaps its input out from under the chooser. Two overlapping uploads would both take the first
+			// chooser, so whichever reaches it second is refused and only the winner's input gets a file.
 			const result =
 				await run(`const message = outcome => outcome.status === "rejected" ? outcome.reason.message : "ok";
 const swapped = await Promise.allSettled([tab.uploadFile("#swap", "alpha.txt")]);
-const overlapping = await Promise.allSettled([tab.uploadFile("#trigger", "alpha.txt"), tab.uploadFile("#other", "beta.txt")]);
+const uploads = [["#trigger", "alpha.txt"], ["#other", "beta.txt"]];
+const outcomes = await Promise.allSettled(uploads.map(([selector, file]) => tab.uploadFile(selector, file)));
+const names = await tab.evaluate(() => ["#trigger-input", "#other-input"].map(id => [...document.querySelector(id).files].map(file => file.name)));
 return {
 	swapped: swapped.map(message),
-	overlapping: overlapping.map(message),
-	names: await tab.evaluate(() => ["#trigger-input", "#other-input"].map(id => [...document.querySelector(id).files].map(file => file.name))),
+	overlapping: outcomes.map((outcome, i) => ({ result: message(outcome), file: uploads[i][1], names: names[i] })),
 };`);
-			expect(result).toMatchObject({
-				swapped: [expect.stringContaining("Node is not a file input element")],
-				overlapping: ["ok", expect.stringContaining("waits for its file chooser")],
-				names: [["alpha.txt"], []],
-			});
+			// `run` details carry the cell's return value untyped.
+			const { swapped, overlapping } = result as {
+				swapped: string[];
+				overlapping: { result: string; file: string; names: string[] }[];
+			};
+			expect(swapped[0]).toContain("Node is not a file input element");
+			const winner = overlapping.find(upload => upload.result === "ok");
+			const loser = overlapping.find(upload => upload.result !== "ok");
+			expect(winner?.names).toEqual(winner ? [winner.file] : ["no upload succeeded"]);
+			expect(loser?.result).toContain("waits for its file chooser");
+			expect(loser?.names).toEqual([]);
 		} finally {
 			await close();
 		}
 	}, 60_000);
+});
+
+test("detaches a chooser session that attaches after the upload was cancelled", async () => {
+	const { promise: attached, resolve: attach } = Promise.withResolvers<{ detach: () => Promise<void> }>();
+	let detached = false;
+	const controller = new AbortController();
+	// Only what the chooser route touches before its session exists: the target's tag and session creation,
+	// which the cancel interrupts.
+	const page = {
+		createCDPSession: () => {
+			controller.abort();
+			return attached;
+		},
+	} as unknown as Page;
+	const handle = { evaluate: async () => ({ tag: "BUTTON", type: "" }) } as unknown as ElementHandle;
+	await rejectionOf(uploadFilesToElement(page, handle, ["/missing.txt"], "upload", controller.signal, "contents"));
+	attach({
+		detach: async () => {
+			detached = true;
+		},
+	});
+	for (let turn = 0; turn < 5; turn++) await Promise.resolve();
+	expect(detached).toBe(true);
 });

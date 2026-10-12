@@ -2140,12 +2140,12 @@ export class WorkerCore {
 					this.#clearElementCache();
 					await this.#stopLoading();
 				},
-				// A user-driven browser gets contents here too; relative paths resolve as Puppeteer's own method does.
+				// A user-driven browser gets contents through handles too, from session-relative paths like `tab.uploadFile`.
 				this.#uploadDelivery === "contents"
 					? (filePaths, sig) =>
 							uploadFileContents(
 								handle,
-								filePaths.map(filePath => path.resolve(filePath)),
+								filePaths.map(filePath => resolveToCwd(filePath, session.cwd)),
 								sig,
 							)
 					: undefined,

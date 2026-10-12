@@ -699,7 +699,10 @@ async function fillClickedFileChooserWithContents(
 	}
 	pagesAwaitingChooser.add(page);
 	let timer: NodeJS.Timeout | undefined;
-	const session = await untilAborted(signal, () => page.createCDPSession()).catch(error => {
+	const creating = page.createCDPSession();
+	const session = await untilAborted(signal, () => creating).catch(error => {
+		// An abort does not stop the attach; detach the session once it arrives.
+		void creating.then(late => late.detach()).catch(() => undefined);
 		pagesAwaitingChooser.delete(page);
 		throw error;
 	});
