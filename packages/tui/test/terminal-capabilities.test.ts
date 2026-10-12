@@ -161,15 +161,16 @@ describe("detectTerminalId", () => {
 });
 
 describe("tmux client terminal resolution", () => {
-	it.skipIf(process.platform === "win32")("uses the attached client's terminal profile", async () => {
+	/** Evaluate `script` in a fresh process inside a fake tmux session whose `display-message -p <format>` prints `reply`. */
+	async function evalWithFakeTmux(format: string, reply: string, script: string): Promise<string> {
 		const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-tmux-client-"));
 		try {
 			const tmux = path.join(binDir, "tmux");
 			await Bun.write(
 				tmux,
 				`#!/bin/sh
-[ "$1" = "display-message" ] && [ "$2" = "-p" ] && [ "$3" = '#{client_termtype}' ] || exit 64
-printf "%s\\n" "WezTerm 20260905-175422-0f4b5596"
+[ "$1" = "display-message" ] && [ "$2" = "-p" ] && [ "$3" = '${format}' ] || exit 64
+printf "%s\\n" "${reply}"
 `,
 			);
 			await fs.chmod(tmux, 0o755);
@@ -186,12 +187,7 @@ printf "%s\\n" "WezTerm 20260905-175422-0f4b5596"
 				PATH: `${binDir}${path.delimiter}${Bun.env.PATH ?? ""}`,
 			});
 			const proc = Bun.spawn({
-				cmd: [
-					process.execPath,
-					"--eval",
-					`import { TERMINAL, TERMINAL_ID } from "@oh-my-pi/pi-tui/terminal-capabilities";
-console.log(JSON.stringify({ id: TERMINAL_ID, notifyProtocol: TERMINAL.notifyProtocol }));`,
-				],
+				cmd: [process.execPath, "--eval", script],
 				env,
 				stdout: "pipe",
 				stderr: "pipe",
@@ -204,11 +200,43 @@ console.log(JSON.stringify({ id: TERMINAL_ID, notifyProtocol: TERMINAL.notifyPro
 
 			expect(stderr).toBe("");
 			expect(exitCode).toBe(0);
-			expect(stdout).toBe('{"id":"wezterm","notifyProtocol":"\\u001b]9;"}\n');
+			return stdout;
 		} finally {
 			await fs.rm(binDir, { force: true, recursive: true });
 		}
+	}
+
+	it.skipIf(process.platform === "win32")("uses the attached client's terminal profile", async () => {
+		const stdout = await evalWithFakeTmux(
+			"#{client_termtype}",
+			"WezTerm 20260905-175422-0f4b5596",
+			`import { TERMINAL, TERMINAL_ID } from "@oh-my-pi/pi-tui/terminal-capabilities";
+console.log(JSON.stringify({ id: TERMINAL_ID, notifyProtocol: TERMINAL.notifyProtocol }));`,
+		);
+
+		expect(stdout).toBe('{"id":"wezterm","notifyProtocol":"\\u001b]9;"}\n');
 	});
+
+	// tmux lists `sixel` in the client's features only when the outer terminal
+	// advertised it (DA1 attribute 4); the pane's own DA1 always claims it.
+	for (const [features, expected] of [
+		["bpaste,focus,RGB,sixel,title", "true"],
+		["bpaste,focus,RGB,title", "false"],
+	] as const) {
+		it.skipIf(process.platform === "win32")(
+			`reports client SIXEL as ${expected} for features ${features}`,
+			async () => {
+				const stdout = await evalWithFakeTmux(
+					"#{client_termfeatures}",
+					features,
+					`import { tmuxClientRendersSixel } from "@oh-my-pi/pi-tui/tmux";
+console.log(tmuxClientRendersSixel());`,
+				);
+
+				expect(stdout).toBe(`${expected}\n`);
+			},
+		);
+	}
 });
 
 describe("synchronizedOutputUserOverride", () => {

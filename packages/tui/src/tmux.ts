@@ -86,3 +86,22 @@ export function resolveTmuxClientTerminalName(env: NodeJS.ProcessEnv = Bun.env):
 	if (cachedClientTerminalName === undefined) cachedClientTerminalName = queryTmuxClientTerminalName(env);
 	return cachedClientTerminalName;
 }
+
+let cachedClientRendersSixel: boolean | undefined;
+
+/**
+ * Whether the client attached to this tmux session renders SIXEL, per tmux's
+ * record of the features that client advertised (`#{client_termfeatures}`).
+ *
+ * A tmux built with SIXEL answers every pane's DA1 with attribute 4 and draws a
+ * `SIXEL IMAGE (WxH)` text placeholder for clients without SIXEL, so the pane's
+ * DA1 says nothing about the outer terminal. The TUI consults this before
+ * trusting that attribute. Queried once per process; `false` outside tmux,
+ * with no attached client, when the query fails, and under the test runtime.
+ */
+export function tmuxClientRendersSixel(env: NodeJS.ProcessEnv = Bun.env): boolean {
+	if (!tmuxMultiplexer.isInside(env) || isBunTestRuntime()) return false;
+	cachedClientRendersSixel ??=
+		runTmux(["display-message", "-p", "#{client_termfeatures}"], env)?.trim().split(",").includes("sixel") ?? false;
+	return cachedClientRendersSixel;
+}

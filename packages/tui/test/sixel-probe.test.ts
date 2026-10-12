@@ -251,6 +251,23 @@ describe("ProcessTerminal DA1 SIXEL detection", () => {
 		expect(TERMINAL.imageProtocol).toBe(ImageProtocol.Sixel);
 	});
 
+	it("ignores the DA1 SIXEL attribute tmux reports for its own emulator", () => {
+		Bun.env.TMUX = "/tmp/tmux-1000/default,4242,0";
+		harness = createProcessTerminalRenderHarness(80, 24, { conpty: false });
+		const received: string[] = [];
+		harness.tui.addInputListener(data => {
+			received.push(data);
+		});
+
+		// tmux 3.6a built with SIXEL answers pane DA1 with attribute 4 whatever
+		// client is attached, and refuses the XTSMGRAPHICS geometry query.
+		process.stdin.emit("data", "\x1b[?1;2;4c\x1b[?2;3;0Sx");
+		vi.advanceTimersByTime(251);
+
+		expect(received).toEqual(["x"]);
+		expect(TERMINAL.imageProtocol).toBeNull();
+	});
+
 	it("reassembles a DA1 advertisement split beyond the stdin flush deadline", () => {
 		harness = createProcessTerminalRenderHarness(80, 24, { conpty: true, nativeWindowsConsole: false });
 		const received: string[] = [];
