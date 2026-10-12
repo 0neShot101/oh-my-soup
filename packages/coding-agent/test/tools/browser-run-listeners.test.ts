@@ -189,7 +189,7 @@ return await seen.promise;`,
 		expect(seen).toBe(url);
 	}, 30_000);
 
-	test("run listeners keep puppeteer's ordering, once cancellation and payloads", async () => {
+	test("run listeners keep puppeteer's ordering, once cancellation, payloads and requests", async () => {
 		const invoke = createHost();
 		await invoke({ action: "open", name: "contract", url: `${baseUrl}/` });
 		const result = valueOf(
@@ -208,11 +208,16 @@ page.emit("contract-once", null);
 let reads = 0;
 page.on("contract-payload", () => {});
 page.emit("contract-payload", { get enqueueInterceptAction() { reads++; return undefined; } });
-return { order, onceCalls, reads };`,
+const seen = Promise.withResolvers();
+page.once("request", request => seen.resolve(request));
+await page.evaluate(url => fetch(url).then(response => response.text()), ${JSON.stringify(`${baseUrl}/`)});
+const requestPatched = Object.hasOwn(await seen.promise, "enqueueInterceptAction");
+return { order, onceCalls, reads, requestPatched };`,
 			}),
 		);
-		// Puppeteer removes the first duplicate; a cancelled once still fires, as on a plain page.
-		expect(result).toEqual({ order: ["other", "h"], onceCalls: 1, reads: 0 });
+		// Puppeteer removes the first duplicate; a cancelled once still fires, as on a plain page;
+		// requests, which the tab's request log keeps, are left as puppeteer made them.
+		expect(result).toEqual({ order: ["other", "h"], onceCalls: 1, reads: 0, requestPatched: false });
 	}, 30_000);
 
 	test("puppeteer's own request subscriptions unsubscribe during a run", async () => {

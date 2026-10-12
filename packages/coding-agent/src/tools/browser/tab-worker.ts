@@ -1003,20 +1003,27 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 			configurable: true,
 			value: (type: unknown, event?: unknown): boolean => {
 				// Puppeteer defers every `request` listener to an interception action that runs after
-				// `emit` returns, so the action keeps the delivery it was queued from. The override
-				// stays on the request, which can outlive the run.
+				// `emit` returns, so each action queued during `emit` keeps the delivery it came from.
 				const request = type === "request" && typeof event === "object" ? (event as HTTPRequest | null) : null;
 				const enqueue = request?.enqueueInterceptAction;
-				if (request && typeof enqueue === "function") {
-					Object.defineProperty(request, "enqueueInterceptAction", {
-						configurable: true,
-						value: (action: () => unknown): void => {
-							const queued = delivering;
-							Reflect.apply(enqueue, request, [() => withDelivering(queued, action)]);
-						},
-					});
+				if (!request || typeof enqueue !== "function") {
+					return withDelivering(true, () => Reflect.apply(emit, page, [type, event]));
 				}
-				return withDelivering(true, () => Reflect.apply(emit, page, [type, event]));
+				const enqueueDescriptor = Object.getOwnPropertyDescriptor(request, "enqueueInterceptAction");
+				Object.defineProperty(request, "enqueueInterceptAction", {
+					configurable: true,
+					value: (action: () => unknown): void => {
+						const queued = delivering;
+						Reflect.apply(enqueue, request, [() => withDelivering(queued, action)]);
+					},
+				});
+				try {
+					return withDelivering(true, () => Reflect.apply(emit, page, [type, event]));
+				} finally {
+					// The tab's request log keeps requests well after the run; do not let them hold this scope.
+					if (enqueueDescriptor) Object.defineProperty(request, "enqueueInterceptAction", enqueueDescriptor);
+					else Reflect.deleteProperty(request, "enqueueInterceptAction");
+				}
 			},
 		},
 		removeAllListeners: {
