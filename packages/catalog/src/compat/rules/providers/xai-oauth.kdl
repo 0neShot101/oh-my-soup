@@ -70,8 +70,7 @@ provider "xai-oauth" {
 			limits context=500000 max-tokens=500000
 		}
 		// grok-4.20-*-0309: api.x.ai rejects prompts over 1M tokens on this surface
-		// ([input_too_large] "... > 1000000 tokens", all three ids, 2026-10-12),
-		// the same window as the paid xai rows for these ids.
+		// ([input_too_large] "... > 1000000 tokens", all three ids, 2026-10-12).
 		// Multi-agent is text-only per the bundled catalog.
 		model "grok-4.20-multi-agent-0309" name="Grok 4.20 (Multi-Agent)" {
 			reasoning #true

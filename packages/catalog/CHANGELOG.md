@@ -71,7 +71,7 @@
 
 ### Fixed
 
-- Fixed `xai-oauth` Grok 4.20 models (`grok-4.20-0309-reasoning`, `-non-reasoning`, `grok-4.20-multi-agent-0309`) advertising a 2M context window; the SuperGrok API rejects prompts over 1M, so auto-compaction now triggers before requests fail
+- Fixed `xai-oauth` Grok 4.20 models (`grok-4.20-0309-reasoning`, `-non-reasoning`, `grok-4.20-multi-agent-0309`) advertising a 2M context window when the SuperGrok API rejects prompts over 1M; auto-compaction and context usage now work from the 1M window
 
 ## [18.10.0] - 2026-10-12
 
