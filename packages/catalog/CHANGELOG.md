@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `xai-oauth` Grok 4.20 models (`grok-4.20-0309-reasoning`, `-non-reasoning`, `grok-4.20-multi-agent-0309`) advertising a 2M context window when the SuperGrok API rejects prompts over 1M; auto-compaction and context usage now work from the 1M window ([#15443](https://github.com/can1357/oh-my-pi/pull/15443) by [@will-bogusz](https://github.com/will-bogusz))
+
 ## [18.10.4] - 2026-10-13
 
 ### Added
@@ -68,10 +72,6 @@
 ### Added
 
 - Added the `honors-claude-code-beta-kill-switch` axis (`compat.honorsClaudeCodeBetaKillSwitch`), on for the `anthropic` provider, so a rule or `models.yml` override decides which providers honor `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` ([#15458](https://github.com/can1357/oh-my-pi/pull/15458) by [@H4vC](https://github.com/H4vC))
-
-### Fixed
-
-- Fixed `xai-oauth` Grok 4.20 models (`grok-4.20-0309-reasoning`, `-non-reasoning`, `grok-4.20-multi-agent-0309`) advertising a 2M context window when the SuperGrok API rejects prompts over 1M; auto-compaction and context usage now work from the 1M window
 
 ## [18.10.0] - 2026-10-12
 
