@@ -408,6 +408,47 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(requested?.options.find(option => option.id === "keep")?.disabled).toBe(true);
 	});
 
+	it("lets a late extension find and answer the open review, ignoring mutated event copies", async () => {
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nDo the thing.");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 9600, contextWindow: 10000, percent: 96 });
+		vi.spyOn(mode, "handleClearCommand").mockResolvedValue();
+		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+		const opened = Promise.withResolvers<PlanReviewRequestedEvent>();
+		let keepAfterMutation: boolean | undefined;
+		const recorder = planReviewRecorder("observer", (event, ctx) => {
+			const keep = event.options.find(option => option.id === "keep");
+			if (keep) keep.disabled = false;
+			keepAfterMutation = ctx.resolvePlanReview(event.reviewId, "keep");
+			opened.resolve(event);
+		});
+		const runner = await loadExtensions(recorder.extension);
+
+		const approval = mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+		const requested = await opened.promise;
+		// A context created after the event was delivered, as for an extension that loaded or reconnected late.
+		const lateCtx = runner.createContext();
+		const pending = lateCtx.getPendingPlanReview();
+		const accepted = pending ? lateCtx.resolvePlanReview(pending.reviewId, "execute") : false;
+		await approval;
+		const resolved = await recorder.resolved;
+
+		expect(keepAfterMutation).toBe(false);
+		expect(pending?.reviewId).toBe(requested.reviewId);
+		expect(pending?.options.find(option => option.id === "keep")?.disabled).toBe(true);
+		expect(accepted).toBe(true);
+		expect(lateCtx.getPendingPlanReview()).toBeUndefined();
+		expect(resolved).toMatchObject({ reviewId: requested.reviewId, choice: "execute", by: "extension" });
+		expect(prompt.mock.calls.find(isPlanApprovedCall)).toBeDefined();
+	});
+
 	it("sends remote refinement feedback verbatim as the next planning prompt", async () => {
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {

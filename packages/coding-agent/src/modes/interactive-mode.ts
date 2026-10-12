@@ -86,7 +86,12 @@ import type {
 	ExtensionWidgetContent,
 	ExtensionWidgetOptions,
 } from "../extensibility/extensions";
-import type { CompactOptions, PlanReviewChoice, PlanReviewOption } from "../extensibility/extensions/types";
+import type {
+	CompactOptions,
+	PlanReviewChoice,
+	PlanReviewOption,
+	PlanReviewRequestedEvent,
+} from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
 import type { FileSlashCommand } from "../extensibility/slash-commands";
 import { loadSlashCommands } from "../extensibility/slash-commands";
@@ -1558,10 +1563,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	#planReviewPick: ((choice: string) => void) | undefined;
 	/** Runs once when the open review's overlay is hidden; set by `showPlanReview`'s `onClose`. */
 	#planReviewOnHide: (() => void) | undefined;
+	/** The open review awaiting an answer; cleared as soon as a local or remote pick settles it. */
 	#pendingPlanReview:
 		| {
-				reviewId: string;
-				options: PlanReviewOption[];
+				request: PlanReviewRequestedEvent;
 				remote?: { choice: PlanReviewChoice; feedback?: string };
 		  }
 		| undefined;
@@ -5380,8 +5385,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		onHide?.();
 	}
 
-	#dismissPlanReview(): void {
-		this.#hidePlanReview();
+	/** The open plan review awaiting an answer, as `plan_review_requested` reported it: backs `ctx.getPendingPlanReview`. */
+	getPendingPlanReview(): PlanReviewRequestedEvent | undefined {
+		const request = this.#pendingPlanReview?.request;
+		return request ? structuredClone(request) : undefined;
 	}
 
 	/**
@@ -5391,8 +5398,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	resolvePlanReview(reviewId: string, choice: PlanReviewChoice, input?: { feedback?: string }): boolean {
 		const pending = this.#pendingPlanReview;
 		const pick = this.#planReviewPick;
-		if (!pending || pending.reviewId !== reviewId || !pick) return false;
-		const option = pending.options.find(item => item.id === choice);
+		if (!pending || pending.request.reviewId !== reviewId || !pick) return false;
+		const option = pending.request.options.find(item => item.id === choice);
 		if (!option || option.disabled) return false;
 		const feedback = input?.feedback;
 		if (choice === "refine" && !feedback?.trim()) return false;
@@ -6600,9 +6607,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		let feedback = "";
 		const annotationStateKey = this.#resolvePlanFilePath(planFilePath);
 
-		const reviewId = crypto.randomUUID();
 		const reviewSessionId = this.sessionManager.getSessionId();
-		this.#pendingPlanReview = { reviewId, options: reviewOptions };
+		const request: PlanReviewRequestedEvent = {
+			type: "plan_review_requested",
+			reviewId: crypto.randomUUID(),
+			sessionId: reviewSessionId,
+			title: details.title,
+			planFilePath,
+			planContent,
+			options: reviewOptions,
+		};
+		const reviewId = request.reviewId;
+		this.#pendingPlanReview = { request };
 		const pending = this.#pendingPlanReview;
 		const extensionRunner = this.session.extensionRunner;
 		// `plan_review_resolved` reports the overlay closing, not the pick: a pick can
@@ -6643,15 +6659,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			},
 			{ slider },
 		);
-		const requestedDelivery = extensionRunner?.emit({
-			type: "plan_review_requested",
-			reviewId,
-			sessionId: reviewSessionId,
-			title: details.title,
-			planFilePath,
-			planContent,
-			options: reviewOptions,
-		});
+		// Handlers get their own copy so mutating the event cannot re-enable a refused choice.
+		const requestedDelivery = extensionRunner?.emit(structuredClone(request));
 		void requestedDelivery?.then(
 			() => requestDelivered.resolve(),
 			() => requestDelivered.resolve(),
@@ -7439,7 +7448,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	showPinnedError(message: string): void {
-		this.#dismissPlanReview();
+		this.#hidePlanReview();
 		this.errorBannerContainer.clear();
 		this.errorBannerContainer.addChild(new ErrorBannerComponent(message, () => this.clearPinnedError()));
 		this.ui.requestRender();

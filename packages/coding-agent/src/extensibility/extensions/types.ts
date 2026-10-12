@@ -657,10 +657,18 @@ export interface ExtensionContext {
 	 * Answer the open interactive plan review as if the operator picked `choice` in it.
 	 * `refine` needs non-empty `input.feedback`, which is sent as the next planning prompt.
 	 * `save` writes the plan under its default file name without the path prompt.
+	 * Approvals run on the tier selected in the overlay's model slider, and execute the plan
+	 * as it is when picked (in-overlay edits, else the plan file), which may differ from
+	 * the `planContent` that `plan_review_requested` reported.
 	 * False when that review is not open, the choice is disabled or missing its feedback,
 	 * or the mode has no plan review.
 	 */
 	resolvePlanReview(reviewId: string, choice: PlanReviewChoice, input?: { feedback?: string }): boolean;
+	/**
+	 * The open interactive plan review still awaiting an answer, as `plan_review_requested` reported it,
+	 * or `undefined`. Lets an extension that loaded or reconnected after the event answer the review.
+	 */
+	getPendingPlanReview(): PlanReviewRequestedEvent | undefined;
 	/** Identity of the agent this session runs: the top-level session or a subagent. */
 	agent: ExtensionAgentIdentity;
 	/**
@@ -1219,7 +1227,11 @@ export interface PlanReviewOption {
 	label: string;
 	disabled: boolean;
 }
-/** The interactive plan review opened (interactive mode only). Resolve it with `ctx.resolvePlanReview`. */
+/**
+ * The interactive plan review opened (interactive mode only). Resolve it with `ctx.resolvePlanReview`.
+ * `plan_review_resolved` waits until every handler of this event returns, so handlers should hand
+ * long work (a remote round-trip, a dialog) off rather than await it.
+ */
 export interface PlanReviewRequestedEvent {
 	type: "plan_review_requested";
 	reviewId: string;
@@ -1229,7 +1241,10 @@ export interface PlanReviewRequestedEvent {
 	planContent: string;
 	options: PlanReviewOption[];
 }
-/** The plan review closed: a choice, or `undefined` when it was dismissed. */
+/**
+ * The plan review closed: a choice, or `undefined` when it was dismissed or cancelled (session switch,
+ * replacement review, shutdown). `by` is `"extension"` only for a choice made via `ctx.resolvePlanReview`.
+ */
 export interface PlanReviewResolvedEvent {
 	type: "plan_review_resolved";
 	reviewId: string;
@@ -2076,6 +2091,7 @@ export interface ExtensionContextActions {
 	hasPendingMessages: () => boolean;
 	shutdown: () => void;
 	resolvePlanReview?: (reviewId: string, choice: PlanReviewChoice, input?: { feedback?: string }) => boolean;
+	getPendingPlanReview?: () => PlanReviewRequestedEvent | undefined;
 	getContextUsage: () => ContextUsage | undefined;
 	compact: (instructionsOrOptions?: string | CompactOptions) => Promise<void>;
 	getSystemPrompt: () => string[];
