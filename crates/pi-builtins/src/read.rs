@@ -676,9 +676,17 @@ impl ReadCommand {
 		// Configure and perform the read.
 		let config = LineReaderConfig { delimiter, char_limit, process_escapes: !self.raw_mode };
 
-		tokio::task::spawn_blocking(move || read_line_with_reader(&mut reader, &config, &is_cancelled))
-			.await
-			.map_err(ErrorKind::ThreadingError)?
+		#[cfg(target_family = "wasm")]
+		{
+			// Threadless Wasm cannot spawn blocking workers.
+			read_line_with_reader(&mut reader, &config, &is_cancelled)
+		}
+		#[cfg(not(target_family = "wasm"))]
+		{
+			tokio::task::spawn_blocking(move || read_line_with_reader(&mut reader, &config, &is_cancelled))
+				.await
+				.map_err(ErrorKind::ThreadingError)?
+		}
 	}
 
 	fn setup_terminal_settings(
