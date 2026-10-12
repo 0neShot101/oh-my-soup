@@ -314,9 +314,11 @@ describe("resolveImageMaxEdge", () => {
 			if (!model) throw new Error(`Expected bundled cursor/${id}`);
 			expect(resolveImageMaxEdge(model)).toBe(1024);
 		}
-		// A host-less `{ api, id }` target on Cursor's wire is shrunk the same way.
+		// Partial targets naming only the host or only Cursor's wire are shrunk the same way.
+		expect(resolveImageMaxEdge({ provider: "cursor", id: "claude-opus-5-high" })).toBe(1024);
 		expect(resolveImageMaxEdge({ api: "cursor-agent", id: "claude-opus-5-high" })).toBe(1024);
 		expect(resolveImageMaxEdge({ api: "cursor-agent", id: "gpt-5.4-nano" })).toBe(1024);
+		expect(resolveImageMaxEdge({ provider: "cursor", id: "composer-2.5" })).toBeUndefined();
 		expect(resolveImageMaxEdge({ api: "cursor-agent", id: "composer-2.5" })).toBeUndefined();
 		for (const [provider, id] of [
 			["cursor", "gemini-3.7-flash"],

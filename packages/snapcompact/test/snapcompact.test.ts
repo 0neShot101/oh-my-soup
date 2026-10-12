@@ -416,7 +416,8 @@ describe("shape resolution", () => {
 		).toBe(1024);
 		const [frame] = await snapcompact.renderMany("cursor ".repeat(2000), { shape: claude, maxFrames: 1 });
 		expect(decodePng(Buffer.from(frame.data, "base64")).width).toBe(1024);
-		// The `{ api, id }` form with no host reaches the same backend through Cursor's wire.
+		// Targets naming only the host or only Cursor's wire reach the same backend.
+		expect(snapcompact.resolveShape({ provider: "cursor", id: "claude-opus-5-high" }).frameSize).toBe(1024);
 		const [apiOnly] = await snapcompact.renderMany("cursor ".repeat(2000), {
 			model: { api: "cursor-agent", id: "claude-opus-5-high" },
 			maxFrames: 1,
