@@ -326,20 +326,18 @@ export async function generateBranchSummary(
 
 	// A snapcompact summary rendered for another model may carry reasoning
 	// sections and their legend, which Claude refuses (issue #6093).
-	const dialect = preferredDialect(model.id);
-	const messages =
-		dialect === "anthropic"
-			? branchMessages.map(message =>
-					message.role === "compactionSummary"
-						? { ...message, summary: snapcompact.textWithoutThinking(message.summary) }
-						: message,
-				)
-			: branchMessages;
+	const messages = snapcompact.readerIncludesThinking(model)
+		? branchMessages
+		: branchMessages.map(message =>
+				message.role === "compactionSummary"
+					? { ...message, summary: snapcompact.textWithoutThinking(message.summary) }
+					: message,
+			);
 
 	// Transform to LLM-compatible messages, then serialize to text
 	// Serialization prevents the model from treating it as a conversation to continue
 	const llmMessages = (options.convertToLlm ?? defaultConvertToLlm)(messages);
-	const conversationText = serializeConversationForSummary(llmMessages, dialect);
+	const conversationText = serializeConversationForSummary(llmMessages, preferredDialect(model.id));
 
 	// Build prompt
 	const instructions = customInstructions || BRANCH_SUMMARY_PROMPT;

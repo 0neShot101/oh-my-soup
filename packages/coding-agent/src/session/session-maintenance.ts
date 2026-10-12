@@ -62,7 +62,6 @@ import type {
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { resolvePromptCacheLookback } from "@oh-my-pi/pi-catalog/compat/prompt-cache-lookback";
-import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { isRecord, logger, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
@@ -270,16 +269,6 @@ function payloadRejectionNotice(storedTokens: number, contextWindow: number): st
 	}
 	const headroom = Math.max(0, Math.floor(contextWindow - storedTokens));
 	return `The provider rejected the request size or media budget (HTTP 413), but ~${headroom.toLocaleString("en-US")} tokens of headroom remain locally — this is NOT necessarily a token-context problem. ${remedies}`;
-}
-
-/**
- * Whether a snapcompact archive read by `model` may carry assistant reasoning.
- * The archive replays as text into every later request, and Claude refuses
- * inputs that reproduce reasoning (`reasoning_extraction`, issue #6093), so
- * Anthropic-dialect readers get `¶think:` sections and their legend left out.
- */
-function snapcompactIncludesThinking(model: Model): boolean {
-	return preferredDialect(model.id) !== "anthropic";
 }
 
 /** Dead-end notice when provider-reported usage proves context overflow but no recovery exists (#9235). */
@@ -1318,7 +1307,7 @@ export class SessionMaintenance {
 			const snapcompactReady = wantsSnapcompact;
 			const snapcompactShapeSetting = cfgSnapcompactShape.get(this.#host.settings);
 			let snapcompactShape: snapcompact.Shape | undefined;
-			const snapcompactIncludeThinking = snapcompactIncludesThinking(this.#model);
+			const snapcompactIncludeThinking = snapcompact.readerIncludesThinking(this.#model);
 			if (wantsSnapcompact && !this.#model.input.includes("image")) {
 				this.#host.emitNotice(
 					"warning",
@@ -4355,7 +4344,7 @@ export class SessionMaintenance {
 	/**
 	 * Re-render `entry`'s snapcompact archive from its kept source text for
 	 * `model`, at most `maxFrames` frames: the reader's frame shape and its
-	 * reasoning policy ({@link snapcompactIncludesThinking}). Local: no model call.
+	 * reasoning policy ({@link snapcompact.readerIncludesThinking}). Local: no model call.
 	 */
 	async #rerenderSnapcompactArchive(
 		entry: CompactionEntry,
@@ -4384,7 +4373,7 @@ export class SessionMaintenance {
 				model,
 				...(shapeSetting === "auto" ? {} : { shape }),
 				maxFrames,
-				includeThinking: snapcompactIncludesThinking(model),
+				includeThinking: snapcompact.readerIncludesThinking(model),
 			},
 		);
 	}
@@ -4403,7 +4392,7 @@ export class SessionMaintenance {
 	async renderArchiveForModel(activeMessages?: AgentMessage[]): Promise<void> {
 		const model = this.#model;
 		if (!model) return;
-		const excludeThinking = !snapcompactIncludesThinking(model);
+		const excludeThinking = !snapcompact.readerIncludesThinking(model);
 		const lists = activeMessages
 			? [this.#host.agent.state.messages, activeMessages]
 			: [this.#host.agent.state.messages];
@@ -4458,7 +4447,7 @@ export class SessionMaintenance {
 		...lists: (readonly AgentMessage[] | undefined)[]
 	): Promise<Map<AgentMessage, AgentMessage>> {
 		const replacements = new Map<AgentMessage, AgentMessage>();
-		const excludeThinking = !snapcompactIncludesThinking(model);
+		const excludeThinking = !snapcompact.readerIncludesThinking(model);
 		for (const messages of lists) {
 			for (const message of messages ?? []) {
 				if (message.role !== "compactionSummary" || replacements.has(message)) continue;
@@ -5054,7 +5043,7 @@ export class SessionMaintenance {
 			let snapcompactResult: snapcompact.CompactionResult | undefined;
 			let snapcompactBlocker: string | undefined;
 			if (action === "snapcompact" && compactionPrep.kind !== "fromHook") {
-				const snapcompactIncludeThinking = snapcompactIncludesThinking(this.#model);
+				const snapcompactIncludeThinking = snapcompact.readerIncludesThinking(this.#model);
 				const text = snapcompact.serializeConversation(
 					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
 					{ includeThinking: snapcompactIncludeThinking },

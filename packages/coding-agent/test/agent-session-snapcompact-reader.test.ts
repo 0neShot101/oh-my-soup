@@ -12,7 +12,7 @@ import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Context, Message, Model } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { type GeneratedProvider, getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -26,9 +26,9 @@ import * as snapcompact from "@oh-my-pi/snapcompact";
 const REASONING = "PRIVATE-REASONING";
 const PLAIN_LEGEND = "`¶user:`, `¶ai:`, `¶call:`: user, assistant reply, tool call.";
 
-function bundled(...args: Parameters<typeof getBundledModel>): Model {
-	const model = getBundledModel(...args);
-	if (!model) throw new Error(`Expected bundled ${args.join("/")}`);
+function bundled(provider: GeneratedProvider, modelId: string): Model {
+	const model = getBundledModel(provider, modelId);
+	if (!model) throw new Error(`Expected bundled ${provider}/${modelId}`);
 	return model;
 }
 

@@ -59,7 +59,7 @@ import {
 	imageTokens,
 	resolveImageTokenization,
 } from "@oh-my-pi/pi-catalog/compat/image-tokenization";
-import { classifyModel, compareRevision, parseRevision } from "@oh-my-pi/pi-catalog/identity";
+import { classifyModel, compareRevision, parseRevision, preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { renderSnapcompactPng, snapcompactSupportedChars } from "@oh-my-pi/pi-natives";
 import { formatGroupedPaths, isRecord, prompt } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
@@ -2160,6 +2160,16 @@ function stripThinkingSections(text: string): string {
 	const stripped = kept.join("");
 	// A dropped final section leaves its predecessor's line break dangling.
 	return sections.at(-1)?.startsWith(THINK_LABEL) ? stripped.replace(TRAILING_LINE_BREAKS, "") : stripped;
+}
+
+/**
+ * Whether an archive read by `model` may carry assistant reasoning. The archive
+ * replays as text into every later request, and Claude refuses inputs that
+ * reproduce reasoning (`reasoning_extraction`, issue #6093), so Anthropic-dialect
+ * readers get `¶think:` sections and their legend left out.
+ */
+export function readerIncludesThinking(model: { id: string }): boolean {
+	return preferredDialect(model.id) !== "anthropic";
 }
 
 /** Whether a snapcompact summary declares `¶think:` reasoning scopes: true for

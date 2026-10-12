@@ -1653,7 +1653,7 @@ export async function compact(
 	// Anthropic-dialect summarizer reads the archive's no-reasoning view (scrubbed
 	// while its tool-output spans are still marked), and a summary with no
 	// archive behind it is scrubbed of `¶think:` sections.
-	const withoutThinking = preferredDialect(model.id) === "anthropic";
+	const withoutThinking = !snapcompact.readerIncludesThinking(model);
 	const storedSnapcompactArchive = snapcompact.getPreservedArchive(previousPreserveData);
 	const snapcompactView =
 		storedSnapcompactArchive && withoutThinking
