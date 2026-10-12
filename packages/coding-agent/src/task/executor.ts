@@ -580,6 +580,8 @@ export interface ExecutorOptions {
 	 * passes its own `getAgentId()`).
 	 */
 	parentAgentId?: string;
+	/** Same-type siblings share a cache route without sharing conversation state. */
+	parentPromptCacheKey?: string;
 	/**
 	 * Keep the finished subagent addressable in the registry for IRC/revival.
 	 * Defaults to true. Eval bridge agents are programmatic one-shot helpers and
@@ -3760,6 +3762,7 @@ function buildSubagentSessionOptions(
 	const customTools = spec.options.customTools ?? [];
 	return {
 		...spec.options,
+		taskPromptCacheKey: launch ? spec.options.taskPromptCacheKey : undefined,
 		mcpTools: mcpTools.length > 0 ? mcpTools : undefined,
 		customTools: customTools.length > 0 ? customTools : undefined,
 		settings,
@@ -4372,6 +4375,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// prompt, artifacts dir) — only the SessionManager and settings differ.
 			const sessionSpec: SubagentSessionSpec = {
 				options: {
+					taskPromptCacheKey:
+						options.parentPromptCacheKey === undefined
+							? undefined
+							: `${options.parentPromptCacheKey}:${agent.name}`,
 					cwd: worktree ?? cwd,
 					additionalDirectories: worktree !== undefined ? undefined : options.additionalDirectories,
 					authStorage,
