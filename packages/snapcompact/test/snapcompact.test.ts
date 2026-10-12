@@ -453,6 +453,38 @@ describe("shape resolution", () => {
 		);
 	});
 
+	it("plans archives at a billing-verified frame price and at least the ceiling otherwise", () => {
+		const codex = snapcompact.resolveShape({ api: "openai-codex-responses", id: "gpt-6.1-sol" });
+		expect(codex.frameTokensVerified).toBe(true);
+		expect(snapcompact.plannedFrameTokens(codex)).toBe(2882);
+		expect(snapcompact.plannedFrameTokens({ ...codex, frameTokensVerified: false })).toBe(
+			snapcompact.FRAME_TOKEN_ESTIMATE,
+		);
+		expect(
+			snapcompact.plannedFrameTokens(snapcompact.resolveShape({ api: "anthropic-messages", id: "claude-opus-5-5" })),
+		).toBe(4761);
+		// Same 2,882 price, but Grok is priced by the OpenAI-wire fallback and Opus 4.6 by the standard tier.
+		const grok = snapcompact.resolveShape({ api: "openai-responses", provider: "xai", id: "grok-4.7" });
+		expect(grok.frameTokenEstimate).toBe(2882);
+		expect(grok.frameTokensVerified).toBeUndefined();
+		expect(snapcompact.plannedFrameTokens(grok)).toBe(snapcompact.FRAME_TOKEN_ESTIMATE);
+		expect(
+			snapcompact.plannedFrameTokens(snapcompact.resolveShape({ api: "anthropic-messages", id: "claude-opus-4-6" })),
+		).toBe(snapcompact.FRAME_TOKEN_ESTIMATE);
+		// A forced 2576px shape bills above the ceiling, verified or not.
+		const forced = Math.ceil(81 * 81 * 1.2);
+		expect(
+			snapcompact.plannedFrameTokens(
+				snapcompact.resolveShape({ api: "openai-codex-responses", id: "gpt-6.1-sol" }, "5x8-bw"),
+			),
+		).toBe(forced);
+		expect(
+			snapcompact.plannedFrameTokens(
+				snapcompact.resolveShape({ api: "openai-responses", provider: "xai", id: "grok-4.7" }, "5x8-bw"),
+			),
+		).toBe(forced);
+	});
+
 	it("every catalog variant resolves to a complete, renderable shape", () => {
 		for (const name of snapcompact.SHAPE_VARIANT_NAMES) {
 			expect(snapcompact.isShapeVariantName(name)).toBe(true);

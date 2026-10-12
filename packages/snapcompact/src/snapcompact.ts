@@ -96,12 +96,14 @@ export interface Shape {
 	frameSize: number;
 	/** Per-frame billed-token estimate for the shape's target provider. */
 	frameTokenEstimate: number;
+	/** `frameTokenEstimate` comes from a catalog rule measured against provider billing. */
+	frameTokensVerified?: boolean;
 	/** Resolution hint attached to frame images (OpenAI-only). */
 	imageDetail?: ImageContent["detail"];
 }
 
 /** Geometry half of a {@link Shape}: everything except provider billing. */
-export type ShapeGeometry = Omit<Shape, "frameTokenEstimate" | "imageDetail">;
+export type ShapeGeometry = Omit<Shape, "frameTokenEstimate" | "frameTokensVerified" | "imageDetail">;
 
 /**
  * Frame variants exercised by the SQuAD evals in `research/` that the native
@@ -273,7 +275,22 @@ export function frameTokens(billing: FrameBilling, size: ImageSize): number {
 function priceShape(base: ShapeGeometry, target: ShapeTarget | undefined): Shape {
 	const billing = frameBilling(target);
 	const frameTokenEstimate = frameTokens(billing, { width: base.frameSize, height: base.frameSize });
-	return { ...base, frameTokenEstimate, ...(billing.imageDetail && { imageDetail: billing.imageDetail }) };
+	return {
+		...base,
+		frameTokenEstimate,
+		...(billing.rule?.verified && { frameTokensVerified: true }),
+		...(billing.imageDetail && { imageDetail: billing.imageDetail }),
+	};
+}
+
+/**
+ * Per-frame tokens archive sizing charges `shape`: its own price when provider
+ * billing verified it, else at least {@link FRAME_TOKEN_ESTIMATE}.
+ */
+export function plannedFrameTokens(shape: Shape): number {
+	return shape.frameTokensVerified
+		? shape.frameTokenEstimate
+		: Math.max(FRAME_TOKEN_ESTIMATE, shape.frameTokenEstimate);
 }
 
 /** Eval-validated shapes, keyed by the provider family they won on. */
@@ -320,6 +337,7 @@ export function isShape(value: unknown): value is Shape {
 		shape.frameSize > 0 &&
 		typeof shape.frameTokenEstimate === "number" &&
 		shape.frameTokenEstimate > 0 &&
+		(shape.frameTokensVerified === undefined || typeof shape.frameTokensVerified === "boolean") &&
 		(detail === undefined || detail === "auto" || detail === "low" || detail === "high" || detail === "original")
 	);
 }
@@ -483,11 +501,11 @@ export const MAX_FRAMES_DEFAULT = 80;
  *  text region (newest) — with the denser low-quality tier filling the middle. */
 export const HQ_EDGE_FRAMES = 3;
 
-/** Conservative per-frame token estimate for archive sizing and for frames of
- *  unknown size — the upper bound across shapes: high-res Claude frames hit the
- *  4,784 visual-token cap, billed at +5% margin (ceil(4784 * 1.05)). Keeps the
- *  overflow guard from undercounting a high-res archive at the raised
- *  {@link MAX_FRAMES_DEFAULT}. */
+/** Conservative per-frame token estimate for sizing archives whose frame price
+ *  is not billing-verified, and for frames of unknown size — the upper bound
+ *  across shapes: high-res Claude frames hit the 4,784 visual-token cap, billed
+ *  at +5% margin (ceil(4784 * 1.05)). Keeps the overflow guard from
+ *  undercounting a high-res archive at the raised {@link MAX_FRAMES_DEFAULT}. */
 export const FRAME_TOKEN_ESTIMATE = 5024;
 
 /** Conservative upper bound for one persisted frame's base64 payload. The

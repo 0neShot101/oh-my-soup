@@ -3622,10 +3622,9 @@ export class SessionMaintenance {
 	 * `threshold − (system prompt + tools + kept recent + cap reserve)`, never
 	 * past {@link SNAPCOMPACT_POST_COMPACTION_TARGET} of the threshold, and never
 	 * past what the post-compaction context can carry without busting the model
-	 * window. Charges each frame at least the per-frame price
-	 * the tokenizer will bill ({@link snapcompact.FRAME_TOKEN_ESTIMATE}, the
-	 * conservative high-res Anthropic ceiling, or the shape's own higher price),
-	 * so picking `maxFrames` from this helper makes
+	 * window. Charges each frame {@link snapcompact.plannedFrameTokens}, never
+	 * less than the per-frame price the tokenizer will bill, so picking
+	 * `maxFrames` from this helper makes
 	 * {@link #projectSnapcompactContextTokens} succeed by construction.
 	 *
 	 * Skip vs. cap use different reserves on purpose. The **skip** decision
@@ -3717,10 +3716,7 @@ export class SessionMaintenance {
 			SNAPCOMPACT_POST_COMPACTION_TARGET * thresholdTokens - fixedTokens,
 		);
 		const frameBudget = Math.min(totalBudget - baseTokens - capReserve, roomBudget);
-		// Size at the conservative ceiling, or at the shape's own frame price when a
-		// forced large shape (2576px `5x8-*` on OpenAI) bills more, so the tokenizer's
-		// per-frame charge never exceeds what this cap assumed.
-		const frameCost = Math.max(snapcompact.FRAME_TOKEN_ESTIMATE, shape.frameTokenEstimate);
+		const frameCost = snapcompact.plannedFrameTokens(shape);
 		if (roomBudget < frameCost) {
 			logger.warn("Snapcompact archive has no room under the compaction trigger", {
 				model: this.#model?.id,
@@ -4193,7 +4189,7 @@ export class SessionMaintenance {
 		const textEdgeTokens = Math.ceil((2 * edgeCap * 1.15) / 4);
 		const SUMMARY_TEMPLATE_TOKENS = 2000;
 		const frameBudget = recoveryBandTokens - baseTokens - keptTailTokens - textEdgeTokens - SUMMARY_TEMPLATE_TOKENS;
-		const frameCost = Math.max(snapcompact.FRAME_TOKEN_ESTIMATE, shape.frameTokenEstimate);
+		const frameCost = snapcompact.plannedFrameTokens(shape);
 		if (frameBudget < frameCost) return 0;
 		// Same hard caps as #computeSnapcompactMaxFrames: a threshold-derived
 		// count above the per-request payload or provider image budget would
