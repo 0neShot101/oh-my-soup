@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Enabled long prompt-cache retention (`ttl: "1h"`) for Claude models on `google-vertex`
+
 ## [18.10.2] - 2026-10-12
 
 ### Added
