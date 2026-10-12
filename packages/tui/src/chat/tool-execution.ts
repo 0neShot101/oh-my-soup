@@ -240,6 +240,29 @@ export interface ToolExecutionHandle extends Component {
 	seal(): void;
 }
 
+/** Tools whose returned call hands its card to the background job it started (see {@link parksAsBackground}). */
+const JOB_CARD_TOOLS: Record<string, "always" | "native"> = { task: "always", bash: "native", eval: "native" };
+
+/**
+ * Whether a call that returned with `details.async.state === "running"` stays
+ * parked ({@link ToolExecutionHandle.parkAsBackground}) so its job's later
+ * frames keep filling the card until a `completed`/`failed` frame settles it.
+ * Detached `task` spawns always do; backgrounded `bash`/`eval` jobs only under
+ * native rendering, where the terminal transcript keeps them frozen instead.
+ * Shared by the live event controller and the transcript rebuild.
+ */
+export function parksAsBackground(toolName: string, details: unknown): boolean {
+	const mode = JOB_CARD_TOOLS[toolName];
+	if (mode === undefined || (mode === "native" && !isNativeRendering())) return false;
+	return asyncJobState(details) === "running";
+}
+
+/** The background job state a tool result reports (`details.async.state`: running, completed, failed). */
+export function asyncJobState(details: unknown): string | undefined {
+	if (!isRecord(details) || !isRecord(details.async)) return undefined;
+	return typeof details.async.state === "string" ? details.async.state : undefined;
+}
+
 /** Card tone per status when the renderer doesn't choose one; settled cards stay neutral. */
 const NATIVE_STATUS_TONE: Record<TspCardStatus, TspTone | undefined> = {
 	pending: "pending",

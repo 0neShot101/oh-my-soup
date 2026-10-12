@@ -128,6 +128,25 @@ describe("bash native run box", () => {
 		expect(foot(nodes(view.body)[0])).toMatchObject({ state: "Running", time: { age: 2500, stopped: undefined } });
 	});
 
+	it("keeps a parked background job's card in background with a live clock while its output streams", () => {
+		const view = bashToolRenderer.describeResult(
+			{
+				content: [{ type: "text", text: "Benchmark 1\nBenchmark 2" }],
+				details: { async: { state: "running", jobId: "bg_2", type: "bash" } },
+			},
+			{ expanded: false, isPartial: true, executionStarted: true, elapsedMs: 61_000 },
+			{ command: "hyperfine bench" },
+		);
+		const box = nodes(view.body)[0];
+		expect(String(props(collect(box?.c, "ansi")[0]).text)).toBe("Benchmark 1\nBenchmark 2");
+		expect(foot(box)).toMatchObject({ state: "In background", time: { age: 61_000, stopped: undefined } });
+		expect(
+			foot(box)
+				?.facts?.map(s => s.t)
+				.join(""),
+		).toBe("Job bg_2");
+	});
+
 	it("maps exit, timeout, spawn failure and background jobs to the foot state and box tone", () => {
 		const settle = (text: string, details: Record<string, unknown>, isError: boolean) => {
 			const view = bashToolRenderer.describeResult(
