@@ -336,7 +336,7 @@ describe("AgentSession snapcompact frame dead-end rescue", () => {
 			await createSession({ frameCount: SEEDED_FRAME_COUNT, model });
 			const [firstEntry] = sessionManager.getBranch();
 			if (!firstEntry) throw new Error("Expected a seeded entry");
-			vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+			vi.spyOn(session.agent, "prompt").mockImplementation(async () => {});
 			vi.spyOn(session.agent, "continue").mockResolvedValue();
 			let rebuilt = false;
 			vi.spyOn(session, "getContextUsage").mockImplementation(() =>
