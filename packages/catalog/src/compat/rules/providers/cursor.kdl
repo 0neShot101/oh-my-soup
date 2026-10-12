@@ -8,11 +8,16 @@ provider "cursor" {
 	}
 
 	thinking-mode "effort"
+	// Cursor relays its upstream's image count (Claude 600, GPT 1,500) and took
+	// a 64 MB body; 60 images at the 500 KiB resize target stay near 31 MB.
+	image-count-budget 60
 	// Cursor's default route selects a differently priced backing model per
-	// request, Claude and GPT included, so its images get their 1024px edge;
-	// Gemini and Composer read 1024px pages as well as larger ones.
+	// request, Claude and GPT included, so it keeps Claude's image count and
+	// their 1024px edge; Gemini and Composer read 1024px pages as well as
+	// larger ones.
 	models "default" {
 		pricing-status "variable"
+		image-count-budget 20
 		image-max-edge 1024
 	}
 
@@ -21,6 +26,9 @@ provider "cursor" {
 	// images as sent.
 	class "anthropic" {
 		image-max-edge 1024
+		// Past 20 images Claude rejects any image edge over 3,000 px, checked
+		// before Cursor downsizes.
+		image-count-budget 20
 		family "fable" {
 			requires-cursor-tool-schema-projection #true
 			// Cursor advertised Context window 300k (Max 1M recovered elsewhere).
