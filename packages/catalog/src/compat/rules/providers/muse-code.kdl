@@ -12,7 +12,7 @@ provider "muse-code" {
 		// token) so cost display reads as API-equivalent spend; for Wonder Full
 		// that rate is an estimate. All accept image input and the `max` effort
 		// over the subscription key (verified 2026-10-12).
-		model "muse-wonder-1.0-contributor" name="Muse Wonder 1.0 (C)" {
+		model "muse-wonder-1.0-contributor" name="Muse Wonder (C)" {
 			reasoning #true
 			input "text" "image"
 			cost input=4 output=20 cache-read=0.2 cache-write=0
@@ -22,7 +22,7 @@ provider "muse-code" {
 			supports-reasoning-effort #true
 			include-encrypted-reasoning #true
 		}
-		model "muse-wonder-full-1.0" name="Muse Wonder Full 1.0" {
+		model "muse-wonder-full-1.0" name="Muse Wonder Full" {
 			reasoning #true
 			input "text" "image"
 			cost input=4 output=20 cache-read=0.2 cache-write=0
@@ -32,7 +32,7 @@ provider "muse-code" {
 			supports-reasoning-effort #true
 			include-encrypted-reasoning #true
 		}
-		model "muse-wonder-full-1.0-contributor" name="Muse Wonder Full 1.0 (C)" {
+		model "muse-wonder-full-1.0-contributor" name="Muse Wonder Full (C)" {
 			reasoning #true
 			input "text" "image"
 			cost input=4 output=20 cache-read=0.2 cache-write=0
@@ -63,7 +63,16 @@ provider "muse-code" {
 	// `custom` tools are rejected with 400 "`custom` tools are not supported
 	// on this endpoint", so apply-patch must stay a function tool here.
 	edit-prompt-variant "compact"
+	on-api "openai-responses" {
+		// Spark 1.3 Contributor warmed siblings hit 10/10 vs 0/10 with per-child keys (2026-10-12).
+		// Meta documents shared-prefix prompt_cache_key routing; keep the opt-in on these exact Muse Code IDs.
+		models "muse-spark-1.3" "muse-spark-1.3-contributor" "muse-wonder-1.0" "muse-wonder-1.0-contributor" "muse-wonder-full-1.0" "muse-wonder-full-1.0-contributor" {
+			task-sibling-prompt-cache #true
+		}
+	}
+	// Same capability-less `/v1/models` as Meta: unknown ids are opt-in.
 	class "unknown" {
+		thinking-unverified #true
 		thinking-efforts "minimal" "low" "medium" "high" "xhigh"
 		thinking-mode "effort"
 	}

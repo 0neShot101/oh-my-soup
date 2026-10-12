@@ -9,4 +9,5 @@ class "meta" {
 	family "muse-wonder" glob="*muse-wonder*"
 
 	revision prefix="muse-spark-"
+	revision prefix="muse-wonder-"
 }
