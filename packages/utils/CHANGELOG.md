@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.10.0] - 2026-10-12
+
 ### Added
 
 - Added `getMnemopiEmbedRuntimeDir()` for the shared mnemopi embedding server endpoints and logs.

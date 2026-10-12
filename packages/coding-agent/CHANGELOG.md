@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.10.0] - 2026-10-12
+
 ### Added
 
 - Added `/fork` support for creating a new Tern pane while a turn is streaming, preserving the original session
