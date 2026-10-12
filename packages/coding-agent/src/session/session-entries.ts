@@ -51,9 +51,9 @@ export interface SessionHeader {
 	parentSession?: string;
 	/** Prior absolute JSONL locations recorded by successful session moves. */
 	previousSessionFiles?: string[];
-	/** Provider prompt-cache identity inherited by exact-route full forks. */
+	/** Local-only provider prompt-cache identity inherited by exact-route full forks; omitted from shares and HTML. */
 	providerPromptCacheKey?: string;
-	/** Task-derived candidate, enabled only by the actual request model's cache policy. */
+	/** Local-only Task candidate, gated by the actual request model's cache policy; omitted from shares and HTML. */
 	taskPromptCacheKey?: string;
 }
 
