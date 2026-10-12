@@ -30,6 +30,7 @@ import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import { prewarmOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { isOpenAICodexWebSocketPreferred } from "@oh-my-pi/pi-ai/providers/openai-codex-transport";
 import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
+import { resolveCatalogPolicy } from "@oh-my-pi/pi-catalog/compat/catalog-policy";
 import { FALLBACK_DIALECT, preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { $env } from "@oh-my-pi/pi-utils/env";
@@ -653,6 +654,8 @@ export interface CreateAgentSessionOptions {
 	providerSessionId?: string;
 	/** Optional provider-facing prompt cache key, distinct from request lineage. */
 	providerPromptCacheKey?: string;
+	/** Task-derived cache candidate; applied only when the actual request model opts in. */
+	taskPromptCacheKey?: string;
 	/** Whether `providerPromptCacheKey` is caller-pinned or inherited from a full fork. */
 	providerPromptCacheKeySource?: "explicit" | "fork";
 	/** Absolute wall-clock deadline in Unix epoch milliseconds. */
@@ -1905,6 +1908,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		? undefined
 		: sessionManager.getHeader()?.providerPromptCacheKey;
 	const providerPromptCacheKey = options.providerPromptCacheKey ?? inheritedPromptCacheKey;
+	const taskPromptCacheKeyFor = (requestModel: Model | undefined): string | undefined =>
+		options.taskPromptCacheKey !== undefined &&
+		requestModel !== undefined &&
+		resolveCatalogPolicy(requestModel).taskSiblingPromptCache === true
+			? options.taskPromptCacheKey
+			: undefined;
 	const providerPromptCacheKeySource =
 		options.providerPromptCacheKey !== undefined
 			? (options.providerPromptCacheKeySource ?? "explicit")
@@ -2314,7 +2323,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getHindsightSessionState: () => session?.getHindsightSessionState(),
 			getMnemopiSessionState: () => session?.getMnemopiSessionState(),
 			getAgentId: () => resolvedAgentId,
-			getPromptCacheKey: () => session?.agent.promptCacheKey ?? session?.agent.sessionId,
+			getPromptCacheKey: () =>
+				session?.agent.promptCacheKey ??
+				taskPromptCacheKeyFor(session?.agent.state.model) ??
+				session?.agent.sessionId,
 			getToolByName: name => session?.getToolByName(name),
 			getToolForEvalBridge: name => session?.getToolForEvalBridge(name),
 			getEvalBridgeToolNames: () => session?.getEvalBridgeToolNames() ?? [],
@@ -4371,6 +4383,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				const fallbackCreditRedemption = session?.consumeActiveFallbackCreditRedemption(streamModel);
 				const merged: SimpleStreamOptions = {
 					...streamOptions,
+					promptCacheKey: streamOptions?.promptCacheKey ?? taskPromptCacheKeyFor(streamModel),
 					forceReasoningOff: externalThinking || streamOptions?.forceReasoningOff,
 					...(codeModeState.namespacesInfo === undefined
 						? {}

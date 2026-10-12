@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import type { Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
+import type { Model, ProviderSessionState, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import { buildRequest as buildGeminiRequest } from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { buildTransformedCodexRequestBody } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
@@ -12,6 +12,7 @@ import * as sdk from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import * as settingsStream from "@oh-my-pi/pi-coding-agent/session/settings-stream-fn";
 import type { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import * as discovery from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -27,12 +28,28 @@ describe("task sibling prompt-cache routing", () => {
 	});
 
 	it.each([
-		["openai-codex", "gpt-6-luna", undefined],
-		["muse-code", "muse-spark-1.3-contributor", "explicit-parent-cache"],
-		["google-antigravity", "gemini-3.8-flash", "explicit-parent-cache"],
+		[
+			"Muse provider-session fallback",
+			"muse-code",
+			"muse-spark-1.3-contributor",
+			undefined,
+			undefined,
+			"parent-provider-lineage:task",
+		],
+		[
+			"Muse explicit parent key",
+			"muse-code",
+			"muse-spark-1.3-contributor",
+			"explicit-parent",
+			"automatic-parent",
+			"explicit-parent:task",
+		],
+		["Muse nested lineage", "muse-code", "muse-spark-1.3-contributor", undefined, "root:task", "root:task:task"],
+		["Luna keeps child keys", "openai-codex", "gpt-6-luna", "explicit-parent", "automatic-parent", undefined],
+		["Gemini omits cache keys", "google-antigravity", "gemini-3.8-flash", "explicit-parent", undefined, undefined],
 	] as const)(
-		"routes %s task siblings through a shared cache key without sharing conversation state",
-		async (provider, modelId, parentCacheKey) => {
+		"%s without sharing child conversation or response state",
+		async (_name, provider, modelId, parentCacheKey, parentTaskKey, expected) => {
 			using directory = TempDir.createSync("@omp-task-cache-");
 			vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network is disabled in this test"));
 			const model = getBundledModel(provider, modelId);
@@ -42,6 +59,7 @@ describe("task sibling prompt-cache routing", () => {
 				sessionId: string | undefined;
 				cacheKey: string | undefined;
 				state: Map<string, ProviderSessionState> | undefined;
+				hasSiblingResponseState: boolean | undefined;
 				wireKey: unknown;
 			}> = [];
 			const realCreateSession = sdk.createAgentSession;
@@ -54,51 +72,60 @@ describe("task sibling prompt-cache routing", () => {
 			vi.spyOn(sdk, "createAgentSession").mockImplementation(async options => {
 				const result = await realCreateSession(options);
 				sessions.push(result.session);
-				const mock = createMockModel({
-					handler: { content: [{ type: "toolCall", name: "yield", arguments: { data: { findings: [] } } }] },
-				});
-				result.session.agent.streamFn = async (requestModel, context, streamOptions) => {
-					const cacheOptions = {
-						sessionId: streamOptions?.sessionId,
-						promptCacheKey: streamOptions?.promptCacheKey,
-						providerSessionState: streamOptions?.providerSessionState,
-					};
-					let wireKey: unknown;
-					if (requestModel.api === "openai-codex-responses") {
-						wireKey = (
-							await buildTransformedCodexRequestBody(
-								requestModel as Model<"openai-codex-responses">,
-								context,
-								cacheOptions,
-							)
-						).prompt_cache_key;
-					} else if (requestModel.api === "openai-responses") {
-						wireKey = buildResponsesParams(
-							requestModel as Model<"openai-responses">,
-							context,
-							cacheOptions,
-							undefined,
-						).params.prompt_cache_key;
-					} else {
-						const request = buildGeminiRequest(
-							requestModel as Model<"google-gemini-cli">,
-							context,
-							"test-project",
-							cacheOptions,
-							true,
-						);
-						wireKey = JSON.stringify(request).includes("explicit-parent-cache");
-					}
-					requests.push({
-						sessionId: streamOptions?.sessionId,
-						cacheKey: streamOptions?.promptCacheKey,
-						state: streamOptions?.providerSessionState,
-						wireKey,
-					});
-					return mock.stream(requestModel, context, streamOptions);
-				};
 				return result;
 			});
+			const mock = createMockModel({
+				handler: { content: [{ type: "toolCall", name: "yield", arguments: { data: { findings: [] } } }] },
+			});
+			const realSettingsStream = settingsStream.createSettingsAwareStreamFn;
+			vi.spyOn(settingsStream, "createSettingsAwareStreamFn").mockImplementation((settings, _base, slowMode) =>
+				realSettingsStream(
+					settings,
+					async (requestModel, context, streamOptions) => {
+						const cacheOptions = {
+							sessionId: streamOptions?.sessionId,
+							promptCacheKey: streamOptions?.promptCacheKey,
+							providerSessionState: streamOptions?.providerSessionState,
+						};
+						let wireKey: unknown;
+						if (requestModel.api === "openai-codex-responses") {
+							wireKey = (
+								await buildTransformedCodexRequestBody(
+									requestModel as Model<"openai-codex-responses">,
+									context,
+									cacheOptions,
+								)
+							).prompt_cache_key;
+						} else if (requestModel.api === "openai-responses") {
+							wireKey = buildResponsesParams(
+								requestModel as Model<"openai-responses">,
+								context,
+								cacheOptions,
+								undefined,
+							).params.prompt_cache_key;
+						} else {
+							const request = buildGeminiRequest(
+								requestModel as Model<"google-gemini-cli">,
+								context,
+								"test-project",
+								cacheOptions,
+								true,
+							);
+							wireKey = JSON.stringify(request).includes('"prompt_cache_key"');
+						}
+						requests.push({
+							sessionId: streamOptions?.sessionId,
+							cacheKey: streamOptions?.promptCacheKey,
+							state: streamOptions?.providerSessionState,
+							hasSiblingResponseState: streamOptions?.providerSessionState?.has("test-response-state"),
+							wireKey,
+						});
+						streamOptions?.providerSessionState?.set("test-response-state", { close() {} });
+						return mock.stream(requestModel, context, streamOptions);
+					},
+					slowMode,
+				),
+			);
 			try {
 				const { session: parent } = await sdk.createAgentSession({
 					cwd: directory.path(),
@@ -107,6 +134,7 @@ describe("task sibling prompt-cache routing", () => {
 					model,
 					providerSessionId: "parent-provider-lineage",
 					providerPromptCacheKey: parentCacheKey,
+					taskPromptCacheKey: parentTaskKey,
 					sessionManager: SessionManager.inMemory(directory.path()),
 					settings: Settings.isolated({
 						"async.enabled": false,
@@ -134,15 +162,17 @@ describe("task sibling prompt-cache routing", () => {
 					expect(result.details?.results[0]?.exitCode, JSON.stringify(result)).toBe(0);
 				}
 				expect(requests).toHaveLength(2);
-				const expected = `${parentCacheKey ?? "parent-provider-lineage"}:task`;
 				expect(requests.map(request => request.cacheKey)).toEqual([expected, expected]);
 				expect(requests[0]?.sessionId).not.toBe(requests[1]?.sessionId);
 				expect(requests[0]?.sessionId).not.toBe("parent-provider-lineage");
+				expect(requests.map(request => request.hasSiblingResponseState)).toEqual([false, false]);
 				expect(requests[0]?.state).toBeInstanceOf(Map);
 				expect(requests[1]?.state).toBeInstanceOf(Map);
 				expect(requests[0]?.state).not.toBe(requests[1]?.state);
 				expect(requests.map(request => request.wireKey)).toEqual(
-					provider === "google-antigravity" ? [false, false] : [expected, expected],
+					provider === "google-antigravity"
+						? [false, false]
+						: requests.map(request => expected ?? request.sessionId),
 				);
 			} finally {
 				await Promise.all(sessions.splice(0).map(session => session.dispose()));
@@ -150,4 +180,188 @@ describe("task sibling prompt-cache routing", () => {
 			}
 		},
 	);
+
+	it.each([
+		["muse-code/muse-spark-1.3-contributor", "openai-codex", "gpt-6-luna", undefined],
+		["openai-codex/gpt-6-luna", "muse-code", "muse-spark-1.3-contributor", "parent:task"],
+	] as const)(
+		"gates the authenticated fallback after deferred %s selection",
+		async (requested, provider, modelId, expected) => {
+			using directory = TempDir.createSync("@omp-task-cache-fallback-");
+			vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network is disabled in this test"));
+			const requests: Array<{ model: Model; cacheKey: string | undefined }> = [];
+			const mock = createMockModel({ handler: { content: [{ type: "text", text: "Done." }] } });
+			const realSettingsStream = settingsStream.createSettingsAwareStreamFn;
+			vi.spyOn(settingsStream, "createSettingsAwareStreamFn").mockImplementation((settings, _base, slowMode) =>
+				realSettingsStream(
+					settings,
+					(model, context, options) => {
+						requests.push({ model, cacheKey: options?.promptCacheKey });
+						return mock.stream(model, context, options);
+					},
+					slowMode,
+				),
+			);
+			const authStorage = await AuthStorage.create(directory.join("auth.db"));
+			authStorage.keys.setRuntime(provider, "test-key");
+			try {
+				const { session } = await sdk.createAgentSession({
+					cwd: directory.path(),
+					agentDir: directory.path(),
+					authStorage,
+					modelPattern: requested,
+					modelPatternAuthFallback: `${provider}/${modelId}`,
+					taskPromptCacheKey: "parent:task",
+					sessionManager: SessionManager.inMemory(directory.path()),
+					settings: Settings.isolated({
+						"async.enabled": false,
+						"marketplace.autoUpdate": "off",
+						"compaction.enabled": false,
+					}),
+					toolNames: [],
+					disableExtensionDiscovery: true,
+					skills: [],
+					contextFiles: [],
+					promptTemplates: [],
+					rules: [],
+					enableMCP: false,
+					enableLsp: false,
+				});
+				sessions.push(session);
+				await session.agent.prompt("Review the change.");
+				expect(requests).toHaveLength(1);
+				expect(requests[0]?.model.provider).toBe(provider);
+				expect(requests[0]?.model.id).toBe(modelId);
+				expect(requests[0]?.cacheKey).toBe(expected);
+			} finally {
+				await Promise.all(sessions.splice(0).map(session => session.dispose()));
+				authStorage.close();
+			}
+		},
+	);
+
+	it("rechecks the actual request model while explicit session and request keys win", async () => {
+		using directory = TempDir.createSync("@omp-task-cache-model-");
+		vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network is disabled in this test"));
+		const requests: Array<{ provider: string; options: SimpleStreamOptions | undefined; wireKey: unknown }> = [];
+		const mock = createMockModel({ handler: { content: [{ type: "text", text: "Done." }] } });
+		const realSettingsStream = settingsStream.createSettingsAwareStreamFn;
+		vi.spyOn(settingsStream, "createSettingsAwareStreamFn").mockImplementation((settings, _base, slowMode) =>
+			realSettingsStream(
+				settings,
+				async (model, context, options) => {
+					const cacheOptions = {
+						sessionId: options?.sessionId,
+						promptCacheKey: options?.promptCacheKey,
+						providerSessionState: options?.providerSessionState,
+					};
+					const wireKey =
+						model.api === "openai-codex-responses"
+							? (
+									await buildTransformedCodexRequestBody(
+										model as Model<"openai-codex-responses">,
+										context,
+										cacheOptions,
+									)
+								).prompt_cache_key
+							: buildResponsesParams(model as Model<"openai-responses">, context, cacheOptions, undefined).params
+									.prompt_cache_key;
+					requests.push({ provider: model.provider, options, wireKey });
+					return mock.stream(model, context, options);
+				},
+				slowMode,
+			),
+		);
+		const authStorage = await AuthStorage.create(directory.join("auth.db"));
+		authStorage.keys.setRuntime("muse-code", "test-key");
+		authStorage.keys.setRuntime("openai-codex", "test-key");
+		try {
+			const muse = getBundledModel("muse-code", "muse-spark-1.3-contributor");
+			const luna = getBundledModel("openai-codex", "gpt-6-luna");
+			const { session } = await sdk.createAgentSession({
+				cwd: directory.path(),
+				agentDir: directory.path(),
+				authStorage,
+				modelPattern: "muse-code/muse-spark-1.3-contributor",
+				providerSessionId: "child-conversation",
+				providerPromptCacheKey: "configured-child",
+				taskPromptCacheKey: "parent:task",
+				sessionManager: SessionManager.inMemory(directory.path()),
+				settings: Settings.isolated({
+					"async.enabled": false,
+					"marketplace.autoUpdate": "off",
+					"compaction.enabled": false,
+				}),
+				toolNames: [],
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				rules: [],
+				enableMCP: false,
+				enableLsp: false,
+			});
+			sessions.push(session);
+			await session.agent.prompt("Review first.");
+			session.agent.setModel(luna);
+			await session.agent.prompt("Review second.");
+			session.agent.promptCacheKey = undefined;
+			await session.agent.prompt("Review third.");
+			session.agent.setModel(muse);
+			await session.agent.prompt("Review fourth.");
+			const fallback = await session.agent.streamFn(luna, { messages: [] }, { sessionId: "fallback-conversation" });
+			await fallback.result();
+			session.agent.promptCacheKey = "explicit-child";
+			session.agent.setModel(luna);
+			await session.agent.prompt("Review fifth.");
+			const explicit = await session.agent.streamFn(
+				luna,
+				{ messages: [] },
+				{
+					sessionId: "request-conversation",
+					promptCacheKey: "explicit-request",
+				},
+			);
+			await explicit.result();
+			expect(requests.map(request => request.provider)).toEqual([
+				"muse-code",
+				"openai-codex",
+				"openai-codex",
+				"muse-code",
+				"openai-codex",
+				"openai-codex",
+				"openai-codex",
+			]);
+			expect(requests.map(request => request.options?.promptCacheKey)).toEqual([
+				"configured-child",
+				"configured-child",
+				undefined,
+				"parent:task",
+				undefined,
+				"explicit-child",
+				"explicit-request",
+			]);
+			expect(requests.map(request => request.wireKey)).toEqual([
+				"configured-child",
+				"configured-child",
+				"child-conversation",
+				"parent:task",
+				"fallback-conversation",
+				"explicit-child",
+				"explicit-request",
+			]);
+			expect(requests.map(request => request.options?.sessionId)).toEqual([
+				"child-conversation",
+				"child-conversation",
+				"child-conversation",
+				"child-conversation",
+				"fallback-conversation",
+				"child-conversation",
+				"request-conversation",
+			]);
+		} finally {
+			await Promise.all(sessions.splice(0).map(session => session.dispose()));
+			authStorage.close();
+		}
+	});
 });

@@ -4306,7 +4306,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// prompt, artifacts dir) — only the SessionManager and settings differ.
 			const sessionSpec: SubagentSessionSpec = {
 				options: {
-					providerPromptCacheKey:
+					taskPromptCacheKey:
 						options.parentPromptCacheKey === undefined
 							? undefined
 							: `${options.parentPromptCacheKey}:${agent.name}`,
