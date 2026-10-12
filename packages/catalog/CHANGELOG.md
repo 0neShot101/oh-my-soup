@@ -34,6 +34,9 @@
 ### Added
 
 - Added the `thinking-replay-tokens` axis; Claude lines set it to `output` on every host, since a replayed signed thinking block bills the turn's full reasoning, not the signature's bytes ([#15446](https://github.com/can1357/oh-my-pi/pull/15446) by [@will-bogusz](https://github.com/will-bogusz))
+### Fixed
+
+- Fixed local token counts for OpenAI GPT-5 and later models (Codex, OpenAI, Azure, OpenRouter, Copilot and other hosts) reading about 12% low: their text is now counted with o200k_base instead of a bytes/4 estimate ([#15447](https://github.com/can1357/oh-my-pi/pull/15447) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.10.0] - 2026-10-12
 
