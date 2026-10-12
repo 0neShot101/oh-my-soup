@@ -115,6 +115,7 @@ export const openaiDecisionsWire: JudgmentWire = {
 								...request.images.map(image => ({
 									type: "input_image",
 									image_url: judgmentImageDataUrl(image),
+									...(image.detail !== undefined ? { detail: image.detail } : {}),
 								})),
 							],
 						},

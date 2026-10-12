@@ -654,6 +654,10 @@ describe("NativeJudge OpenAI Decisions dialect", () => {
 			description: "Inspect this JSON-shaped state.",
 			serializedImage: { type: "image", data: "U1RBVEU=", mimeType: "image/png" },
 		};
+		const wireImages: readonly ImageContent[] = [
+			...IMAGE_REFS,
+			{ type: "image", data: "BwgJ", mimeType: "image/png", detail: "original" },
+		];
 		const inputs: unknown[] = [];
 		const judge = createNativeJudge(visionLuna, {
 			apiKey: "sk-test",
@@ -670,7 +674,7 @@ describe("NativeJudge OpenAI Decisions dialect", () => {
 		await judge.judge({
 			state,
 			questions: { urgent: { type: "noul", instructions: "Is it urgent?" } },
-			images: IMAGE_REFS,
+			images: wireImages,
 		});
 
 		expect(inputs).toHaveLength(1);
@@ -682,6 +686,7 @@ describe("NativeJudge OpenAI Decisions dialect", () => {
 						{ type: "input_text", text: JSON.stringify(state) },
 						{ type: "input_image", image_url: "data:image/png;base64,AQID" },
 						{ type: "input_image", image_url: "data:image/jpeg;base64,BAUG" },
+						{ type: "input_image", image_url: "data:image/png;base64,BwgJ", detail: "original" },
 					],
 				},
 			],
@@ -740,8 +745,12 @@ describe("NativeJudge OpenAI Decisions dialect", () => {
 		expect(calls).toBe(0);
 	});
 
-	it("retains images on every native question chunk", async () => {
+	it("retains requested image detail on every native question chunk", async () => {
 		const chunks: Array<{ questionIds: string[]; images: unknown[] }> = [];
+		const detailedImages: readonly ImageContent[] = [
+			{ ...IMAGE_REFS[0], detail: "low" },
+			{ ...IMAGE_REFS[1], detail: "high" },
+		];
 		const judge = new NativeJudge({
 			api: "openai-decisions",
 			provider: "openai",
@@ -772,12 +781,12 @@ describe("NativeJudge OpenAI Decisions dialect", () => {
 				second: { type: "noul", instructions: "Second?" },
 				third: { type: "noul", instructions: "Third?" },
 			},
-			images: IMAGE_REFS,
+			images: detailedImages,
 		});
 
 		const expectedImages = [
-			{ type: "input_image", image_url: "data:image/png;base64,AQID" },
-			{ type: "input_image", image_url: "data:image/jpeg;base64,BAUG" },
+			{ type: "input_image", image_url: "data:image/png;base64,AQID", detail: "low" },
+			{ type: "input_image", image_url: "data:image/jpeg;base64,BAUG", detail: "high" },
 		];
 		expect(chunks).toEqual([
 			{ questionIds: ["first"], images: expectedImages },

@@ -99,6 +99,7 @@ function cacheStateIdentity(request: JudgmentRequest): string {
 	const images = request.images.map(image => ({
 		mimeType: image.mimeType,
 		digest: new Bun.CryptoHasher("sha256").update(Buffer.from(image.data, "base64")).digest("hex"),
+		detail: image.detail ?? "auto",
 	}));
 	return `multimodal-judgment-cache-v1:${stableStringifyJson({ state, images })}`;
 }

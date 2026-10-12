@@ -703,7 +703,7 @@ describe("ChainJudge", () => {
 		expect(db.query<{ n: number }, []>("SELECT count(*) AS n FROM states").get()?.n).toBe(1);
 	});
 
-	it("keys native answer caching by ordered image digests without persisting payloads", async () => {
+	it("keys native answer caching by ordered image digests and detail without persisting payloads", async () => {
 		using tempDir = TempDir.createSync("@omp-judgment-image-cache-");
 		const dbPath = path.join(tempDir.path(), "judgment-cache.db");
 		const cache = JudgmentCache.open(dbPath);
@@ -719,12 +719,13 @@ describe("ChainJudge", () => {
 		});
 		const registry = makeRegistry([OPENAI_DECISIONS], { [OPENAI_DECISIONS.provider]: "openai-key" });
 		let calls = 0;
+		let probability = 0.75;
 		vi.spyOn(globalThis, "fetch").mockImplementation(
 			asGlobalFetch(async () => {
 				calls++;
 				return Response.json({
 					model: "gpt-6-luna",
-					answers: [{ type: "predicate", name: "visible", probability: 0.75 }],
+					answers: [{ type: "predicate", name: "visible", probability }],
 					usage: { input_tokens: 8, output_tokens: 0 },
 				});
 			}),
@@ -734,12 +735,28 @@ describe("ChainJudge", () => {
 		await judge.judge(request);
 		await judge.judge({ ...request, images: [IMAGE_TWO] });
 		await judge.judge(request);
+		const lowDetail: ImageContent["detail"] = "low";
+		const highDetail: ImageContent["detail"] = "high";
+		const autoDetail: ImageContent["detail"] = "auto";
+		const lowRequest = { ...request, images: [{ ...IMAGE_ONE, detail: lowDetail }] };
+		const highRequest = { ...request, images: [{ ...IMAGE_ONE, detail: highDetail }] };
+		const autoRequest = { ...request, images: [{ ...IMAGE_ONE, detail: autoDetail }] };
+		probability = 0.2;
+		const low = await judge.judge(lowRequest);
+		expect(low.answers.visible).toEqual({ type: "noul", noul: 0.2 });
+		probability = 0.9;
+		const high = await judge.judge(highRequest);
+		expect(high.answers.visible).toEqual({ type: "noul", noul: 0.9 });
+		const repeatedLow = await judge.judge(lowRequest);
+		expect(repeatedLow.answers.visible).toEqual({ type: "noul", noul: 0.2 });
+		const explicitAuto = await judge.judge(autoRequest);
+		expect(explicitAuto.answers.visible).toEqual({ type: "noul", noul: 0.75 });
 
-		expect(calls).toBe(2);
-		cache.close();
+		expect(calls).toBe(4);
+
 		using db = new Database(dbPath, { readonly: true });
 		const states = db.query<{ state: string }, []>("SELECT state FROM states").all();
-		expect(states).toHaveLength(2);
+		expect(states).toHaveLength(4);
 		for (const { state } of states) {
 			expect(state).toStartWith("multimodal-judgment-cache-v1:");
 			expect(state).toContain('"digest"');
