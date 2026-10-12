@@ -1058,20 +1058,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		// oxlint-disable-next-line prefer-const -- read by buildAsyncDetails before assignment
 		let syncOutputPaths: string[] | undefined;
 		let syncProjectAgentsDir: string | null = null;
-		const asyncContract = prompt
-			.render(taskAsyncContractTemplate, { ircEnabled, waitTool: hasWaitTool(this.session) })
-			.trim();
-		// Context rewrites can remove the text while retaining its details.
-		const contractInContext =
-			this.session.sessionManager
-				?.buildSessionContext?.({ resolveFrameData: undefined })
-				.messages.some(
-					message =>
-						message.role === "toolResult" &&
-						message.toolName === "task" &&
-						(message.details as TaskToolDetails | undefined)?.async?.contractDelivered === true &&
-						message.content.some(part => part.type === "text" && part.text.includes(asyncContract)),
-				) ?? false;
 		const buildAsyncDetails = (): TaskToolDetails => ({
 			projectAgentsDir: syncProjectAgentsDir,
 			results: [...syncResults],
@@ -1083,7 +1069,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				state: settledCount < asyncSpawns.length ? "running" : failedCount > 0 ? "failed" : "completed",
 				jobId: primaryJobId,
 				type: "task",
-				contractDelivered: contractInContext ? undefined : true,
 			},
 		});
 
@@ -1135,7 +1120,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			failedSchedules.length > 0
 				? ` Failed to schedule ${failedSchedules.length} spawn${failedSchedules.length === 1 ? "" : "s"}: ${failedSchedules.join("; ")}.`
 				: "";
-		const guidance = contractInContext ? "" : asyncContract;
+		const guidance = prompt
+			.render(taskAsyncContractTemplate, { ircEnabled, waitTool: hasWaitTool(this.session) })
+			.trim();
 		const renderSpawnFeedback = (mixed: boolean): string =>
 			prompt
 				.render(taskSpawnFeedbackTemplate, {
