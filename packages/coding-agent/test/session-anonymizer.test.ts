@@ -62,6 +62,7 @@ describe("SessionAnonymizer", () => {
 					provider: "anthropic",
 					model: "claude-opus-5-5",
 					usage,
+					elidedOutputTokens: 12,
 					stopReason: "toolUse",
 					providerPayload: {
 						items: [
@@ -136,6 +137,7 @@ describe("SessionAnonymizer", () => {
 			model: "claude-opus-5-5",
 			provider: "anthropic",
 			usage,
+			elidedOutputTokens: 12,
 			stopReason: "toolUse",
 		});
 
