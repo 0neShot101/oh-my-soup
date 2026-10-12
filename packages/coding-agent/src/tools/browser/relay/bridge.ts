@@ -724,7 +724,8 @@ export class RelayBridge {
 
 	/**
 	 * Forward a command to the tab and reply to it; resolves whether the command succeeded.
-	 * `beforeReply` runs on success ahead of the reply.
+	 * `beforeReply` runs on success ahead of the reply. Target lifecycle commands are answered by the
+	 * relay's browser handlers instead, which reply (or throw to `cdpMessage`) themselves: they resolve `true`.
 	 */
 	async #forwardToTab(
 		conn: CdpConnection,
