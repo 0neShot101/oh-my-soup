@@ -1,6 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import * as zlib from "node:zlib";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { type Api, type AssistantMessage, type Context, Effort, type ImageContent, type Model } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
@@ -13,6 +12,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { getRestorableSessionModels } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import { EPHEMERAL_MODEL_CHANGE_ROLE } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { encodeRawPng } from "@oh-my-pi/pi-coding-agent/utils/png-encode";
 import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
@@ -537,37 +537,24 @@ describe("AgentSession model persistence", () => {
 		});
 	});
 
-	/** A valid 800x500 RGB PNG stored without compression: ~1.6 MB of base64, decodable by the send path's image checks. */
-	function framePng(fill: number): string {
-		const width = 800;
-		const height = 500;
-		const rows = Buffer.alloc(height * (1 + width * 3), fill);
-		for (let row = 0; row < height; row++) rows[row * (1 + width * 3)] = 0;
-		const chunk = (type: string, data: Buffer): Buffer => {
-			const length = Buffer.alloc(4);
-			length.writeUInt32BE(data.length);
-			const typeAndData = Buffer.concat([Buffer.from(type, "ascii"), data]);
-			const crc = Buffer.alloc(4);
-			crc.writeUInt32BE(Bun.hash.crc32(typeAndData));
-			return Buffer.concat([length, typeAndData, crc]);
-		};
-		const header = Buffer.alloc(13);
-		header.writeUInt32BE(width, 0);
-		header.writeUInt32BE(height, 4);
-		header[8] = 8; // bit depth
-		header[9] = 2; // RGB
-		return Buffer.concat([
-			Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-			chunk("IHDR", header),
-			chunk("IDAT", zlib.deflateSync(rows, { level: 0 })),
-			chunk("IEND", Buffer.alloc(0)),
-		]).toString("base64");
+	/** A valid 800x500 RGB PNG of noise deflate cannot shrink: ~1.6 MB of base64, decodable by the send path's image checks. */
+	function framePng(seed: number): string {
+		const pixels = new Uint32Array((800 * 500 * 3) / 4);
+		let state = seed;
+		for (let i = 0; i < pixels.length; i++) {
+			// xorshift32, so every run encodes the same bytes.
+			state ^= state << 13;
+			state ^= state >>> 17;
+			state ^= state << 5;
+			pixels[i] = state;
+		}
+		return encodeRawPng(new Uint8Array(pixels.buffer), 800, 500, 3).toString("base64");
 	}
 
 	/** Appends a 4.8 MB three-frame archive: over the 3 MB default, inside half of Anthropic's 24 MB inline-image budget. */
 	function appendFrameArchive(sessionManager: SessionManager, firstKeptEntryId: string): void {
-		const frame = (fill: number) => ({
-			data: framePng(fill),
+		const frame = (seed: number) => ({
+			data: framePng(seed),
 			mimeType: "image/png",
 			cols: 8,
 			rows: 8,
