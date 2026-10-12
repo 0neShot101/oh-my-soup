@@ -6,7 +6,7 @@ import * as path from "node:path";
 import type { VcsCommitAuthor, VcsGitRepo } from "@oh-my-pi/pi-natives";
 import * as natives from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { formatBytes, getWorktreeDir, logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { formatBytes, getWorktreeDir, isEnoent, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import type { SettingValueOf } from "../config/registry";
 
 import { withRepoLock } from "../utils/repo-lock";
@@ -551,6 +551,43 @@ function getTaskIsolationSegment(repoRoot: string, id: string): string {
 	return `${TASK_ISOLATION_DIR_PREFIX}${digest}`;
 }
 
+/**
+ * Submodule pointers in copied checkouts may still target the source admin
+ * directory, or an admin directory under the root `.git` that detach removes.
+ * Detach from the leaves upward while those objects and refs are still readable.
+ */
+async function detachSubmodules(sourceRoot: string, isolationRoot: string): Promise<void> {
+	const source = vcs.requireGit(sourceRoot);
+	for (const relativePath of await source.submodulePaths()) {
+		const sourceDir = path.join(sourceRoot, relativePath);
+		const isolatedDir = path.join(isolationRoot, relativePath);
+		let sourceEntry;
+		try {
+			sourceEntry = await fs.lstat(path.join(sourceDir, ".git"));
+		} catch (error) {
+			if (isEnoent(error)) continue; // Uninitialized submodules have no admin state to detach.
+			throw error;
+		}
+		let isolatedEntry;
+		try {
+			isolatedEntry = await fs.lstat(path.join(isolatedDir, ".git"));
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+			// `git worktree add` (rcopy) checks out gitlinks but not their trees.
+			await fs.cp(sourceDir, isolatedDir, { recursive: true });
+			isolatedEntry = sourceEntry;
+		}
+		await detachSubmodules(sourceDir, isolatedDir);
+		if (isolatedEntry.isFile()) {
+			const info = vcs.requireGit(sourceDir).info();
+			// A relative pointer into the copied root `.git/modules` becomes
+			// dangling after root detach; read from the source until detached.
+			await fs.writeFile(path.join(isolatedDir, ".git"), `gitdir: ${info.gitDir}\n`);
+			await vcs.detachGitDir(isolatedDir, info.commonDir);
+		}
+	}
+}
+
 export async function ensureIsolation(
 	baseCwd: string,
 	id: string,
@@ -582,6 +619,7 @@ export async function ensureIsolation(
 			// task's git operations would mutate the parent checkout and stack
 			// parallel task branches. Detaching gives each isolation a private,
 			// frozen repo that still borrows the source object DB via alternates.
+			await detachSubmodules(repoRoot, mergedDir);
 			await vcs.detachGitDir(mergedDir, sourceCommonDir);
 			return {
 				mergedDir,

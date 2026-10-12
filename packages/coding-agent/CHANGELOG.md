@@ -120,6 +120,9 @@
 - Fails unstructured task runs that conclude without a final message
 - Background task cards no longer stop updating once the agent ends its turn while the task is still running
 - Transparent images the model receives (small icons, oversized screenshots) keep their transparency instead of turning into a black square, and resized edges no longer pick up a dark fringe
+### Fixed
+
+- Fixed isolated tasks failing or sharing submodule Git state when started from linked worktrees with initialized recursive submodules ([#15457](https://github.com/can1357/oh-my-pi/issues/15457)).
 
 ## [18.10.1] - 2026-10-12
 
