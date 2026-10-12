@@ -16,8 +16,7 @@
 // https://platform.claude.com/docs/en/build-with-claude/prompt-caching
 class "anthropic" {
 	prompt-cache-lookback 20
-	// Billing-verified: claude-opus-4-7, claude-opus-5-5 and claude-fable-5-1 billed
-	// 4,764–4,767 per 1932×1920 frame against 4,761 here (5 requests, 9 frames).
+	// verified: billing matched this formula on Opus 4.7+ and Fable 5.1.
 	image-tokenization {
 		regime "anthropic-patch"
 		verified #true
