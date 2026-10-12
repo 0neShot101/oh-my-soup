@@ -250,7 +250,11 @@ describe("countMessage replayed thinking", () => {
 
 	test.each([
 		// Signatures are model-bound: another model's turn replays its thinking as text.
-		["a turn from another Claude model", reader("anthropic", "claude-opus-5-5"), reader("anthropic", "claude-opus-5")],
+		[
+			"a turn from another Claude model",
+			reader("anthropic", "claude-opus-5-5"),
+			reader("anthropic", "claude-opus-5"),
+		],
 		// OpenRouter filters reasoning history out of the request.
 		[
 			"a reader that filters reasoning history",

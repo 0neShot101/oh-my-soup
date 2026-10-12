@@ -150,7 +150,10 @@ describe("fitOutputTokensToContextWindow", () => {
 		// line of the 12,000 reasoning tokens that turn billed as output, and the
 		// replay bills all of them: counting the visible line, or the signature's
 		// 2,000 byte-tokens, leaves the 32k cap in place and overflows the window.
-		const model: Model = { ...getBundledModel("amazon-bedrock", "global.anthropic.claude-opus-5"), contextWindow: 40_000 };
+		const model: Model = {
+			...getBundledModel("amazon-bedrock", "global.anthropic.claude-opus-5"),
+			contextWindow: 40_000,
+		};
 		const signature = "s".repeat(8_000);
 		const kept: AssistantMessage = {
 			role: "assistant",
