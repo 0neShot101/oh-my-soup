@@ -9,6 +9,7 @@ import type {
 } from "@oh-my-pi/pi-ai";
 import type { StructuredSubagentSchemaMode } from "@oh-my-pi/pi-tui/tools/task";
 import type { CompactionMethod } from "./compaction-methods";
+import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import type { RetryFallbackRole } from "./retry-fallback-chains";
 
 export const CURRENT_SESSION_VERSION = 3;
@@ -50,14 +51,17 @@ export interface SessionHeader {
 	parentSession?: string;
 	/** Prior absolute JSONL locations recorded by successful session moves. */
 	previousSessionFiles?: string[];
-	/** Provider prompt-cache identity inherited by exact-route full forks. */
+	/** Local-only provider prompt-cache identity inherited by exact-route full forks; omitted from shares and HTML. */
 	providerPromptCacheKey?: string;
+	/** Local-only Task candidate, gated by the actual request model's cache policy; omitted from shares and HTML. */
+	taskPromptCacheKey?: string;
 }
 
 export interface NewSessionOptions {
 	parentSession?: string;
 	/** Provider prompt-cache identity to seed on the new session header. */
 	providerPromptCacheKey?: string;
+	taskPromptCacheKey?: string;
 	/** Skip flushing the current session and delete it instead of saving. */
 	drop?: boolean;
 	/** Additional workspace directories to seed on the new session. */
@@ -234,8 +238,8 @@ export interface CredentialPinEntry extends SessionEntryBase {
 /** Session init entry - captures initial context for subagent sessions (debugging/replay). */
 export interface SessionInitEntry extends SessionEntryBase {
 	type: "session_init";
-	/** Full system prompt sent to the model */
-	systemPrompt: string;
+	/** System prompt blocks exactly as sent to the model; files written before blocks were kept store one joined string. */
+	systemPrompt: string[] | string;
 	/** Initial task/user message */
 	task: string;
 	/** Tools available to the agent */
@@ -266,6 +270,8 @@ export interface SessionInitEntry extends SessionEntryBase {
 	compactionThreshold?: { thresholdPercent: number; thresholdTokens: number };
 	/** True when the subagent ran inside an isolation worktree: never revivable, transcript-only after park. Absent on older files. */
 	isolated?: boolean;
+	/** Work-pool yield items of the last model call; revival restores them so the yield tool matches. Absent when none. */
+	workPoolYieldItems?: WorkPoolYieldItem[];
 }
 
 /** Mode change entry - tracks agent mode transitions (e.g. plan mode). */
