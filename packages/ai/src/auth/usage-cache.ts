@@ -223,12 +223,11 @@ export class UsageCache {
 
 	set<T>(key: string, entry: UsageCacheEntry<T>): void {
 		const value = withoutRawPayload(entry.value);
-		const payload = JSON.stringify({
-			value,
-			expiresAt: entry.expiresAt,
-		});
-		const durableExpiresAt = value === null ? entry.expiresAt : Math.max(entry.expiresAt, retentionDeadline(value));
-		this.#store.setCache(`${USAGE_CACHE_PREFIX}${key}`, payload, Math.floor(durableExpiresAt / 1000));
+		const deadline = value === null ? undefined : retentionDeadline(value);
+		// Failure cooldowns must not make a last-good report fresh beyond retention.
+		const expiresAt = deadline === undefined ? entry.expiresAt : Math.min(entry.expiresAt, deadline);
+		const payload = JSON.stringify({ value, expiresAt });
+		this.#store.setCache(`${USAGE_CACHE_PREFIX}${key}`, payload, Math.floor((deadline ?? expiresAt) / 1000));
 	}
 
 	deletePrefix(prefix: string): boolean {

@@ -385,7 +385,9 @@ describe("OpenCode Go usage via the upstream endpoint", () => {
 		let respondWith: "success" | "unavailable" = "success";
 		const failingStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")), {
 			usageProviderResolver: provider =>
-				provider === "opencode-go" ? opencodeGoUsage.opencodeGoUsageProvider : undefined,
+				provider === "opencode-go"
+					? { ...opencodeGoUsage.opencodeGoUsageProvider, failureBackoffMs: 5 * 60_000 }
+					: undefined,
 			usageFetch: (async () =>
 				respondWith === "success"
 					? new Response(
@@ -410,13 +412,13 @@ describe("OpenCode Go usage via the upstream endpoint", () => {
 			expect(fresh?.some(candidate => candidate.provider === "opencode-go")).toBe(true);
 
 			respondWith = "unavailable";
-			for (const elapsed of [10 * 60_000, 12 * HOUR, 23 * HOUR]) {
+			for (const elapsed of [10 * 60_000, 12 * HOUR, 23 * HOUR, 24 * HOUR - 60_000]) {
 				setSystemTime(new Date(nowMs + elapsed));
 				const served = await failingStorage.usage.reports();
 				expect(served?.some(candidate => candidate.provider === "opencode-go")).toBe(true);
 			}
 
-			setSystemTime(new Date(nowMs + 25 * HOUR));
+			setSystemTime(new Date(nowMs + 24 * HOUR + 1_000));
 			const expired = await failingStorage.usage.reports();
 			expect(expired?.some(candidate => candidate.provider === "opencode-go")).toBe(false);
 		} finally {
