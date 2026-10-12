@@ -13,6 +13,7 @@ import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../coll
 import { settings } from "../../config/settings";
 import { createAdvisorMessageCard } from "@oh-my-pi/pi-tui/chat/advisor-message";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
 import { createBackgroundTanDispatchBlock } from "@oh-my-pi/pi-tui/chat/background-tan-message";
 import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
 import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidation-marker";
@@ -761,8 +762,11 @@ export class UiHelpers {
 					const images: ImageContent[] = message.content.filter(
 						(content): content is ImageContent => content.type === "image",
 					);
+					const mediaPath = readMediaPath(message.details);
+					if (mediaPath && images.length === 0)
+						assistantComponent?.setToolResultImages(message.toolCallId, [], mediaPath);
 					if (images.length > 0 && assistantComponent) {
-						assistantComponent.setToolResultImages(message.toolCallId, images);
+						assistantComponent.setToolResultImages(message.toolCallId, images, mediaPath);
 						const hasText = message.content.some(c => c.type === "text");
 						if (!hasText && cfgTerminalShowImages.get(settings)) {
 							if (pendingReadComponent) {

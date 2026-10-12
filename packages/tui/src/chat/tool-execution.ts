@@ -32,7 +32,7 @@ import {
 import { plainText } from "../native/spans";
 import { diagnosticsSection, displayPath, toolHead } from "../tools/native-view";
 import type { FileDiagnosticsResult } from "../tools/lsp";
-import { NativeImageCache } from "../native/blobs";
+import { NativeImageCache, readMediaPath, shownMedia } from "../native/blobs";
 import { Memo } from "../native/memo";
 import { type EditMode, type PerFileDiffPreview, renderStreamingFallback } from "../tools/edit";
 import { taskCardAgentIds } from "../tools/task";
@@ -976,6 +976,7 @@ export class ToolExecutionComponent extends Container {
 	override describe(cx?: DescribeContext): NativeNode {
 		if (this.#toolName === "wait" && this.#isBenignSkip()) return EMPTY_NODE;
 		const dataFirst = cx?.supports("tool") === true;
+		const media = cx?.supports("media") === true;
 		const key = [
 			dataFirst,
 			this.#resultVersion,
@@ -988,10 +989,11 @@ export class ToolExecutionComponent extends Container {
 			this.#showImages,
 			this.#displayInputVersion,
 			this.#toolActivityVisible,
+			media,
 			getThemeEpoch(),
 		];
 		return this.#native.get(key, () =>
-			withHidden(dataFirst ? this.#describeTool() : this.#describeCard(), !this.#toolActivityVisible),
+			withHidden(dataFirst ? this.#describeTool(media) : this.#describeCard(media), !this.#toolActivityVisible),
 		);
 	}
 
@@ -1037,12 +1039,12 @@ export class ToolExecutionComponent extends Container {
 	 * The data-first `tool` node (§7.2): the renderer's head data, status,
 	 * timer, exit and intent as props; its body as borderless children.
 	 */
-	#describeTool(): NativeNode {
-		const view = this.#nativeView();
+	#describeTool(media: boolean): NativeNode {
+		const view = this.#nativeView(media);
 		const status = this.#nativeStatus();
 		const head = view.tool;
 		const late = this.#lateDiagnosticsParts();
-		const body: NativeChild[] = [...(view.body ?? []), ...this.#nativeResultImages()];
+		const body: NativeChild[] = [...(view.body ?? []), ...this.#nativeResultImages(view.body)];
 		if (late.section) body.push(late.section);
 		const inline = view.inline === true;
 		const hasBody = body.length > 0;
@@ -1107,8 +1109,8 @@ export class ToolExecutionComponent extends Container {
 		return spans;
 	}
 
-	#describeCard(): NativeNode {
-		const view = this.#nativeView();
+	#describeCard(media: boolean): NativeNode {
+		const view = this.#nativeView(media);
 		const status = this.#nativeStatus();
 		const late = this.#lateDiagnosticsParts();
 		const fallbackHead = this.#fallbackHead(view);
@@ -1130,7 +1132,7 @@ export class ToolExecutionComponent extends Container {
 		const children: NativeChild[] = [
 			node("row", { gap: "sm", align: "baseline" }, headChildren, "head"),
 			...(view.body ?? []),
-			...this.#nativeResultImages(),
+			...this.#nativeResultImages(view.body),
 			...(late.section ? [late.section] : []),
 		];
 		const role = `omp.tool.${this.#toolName}`;
@@ -1162,9 +1164,10 @@ export class ToolExecutionComponent extends Container {
 	 * the result view (merged renderers) or the call head over both bodies.
 	 * A renderer that throws falls back to the generic card.
 	 */
-	#nativeView(): NativeToolView {
+	#nativeView(media: boolean): NativeToolView {
 		const status = this.#nativeStatus();
 		const options: RenderResultContextOptions = {
+			media,
 			expanded: this.#expanded,
 			isPartial: this.#isPartial,
 			argsComplete: this.#argsComplete,
@@ -1243,12 +1246,17 @@ export class ToolExecutionComponent extends Container {
 		return indicators ? (output ? `${output}\n${indicators}` : indicators) : output;
 	}
 
-	#nativeResultImages(): NativeNode[] {
+	/** Result images under the renderer's body, minus those the body already shows (as an `image` blob or a `media` file). */
+	#nativeResultImages(body: readonly NativeChild[] | undefined): NativeNode[] {
 		if (!this.#result || !this.#showImages) return [];
+		const shown = shownMedia(body);
+		const mediaPath = readMediaPath(this.#result.details);
+		if (mediaPath && shown.paths.has(mediaPath)) return [];
 		const images: NativeNode[] = [];
 		this.#getAllImageBlocks().forEach((image, index) => {
-			if (image.data && image.mimeType)
-				images.push(this.#nativeImages.get(`img${index}`, image.data, image.mimeType));
+			if (!image.data || !image.mimeType) return;
+			const described = this.#nativeImages.get(`img${index}`, image.data, image.mimeType);
+			if (!shown.blobs.has((described.p as { blob?: string } | undefined)?.blob ?? "")) images.push(described);
 		});
 		return images;
 	}

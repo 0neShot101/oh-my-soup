@@ -15,6 +15,7 @@ import {
 	readArgsHaveTarget,
 } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { RecapNotice } from "@oh-my-pi/pi-tui/chat/recap-notice";
+import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
 import { TodoReminderComponent } from "@oh-my-pi/pi-tui/chat/todo-reminder";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
@@ -706,7 +707,7 @@ export class EventController {
 
 	#inlineReadToolImages(
 		toolCallId: string,
-		result: { content: Array<{ type: string; data?: string; mimeType?: string }> },
+		result: { content: Array<{ type: string; data?: string; mimeType?: string }>; details?: unknown },
 	): boolean {
 		const assistantComponent = this.#readToolCallAssistantComponents.get(toolCallId);
 		if (!assistantComponent) return false;
@@ -716,9 +717,11 @@ export class EventController {
 					content.type === "image" && typeof content.data === "string" && typeof content.mimeType === "string",
 			)
 			.map(content => ({ type: "image", data: content.data, mimeType: content.mimeType }));
-		if (images.length === 0) return false;
-		assistantComponent.setToolResultImages(toolCallId, images);
-		return cfgTerminalShowImages.get(settings);
+		const mediaPath = readMediaPath(result.details);
+		if (images.length === 0 && !mediaPath) return false;
+		assistantComponent.setToolResultImages(toolCallId, images, mediaPath);
+		// A media-only result (a model, a PDF) still settles through the read group.
+		return images.length > 0 && cfgTerminalShowImages.get(settings);
 	}
 
 	#insertAfterTranscriptComponent(anchor: Component | undefined, component: Component): boolean {
