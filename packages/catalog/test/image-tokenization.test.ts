@@ -32,10 +32,10 @@ function ruleFor(provider: string, id: string): ImageTokenization {
 
 describe("resolveImageTokenization", () => {
 	it("splits Claude at 4.7: Opus 4.6 and older on the standard tier, 4.7+ and Fable/Mythos high-res", () => {
-		for (const id of ["claude-opus-4-6", "claude-haiku-4-5"]) {
+		for (const id of ["claude-opus-4-6", "claude-haiku-4-5", "claude-3-5-sonnet-20241022", "claude-sonnet-45"]) {
 			expect(resolveImageTokenization({ provider: "anthropic", id })).toEqual(STANDARD);
 		}
-		for (const id of ["claude-sonnet-4-6", "claude-3-5-sonnet-20241022"]) {
+		for (const id of ["claude-sonnet-4-6", "claude-sonnet-46"]) {
 			expect(resolveImageTokenization({ provider: "anthropic", id })).toEqual({ ...STANDARD, verified: true });
 		}
 		for (const id of [

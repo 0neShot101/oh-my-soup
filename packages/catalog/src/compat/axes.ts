@@ -389,6 +389,18 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 		shape: "scalar",
 		values: [true, false],
 	},
+	/**
+	 * How the model line bills a replayed signed thinking block as input:
+	 * `output` bills the reasoning its signature carries, at the size the turn
+	 * billed as output, and not the signature's bytes. Unassigned: estimated
+	 * from the signature's bytes. Read through `./thinking-replay`.
+	 */
+	"thinking-replay-tokens": {
+		key: "thinkingReplayTokens",
+		set: "catalog",
+		shape: "scalar",
+		values: ["output", "signature"],
+	},
 	"delegation-bias": { key: "delegationBias", set: "catalog", shape: "scalar", values: DELEGATION_BIASES },
 	"discovery-api": { key: "discoveryApi", set: "catalog", shape: "scalar" },
 	"edit-prompt-variant": { key: "editPromptVariant", set: "catalog", shape: "scalar", values: ["full", "compact"] },
@@ -417,6 +429,13 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	 * `ANTHROPIC_BASE_URL`/`FOUNDRY_BASE_URL` reroute (proxy, gateway) need not share.
 	 */
 	"official-image-count-budget": { key: "officialImageCountBudget", set: "catalog", shape: "scalar" },
+	/**
+	 * Opt-in: the reader may get a fresh `read` result as snapcompact frames
+	 * (`snapcompact.toolResults`), because it edits as exactly from frames as
+	 * from text. Unassigned: `read` results stay text, since a reader that
+	 * misreads indentation in frames makes inexact edits.
+	 */
+	"snapcompact-image-reads": { key: "snapcompactImageReads", set: "catalog", shape: "scalar", values: [true, false] },
 	"image-model": { key: "imageModel", set: "catalog", shape: "scalar" },
 	/** Longest image edge the host passes to the model: it downscales larger images to fit first. */
 	"image-max-edge": { key: "imageMaxEdge", set: "catalog", shape: "scalar" },
