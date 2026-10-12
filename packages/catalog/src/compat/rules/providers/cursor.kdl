@@ -13,7 +13,11 @@ provider "cursor" {
 		pricing-status "variable"
 	}
 
+	// Cursor re-encodes every image for its Claude and GPT upstreams to fit
+	// 1024×1024 before the model reads it; Gemini and Composer read larger
+	// images as sent.
 	class "anthropic" {
+		image-max-edge 1024
 		family "fable" {
 			requires-cursor-tool-schema-projection #true
 			// Cursor advertised Context window 300k (Max 1M recovered elsewhere).
@@ -56,6 +60,8 @@ provider "cursor" {
 		}
 	}
 	class "openai" {
+		// GPT images are fitted to 1024×1024 like Claude's (see above).
+		image-max-edge 1024
 		revision ">=5.6 <5.7" {
 			// Cursor advertised GPT-5.6 Sol/Terra/Luna Context window 272k;
 			// raises unlabeled -fast variants from the 200k default.
