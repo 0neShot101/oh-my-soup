@@ -1,6 +1,4 @@
 import { describe, expect, it } from "bun:test";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import {
 	detectStyledUnderlineSupport,
@@ -20,6 +18,7 @@ import {
 	isInsideTerminalMultiplexer,
 } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { TERMINAL_MULTIPLEXER_ENV_KEYS } from "@oh-my-pi/pi-tui/terminal-multiplexer";
+import { withFakeTmux } from "./helpers/fake-tmux";
 
 describe("hasTerminalMultiplexerSession", () => {
 	it("recognizes Herdr session identity while ignoring client-only settings", () => {
@@ -161,19 +160,8 @@ describe("detectTerminalId", () => {
 });
 
 describe("tmux client terminal resolution", () => {
-	/** Evaluate `script` in a fresh process inside a fake tmux session whose `display-message -p <format>` prints `reply`. */
 	async function evalWithFakeTmux(format: string, reply: string, script: string): Promise<string> {
-		const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-tmux-client-"));
-		try {
-			const tmux = path.join(binDir, "tmux");
-			await Bun.write(
-				tmux,
-				`#!/bin/sh
-[ "$1" = "display-message" ] && [ "$2" = "-p" ] && [ "$3" = '${format}' ] || exit 64
-printf "%s\\n" "${reply}"
-`,
-			);
-			await fs.chmod(tmux, 0o755);
+		return withFakeTmux(format, reply, async binDir => {
 			const env = subprocessEnv({
 				PI_TEST_RUNTIME: undefined,
 				BUN_ENV: undefined,
@@ -201,9 +189,7 @@ printf "%s\\n" "${reply}"
 			expect(stderr).toBe("");
 			expect(exitCode).toBe(0);
 			return stdout;
-		} finally {
-			await fs.rm(binDir, { force: true, recursive: true });
-		}
+		});
 	}
 
 	it.skipIf(process.platform === "win32")("uses the attached client's terminal profile", async () => {

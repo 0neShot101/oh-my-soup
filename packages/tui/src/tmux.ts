@@ -97,10 +97,12 @@ let cachedClientRendersSixel: boolean | undefined;
  * `SIXEL IMAGE (WxH)` text placeholder for clients without SIXEL, so the pane's
  * DA1 says nothing about the outer terminal. The TUI consults this before
  * trusting that attribute. Queried once per process; `false` outside tmux,
- * with no attached client, when the query fails, and under the test runtime.
+ * with no attached client or when the query fails. Nested tmux sessions
+ * may also report no `sixel` for a capable outer terminal: tmux's DA1 reply
+ * starts with level 1, which its client feature detector does not parse.
  */
 export function tmuxClientRendersSixel(env: NodeJS.ProcessEnv = Bun.env): boolean {
-	if (!tmuxMultiplexer.isInside(env) || isBunTestRuntime()) return false;
+	if (!tmuxMultiplexer.isInside(env)) return false;
 	cachedClientRendersSixel ??=
 		runTmux(["display-message", "-p", "#{client_termfeatures}"], env)?.trim().split(",").includes("sixel") ?? false;
 	return cachedClientRendersSixel;
