@@ -42,7 +42,7 @@
 - Fixed `grep` on a single file showing in Tern as separate boxed snippets with no file row or syntax colors; it now looks the same as a `grep` over a directory
 ### Changed
 
-- Snapcompact archives on the official Anthropic and Codex endpoints may carry up to 12 MB of frames instead of 3 MB, and Anthropic requests keep up to 600 images (100 on 200k-window models) instead of 90
+- On the official Anthropic and Codex endpoints, snapcompact archives may carry up to 12 MB of frames instead of 3 MB, Anthropic requests keep up to 600 images (100 on 200k-window models) instead of 90, and Codex requests up to 2,000 instead of 200; custom base URLs keep the previous limits
 
 ## [18.10.0] - 2026-10-12
 

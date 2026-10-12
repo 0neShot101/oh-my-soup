@@ -3,14 +3,14 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { resolveImageCountBudget, resolveInlineImageByteBudget } from "@oh-my-pi/pi-catalog/compat/request-size";
 import { getBundledModel, getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
-import type { Model } from "@oh-my-pi/pi-catalog/types";
+import type { Api, Model } from "@oh-my-pi/pi-catalog/types";
 
-function rerouted(model: Model<"openai-codex-responses">, baseUrl: string): Model<"openai-codex-responses"> {
-	return buildModel({ ...toModelSpec(model), baseUrl });
+function rerouted<TApi extends Api>(model: Model<TApi>, baseUrl: string): Model<TApi> {
+	return buildModel({ ...toModelSpec(model), baseUrl }) as Model<TApi>;
 }
 
 describe("image-count-budget", () => {
-	test("Anthropic allows 100 images on 200k-window models and 600 on the rest", () => {
+	test("the Anthropic API allows 100 images on 200k-window models and 600 on the rest", () => {
 		const rows = getBundledModels("anthropic").filter(model => model.input.includes("image"));
 		expect(rows.length).toBeGreaterThan(0);
 		for (const model of rows) {
@@ -28,7 +28,22 @@ describe("image-count-budget", () => {
 	});
 
 	test.each([
-		["openai-codex", "gpt-6.1-sol", 2000],
+		["anthropic", "claude-opus-5-5", 600, 90],
+		["anthropic", "claude-opus-4-5", 100, 90],
+		["openai-codex", "gpt-6.1-sol", 2000, 200],
+	] as const)(
+		"%s %s allows %d images on its official endpoint and %d through a custom baseUrl",
+		(provider, id, official, custom) => {
+			const model = getBundledModel(provider, id);
+			const officialUrl = model.baseUrl;
+			expect(resolveImageCountBudget(model)).toBe(official);
+			expect(resolveImageCountBudget(rerouted(model, ""))).toBe(official);
+			expect(resolveImageCountBudget(rerouted(model, `${officialUrl}/`))).toBe(official);
+			expect(resolveImageCountBudget(rerouted(model, "https://llm-proxy.example/v1"))).toBe(custom);
+		},
+	);
+
+	test.each([
 		["openai", "gpt-5.5", 200],
 		["amazon-bedrock", "us.anthropic.claude-opus-5-5", 90],
 		["openrouter", "anthropic/claude-opus-5.5", 90],

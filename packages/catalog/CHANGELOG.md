@@ -9,7 +9,7 @@
 - Added the `honors-claude-code-beta-kill-switch` axis (`compat.honorsClaudeCodeBetaKillSwitch`), on for the `anthropic` provider, so a rule or `models.yml` override decides which providers honor `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` ([#15458](https://github.com/can1357/oh-my-pi/pull/15458) by [@H4vC](https://github.com/H4vC))
 ### Added
 
-- Added the `image-count-budget` rule for how many images one request may carry: Anthropic 600 (100 on 200k-window Claude models), Codex 2,000, other hosts unchanged
+- Added the `image-count-budget` rule for how many images one request may carry (Anthropic 90, Codex 200, other hosts unchanged) and the `official-image-count-budget` override that applies only on the official endpoint: Anthropic 600 (100 on 200k-window Claude models), Codex 2,000
 - Added a 24 MB inline-image byte budget for the Codex backend, which now counts as its official endpoint
 
 ## [18.10.0] - 2026-10-12

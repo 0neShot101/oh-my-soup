@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import type { Context, ImageContent, ModelSpec, TextContent } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
 import { decorateContextImages } from "@oh-my-pi/pi-coding-agent/blob-broker/context-images";
 import {
 	clampProviderContextImageBytes,
@@ -47,6 +49,11 @@ const ANTHROPIC_SPEC: ModelSpec<"anthropic-messages"> = {
 };
 const ANTHROPIC_MODEL = buildModel(ANTHROPIC_SPEC);
 const ANTHROPIC_PROXY_MODEL = buildModel({ ...ANTHROPIC_SPEC, baseUrl: "https://anthropic-proxy.example.com" });
+const CODEX_MODEL = getBundledModel("openai-codex", "gpt-6.1-sol");
+const CODEX_PROXY_MODEL = buildModel({
+	...toModelSpec(CODEX_MODEL),
+	baseUrl: "https://codex-proxy.example/backend-api",
+});
 // A base64 character occupies one byte in Anthropic's JSON request body.
 const HALF_ANTHROPIC_IMAGE_BUDGET = "A".repeat(12_000_000);
 
@@ -101,6 +108,27 @@ describe("provider context image budgets", () => {
 		expect(textData(clamped)).toEqual(Array.from({ length: 31 }, (_, index) => `text-${index}`));
 		expect(clamped).not.toBe(context);
 		expect(imageData(context)).toEqual(Array.from({ length: 31 }, (_, index) => `image-${index}`));
+	});
+
+	it.each([
+		["the official Anthropic API", ANTHROPIC_MODEL, 600],
+		["an Anthropic proxy", ANTHROPIC_PROXY_MODEL, 90],
+		["the official Codex backend", CODEX_MODEL, 2000],
+		["a Codex proxy", CODEX_PROXY_MODEL, 200],
+	] as const)("keeps the newest images up to the count %s allows", (_label, model, budget) => {
+		const context: Context = {
+			systemPrompt: [],
+			tools: [],
+			messages: Array.from({ length: budget + 1 }, (_, index) => ({
+				role: "user",
+				content: [image(`image-${index}`)],
+				timestamp: index,
+			})),
+		};
+
+		const clamped = clampProviderContextImages(context, model);
+
+		expect(imageData(clamped)).toEqual(Array.from({ length: budget }, (_, index) => `image-${index + 1}`));
 	});
 
 	it("keeps image-only tool results meaningful when every image block is dropped", () => {

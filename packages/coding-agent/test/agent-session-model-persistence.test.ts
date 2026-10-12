@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { type Api, type AssistantMessage, Effort, type Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -534,18 +534,8 @@ describe("AgentSession model persistence", () => {
 		});
 	});
 
-	it("restores a snapcompact archive at the resumed model's frame payload budget", async () => {
-		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const settings = Settings.isolated();
-		settings.setModelRole("default", modelValue(defaultModel));
-		const sessionManager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "archived"));
-		sessionManager.appendModelChange(modelValue(defaultModel));
-		const firstKeptEntryId = sessionManager.appendMessage({
-			role: "user",
-			content: "continue",
-			timestamp: Date.now(),
-		});
-		// 4.8 MB of frames: over the 3 MB default, inside half of Anthropic's 24 MB inline-image budget.
+	/** Appends a 4.8 MB three-frame archive: over the 3 MB default, inside half of Anthropic's 24 MB inline-image budget. */
+	function appendFrameArchive(sessionManager: SessionManager, firstKeptEntryId: string): void {
 		const frame = (fill: string) => ({
 			data: fill.repeat(1_600_000),
 			mimeType: "image/png",
@@ -562,6 +552,26 @@ describe("AgentSession model persistence", () => {
 				},
 			},
 		});
+	}
+
+	function archiveImages(messages: readonly AgentMessage[]): number {
+		const summary = messages.find(message => message.role === "compactionSummary");
+		if (summary?.role !== "compactionSummary") throw new Error("Expected a restored compaction summary");
+		return summary.blocks?.filter(block => block.type === "image").length ?? 0;
+	}
+
+	it("restores a snapcompact archive at the resumed model's frame payload budget", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const settings = Settings.isolated();
+		settings.setModelRole("default", modelValue(defaultModel));
+		const sessionManager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "archived"));
+		sessionManager.appendModelChange(modelValue(defaultModel));
+		const firstKeptEntryId = sessionManager.appendMessage({
+			role: "user",
+			content: "continue",
+			timestamp: Date.now(),
+		});
+		appendFrameArchive(sessionManager, firstKeptEntryId);
 		const result = await createAgentSession({
 			cwd: tempDir.path(),
 			agentDir: tempDir.path(),
@@ -580,10 +590,82 @@ describe("AgentSession model persistence", () => {
 		});
 		session = result.session;
 
-		const summary = result.session.messages.find(message => message.role === "compactionSummary");
-		if (summary?.role !== "compactionSummary") throw new Error("Expected a restored compaction summary");
-		expect(summary.blocks?.filter(block => block.type === "image")).toHaveLength(3);
+		expect(archiveImages(result.session.messages)).toBe(3);
 	});
+
+	it.each([
+		["a proxy to the official Anthropic API", "anthropic-proxy", "anthropic", 3],
+		["the official Anthropic API to a proxy", "anthropic", "anthropic-proxy", 1],
+	] as const)(
+		"switching sessions from %s installs the archive at the resumed model's frame payload budget",
+		async (_, fromProvider, toProvider, frames) => {
+			const modelsPath = path.join(tempDir.path(), "models.yml");
+			await Bun.write(
+				modelsPath,
+				`providers:
+  anthropic-proxy:
+    api: anthropic-messages
+    baseUrl: https://anthropic-proxy.example.com
+    apiKey: test-key
+    models:
+      - id: claude-sonnet-4-5
+        input: [text, image]
+        contextWindow: 200000
+        maxTokens: 64000
+`,
+			);
+			const modelRegistry = new ModelRegistry(sharedAuthStorage, modelsPath);
+			const findModel = (provider: string): Model<Api> => {
+				const model = modelRegistry.find(provider, "claude-sonnet-4-5");
+				if (!model) throw new Error(`Expected ${provider}/claude-sonnet-4-5`);
+				return model;
+			};
+			const targetModel = findModel(toProvider);
+			const target = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "target"));
+			target.appendModelChange(modelValue(targetModel));
+			const firstKeptEntryId = target.appendMessage({ role: "user", content: "continue", timestamp: Date.now() });
+			target.appendMessage({
+				role: "assistant",
+				content: [{ type: "text", text: "done" }],
+				api: targetModel.api,
+				provider: targetModel.provider,
+				model: targetModel.id,
+				usage: {
+					input: 1,
+					output: 1,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 2,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: Date.now(),
+			});
+			appendFrameArchive(target, firstKeptEntryId);
+			await target.flush();
+			const targetFile = target.getSessionFile();
+			if (!targetFile) throw new Error("Expected target session file");
+			session = new AgentSession({
+				agent: new Agent({
+					initialState: {
+						model: findModel(fromProvider),
+						systemPrompt: ["Test"],
+						tools: [],
+						messages: [],
+						thinkingLevel: Effort.Medium,
+					},
+				}),
+				sessionManager: SessionManager.create(tempDir.path(), path.join(tempDir.path(), "active")),
+				settings: Settings.isolated(),
+				modelRegistry,
+			});
+
+			await expect(session.switchSession(targetFile)).resolves.toBe(true);
+
+			expect(session.model?.provider).toBe(toProvider);
+			expect(archiveImages(session.messages)).toBe(frames);
+		},
+	);
 
 	it("marks an interrupted first turn aborted when switching sessions", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");

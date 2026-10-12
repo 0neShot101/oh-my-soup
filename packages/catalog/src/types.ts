@@ -1138,10 +1138,10 @@ export interface ResolvedOpenAIResponsesCompat extends ResolvedOpenAISharedCompa
 	/**
 	 * The configured endpoint is first-party OpenAI (`provider === "openai"` on
 	 * an `api.openai.com` or unset baseUrl), or the Codex backend
-	 * (`openai-codex-responses` on the default Codex baseUrl). Gates
-	 * official-only Responses behavior (default-on stateful
-	 * `previous_response_id` chaining and the `text.verbosity` field, which the
-	 * Codex adapter never sends) and host request-size budgets.
+	 * (`openai-codex-responses` on the default Codex baseUrl). Gates platform
+	 * OpenAI's official-only Responses behavior (default-on stateful
+	 * `previous_response_id` chaining and the `text.verbosity` field; the Codex
+	 * adapter is not governed by either gate) and host request-size budgets.
 	 */
 	officialEndpoint: boolean;
 	/** Run Harmony-protocol leak detection/mitigation on streamed output. */

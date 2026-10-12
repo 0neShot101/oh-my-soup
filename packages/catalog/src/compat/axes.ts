@@ -410,6 +410,12 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	 * counts them. Unassigned: unknown host, held to a conservative floor.
 	 */
 	"image-count-budget": { key: "imageCountBudget", set: "catalog", shape: "scalar" },
+	/**
+	 * Replaces `image-count-budget` while `compat.officialEndpoint` holds: a
+	 * limit measured or documented for the host's own endpoint, which a custom
+	 * `baseUrl` (proxy, gateway) need not share.
+	 */
+	"official-image-count-budget": { key: "officialImageCountBudget", set: "catalog", shape: "scalar" },
 	"image-model": { key: "imageModel", set: "catalog", shape: "scalar" },
 	"inline-image-byte-budget": { key: "inlineImageByteBudget", set: "catalog", shape: "scalar" },
 	/**

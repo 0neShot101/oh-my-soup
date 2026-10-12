@@ -6596,8 +6596,8 @@ export class AgentSession implements SettingsScope {
 		return this.#providerBoundary.getImageAttachments();
 	}
 
-	buildDisplaySessionContext(): SessionContext {
-		return this.#withEvalStateContext(this.#providerBoundary.buildDisplaySessionContext());
+	buildDisplaySessionContext(model = this.model): SessionContext {
+		return this.#withEvalStateContext(this.#providerBoundary.buildDisplaySessionContext(model));
 	}
 
 	#withEvalStateContext(context: SessionContext): SessionContext {
@@ -11530,6 +11530,11 @@ export class AgentSession implements SettingsScope {
 						: `Could not restore model ${targetModelStrings[0]}`;
 				}
 			}
+			// The first build used the departing model's frame budget; size the
+			// archive for the model this session is about to adopt.
+			if (targetModel && frameDataBytesBudget(targetModel) !== frameDataBytesBudget(this.model)) {
+				sessionContext = this.buildDisplaySessionContext(targetModel);
+			}
 			const didReloadConversationChange =
 				previousSessionContext !== undefined &&
 				didSessionMessagesChange(previousSessionContext.messages, sessionContext.messages);
@@ -12382,7 +12387,9 @@ export class AgentSession implements SettingsScope {
 				summaryEntry,
 				fromExtension: summaryText ? fromExtension : undefined,
 			});
-			const rawContext = this.sessionManager.buildSessionContext();
+			const rawContext = this.sessionManager.buildSessionContext({
+				maxFrameDataBytes: frameDataBytesBudget(this.model),
+			});
 			return {
 				editorText,
 				editorImages,
