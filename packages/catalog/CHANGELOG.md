@@ -33,7 +33,7 @@
 - Snapcompact sizes archives at the frame prices measured for Antigravity Gemini (a fixed 1,089 tokens), Grok 4.6 to 4.20, and Claude Sonnet's standard tier ([#15449](https://github.com/can1357/oh-my-pi/pull/15449) by [@will-bogusz](https://github.com/will-bogusz))
 ### Added
 
-- Added the `bills-thinking-signatures` axis; Claude lines set it to `#false` on every host, since a replayed thinking block bills its text but not its signature
+- Added the `thinking-replay-tokens` axis; Claude lines set it to `output` on every host, since a replayed signed thinking block bills the turn's full reasoning, not the signature's bytes
 
 ## [18.10.0] - 2026-10-12
 

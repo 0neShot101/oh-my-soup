@@ -13,7 +13,7 @@
 
 ### Fixed
 
-- Fixed the token count charging Claude for replayed thinking signatures, which Claude does not bill; it read Opus 5.5 requests about 55% over their billed input
+- Fixed Claude context counts reading Opus 5.5 requests about 55% over their billed input: a replayed thinking turn now counts at the output size Claude billed for it, not its signature's bytes
 - Fixed screenshots and other non-frame images being counted at the OpenAI rate for every model instead of the reading model's own, about 16% under what Claude bills
 
 ## [18.9.2] - 2026-10-11

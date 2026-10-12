@@ -16,9 +16,10 @@
 // https://platform.claude.com/docs/en/build-with-claude/prompt-caching
 // A replayed signed thinking block bills the full reasoning its signature
 // carries (the server rebuilds it from the signature), at the size its turn
-// billed as output, not the signature's bytes. Lines that strip earlier
-// turns' thinking (Opus before 4.5, Sonnet before 4.6, Haiku before 5.5) bill
-// those turns nothing, so the count stays an upper bound there.
+// billed as output, not the signature's bytes. Thinking a request drops bills
+// nothing (earlier turns on lines that strip it: Opus before 4.5, Sonnet
+// before 4.6, Haiku before 5.5; turns before a compaction or prune on
+// prefix-bound lines), so those turns count high.
 // https://platform.claude.com/docs/en/build-with-claude/context-windows#the-context-window-with-thinking
 class "anthropic" {
 	prompt-cache-lookback 20
