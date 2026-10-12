@@ -249,7 +249,7 @@ describe("BtwHistoryPanel native events", () => {
 		});
 		const click = (act: string): void =>
 			history.handleNativeEvent({ type: "action", key: `actions/${act}`, act, mods: [] });
-		click("copy");
+		click("copy-answer");
 		expect(onCopy).toHaveBeenCalledWith(expect.objectContaining({ id: "a" }));
 		click("follow-up");
 		expect(findNode(history.describe(), node => node.key === "composer")).toBeDefined();
