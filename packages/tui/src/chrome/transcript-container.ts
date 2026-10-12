@@ -851,13 +851,17 @@ export class TranscriptContainer extends Container {
 		if (total <= start) return undefined;
 		const scrollback = renderForScrollback(() => this.#renderEntry(entry, width));
 		if (scrollback.length !== measured.length) return undefined;
+		// A scrollback render can differ from the measured one at the same row
+		// count (a SIXEL image encodes synchronously instead of returning its
+		// reserved rows), so the fingerprint covers the bytes history receives.
+		const committed = scrollback.slice(0, total);
 		return {
-			rows: scrollback.slice(start, total),
+			rows: committed.slice(start),
 			split: {
 				rows: total,
 				width,
-				hash: Bun.hash(measured.slice(0, total).join("\n")),
-				text: contentOf(measured.slice(0, total)),
+				hash: Bun.hash(committed.join("\n")),
+				text: contentOf(committed),
 			},
 		};
 	}
@@ -1059,7 +1063,8 @@ export class TranscriptContainer extends Container {
 	 * Rows of `entry`'s current render at `width` that `split` committed: all
 	 * of them while they render unchanged, else the longest prefix whose
 	 * content continues the committed text exactly. A row the seam falls
-	 * inside, a row the block changed, or one whose decoration reads as
+	 * inside, a row the block changed, a row with no content (a rule or other
+	 * punctuation the block revealed), or one whose decoration reads as
 	 * content stays live: it can repeat committed text but never drop any.
 	 */
 	#splitRowCount(entry: TranscriptEntry, split: RowSplit, width: number): number {
@@ -1076,7 +1081,9 @@ export class TranscriptContainer extends Container {
 			let consumed = 0;
 			while (count < rendered.length && consumed < split.text.length) {
 				const row = contentOf([rendered[count]!]);
-				if (!split.text.startsWith(row, consumed)) break;
+				// An empty-content row matches at any offset, so the walk cannot
+				// tell it apart from a revealed row history never received.
+				if (row.length === 0 || !split.text.startsWith(row, consumed)) break;
 				consumed += row.length;
 				count++;
 			}
