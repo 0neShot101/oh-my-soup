@@ -89,6 +89,8 @@ interface PageElement {
 	readonly dataset: Record<string, string>;
 	readonly style: Record<string, string>;
 	parentElement: PageElement | null;
+	/** The slot a light-DOM child renders in, or null when unslotted or inside a closed shadow root. */
+	readonly assignedSlot?: PageElement | null;
 	shadowRoot: PageShadowRoot | null;
 	getBoundingClientRect(): PageRect;
 	getClientRects(): ArrayLike<PageRect>;
@@ -408,9 +410,10 @@ async function disposeOwned(candidates: Iterable<QueryCandidate>): Promise<void>
 
 /**
  * Lift a text match to its clickable ancestor and measure it, or return null for a match with no box.
- * Geometry comes from `getBoundingClientRect`, clipped by the viewport and every `overflow` ancestor
- * as an `IntersectionObserver` would clip it; `isIntersectingViewport` waits on an observer callback
- * that background tabs never deliver.
+ * Geometry comes from `getBoundingClientRect`, clipped by the viewport and by the `overflow` boxes an
+ * `IntersectionObserver` would clip it with: the flat-tree ancestors (through slots and shadow hosts)
+ * that hold its containing block. `isIntersectingViewport` waits on an observer callback that
+ * background tabs never deliver.
  */
 async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal): Promise<QueryCandidate | null> {
 	let candidate = handle;
@@ -429,19 +432,61 @@ async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal
 		const box = (await untilAborted(signal, () =>
 			candidate.evaluate(el => {
 				const element = el as unknown as PageElement;
+				type Style = Record<
+					| "position"
+					| "display"
+					| "overflowX"
+					| "overflowY"
+					| "transform"
+					| "translate"
+					| "rotate"
+					| "scale"
+					| "perspective"
+					| "filter"
+					| "backdropFilter"
+					| "contain"
+					| "containerType"
+					| "contentVisibility"
+					| "willChange",
+					string
+				>;
 				const page = globalThis as unknown as {
 					innerWidth: number;
 					innerHeight: number;
 					scrollX: number;
 					scrollY: number;
-					getComputedStyle(element: PageElement): { overflowX: string; overflowY: string };
+					getComputedStyle(element: PageElement): Style;
 				};
+				// Flat-tree parent: a slotted node renders inside its slot (which may itself be slotted).
+				const flatParent = (node: PageElement): PageElement | null =>
+					node.assignedSlot ?? node.parentElement ?? node.getRootNode().host ?? null;
+				// Boxes that become the containing block of fixed descendants (and so of absolute ones too).
+				const containsFixed = (style: Style): boolean =>
+					style.transform !== "none" ||
+					style.translate !== "none" ||
+					style.rotate !== "none" ||
+					style.scale !== "none" ||
+					style.perspective !== "none" ||
+					style.filter !== "none" ||
+					(style.backdropFilter ?? "none") !== "none" ||
+					/paint|layout|strict|content/.test(style.contain) ||
+					/size/.test(style.containerType ?? "") ||
+					style.contentVisibility === "auto" ||
+					/transform|perspective|filter/.test(style.willChange);
 				const rect = element.getBoundingClientRect();
 				const view = { left: 0, top: 0, right: page.innerWidth, bottom: page.innerHeight };
-				// <html> and <body> overflow normally applies to the viewport, which is already the starting clip.
-				for (let node = element.parentElement ?? element.getRootNode().host ?? null; node;) {
+				// An overflow box clips only descendants whose containing block lies inside it: an absolute
+				// box escapes static ancestors, a fixed one every ancestor up to one that contains fixed boxes.
+				let position = page.getComputedStyle(element).position;
+				for (let node = flatParent(element); node; node = flatParent(node)) {
+					// <html> and <body> overflow normally applies to the viewport, which is already the starting clip.
 					if (node.tagName === "BODY" || node.tagName === "HTML") break;
 					const style = page.getComputedStyle(node);
+					// A display:contents node (e.g. a default <slot>) has no box to clip or contain anything.
+					if (style.display === "contents") continue;
+					if (position === "fixed" && !containsFixed(style)) continue;
+					if (position === "absolute" && style.position === "static" && !containsFixed(style)) continue;
+					position = style.position;
 					const clip = node.getBoundingClientRect();
 					if (style.overflowX !== "visible") {
 						view.left = Math.max(view.left, clip.left);
@@ -451,7 +496,6 @@ async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal
 						view.top = Math.max(view.top, clip.top);
 						view.bottom = Math.min(view.bottom, clip.bottom);
 					}
-					node = node.parentElement ?? node.getRootNode().host ?? null;
 				}
 				return {
 					x: rect.left + page.scrollX,

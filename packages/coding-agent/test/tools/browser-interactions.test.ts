@@ -902,6 +902,62 @@ return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.e
 			if (browserHandle.browser.connected) await releaseBrowser(browserHandle, { kill: true });
 		}
 	}, 30_000);
+
+	test("clips query matches only by overflow boxes holding their containing block, through slots", async () => {
+		const browserHandle = await acquireBrowser({ kind: "headless", headless: true }, { cwd: process.cwd() });
+		if (!("browser" in browserHandle)) throw new Error("Expected a Puppeteer browser");
+		const page = await browserHandle.browser.newPage();
+		const later = `<button id="later" style="position: absolute; top: 200px; left: 10px">Pick</button>`;
+		const shadow = (id: string, html: string) =>
+			`document.getElementById(${JSON.stringify(id)}).attachShadow({ mode: "open" }).innerHTML = ${JSON.stringify(html)};`;
+		const zeroClip = `<div style="overflow: hidden; height: 0"><slot></slot></div>`;
+		// Puppeteer's text handler yields a shadow host rather than its slotted children, so slotted
+		// fixtures pass CSS-selected handles straight to the resolver.
+		const fixtures: Record<string, { html: string; winner: string; selector?: string }> = {
+			// The static overflow box is not the absolute button's containing block, so it does not clip it.
+			"absolute escaping a static clip": {
+				html: `<div style="overflow: hidden; height: 0"><button id="escaped" style="position: absolute; top: 10px; left: 10px">Pick</button></div>${later}`,
+				winner: "escaped",
+			},
+			"fixed escaping a positioned clip": {
+				html: `<div style="position: relative; overflow: hidden; height: 0"><button id="escaped" style="position: fixed; top: 10px; left: 10px">Pick</button></div>${later}`,
+				winner: "escaped",
+			},
+			"absolute inside its positioned clip": {
+				html: `<div style="position: relative; overflow: hidden; height: 0"><button id="clipped" style="position: absolute; top: 10px; left: 10px">Pick</button></div>${later}`,
+				winner: "later",
+			},
+			"slotted into a clipped shadow wrapper": {
+				html: `<div id="host"><button id="slotted">Pick</button></div>${later}<script>${shadow("host", zeroClip)}</script>`,
+				selector: "#slotted, #later",
+				winner: "later",
+			},
+			"re-projected into a clipped inner shadow wrapper": {
+				html: `<div id="outer"><button id="slotted">Pick</button></div>${later}<script>${shadow("outer", `<div id="inner"><slot></slot></div>`)}
+document.getElementById("outer").shadowRoot.getElementById("inner").attachShadow({ mode: "open" }).innerHTML = ${JSON.stringify(zeroClip)};</script>`,
+				selector: "#slotted, #later",
+				winner: "later",
+			},
+		};
+		try {
+			const winners: Record<string, string | undefined> = {};
+			for (const [name, fixture] of Object.entries(fixtures)) {
+				await page.setContent(`<!doctype html><body style="margin: 0">${fixture.html}</body>`);
+				const handles = await page.$$(fixture.selector ?? "text/Pick");
+				const winner = await resolveActionableQueryHandlerClickTarget(handles);
+				winners[name] = await winner?.evaluate(el => {
+					// Puppeteer's page callback type cannot name DOM globals in this test environment.
+					const element = el as unknown as { id: string };
+					return element.id;
+				});
+				await Promise.all([winner, ...handles].map(handle => handle?.dispose()));
+			}
+			expect(winners).toEqual(Object.fromEntries(Object.entries(fixtures).map(([name, f]) => [name, f.winner])));
+		} finally {
+			await page.close().catch(() => undefined);
+			if (browserHandle.browser.connected) await releaseBrowser(browserHandle, { kill: true });
+		}
+	}, 30_000);
 });
 
 describe.skipIf(!CHROMIUM_AVAILABLE)("browser element handle clicks", () => {
