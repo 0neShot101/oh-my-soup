@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.10.3] - 2026-10-12
+
 ### Breaking Changes
 
 - Removed `estimateImageContentTokens()` from `@oh-my-pi/pi-agent-core/image-tokens`; use `Tokenizer.imageTokens(size, detail)`, which prices with the reading model's catalog image rule ([#15446](https://github.com/can1357/oh-my-pi/pull/15446) by [@will-bogusz](https://github.com/will-bogusz))

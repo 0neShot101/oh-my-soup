@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.10.3] - 2026-10-12
+
 ### Changed
 
 - Updated model picker to offer manual effort selection for unverified models instead of automatic mode

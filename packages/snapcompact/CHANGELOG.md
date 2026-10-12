@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.10.3] - 2026-10-12
+
 ### Breaking Changes
 
 - `providerImageBudget(provider)` and `providerFrameBudget(provider)` became `providerImageBudget(model)` and `providerFrameBudget(model)`, and `maxFramesForDataBudget(shape)` became `maxFramesForDataBudget(shape, budget)` with a required byte budget ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.10.3] - 2026-10-12
+
 ### Breaking Changes
 
 - `isOfficialCodexApiUrl` moved from `@oh-my-pi/pi-ai` to `@oh-my-pi/pi-catalog/wire/codex`, next to `CODEX_BASE_URL`, so the catalog's compat resolver classifies Codex endpoints with the same check ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
