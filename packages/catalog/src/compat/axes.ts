@@ -418,6 +418,8 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	 */
 	"official-image-count-budget": { key: "officialImageCountBudget", set: "catalog", shape: "scalar" },
 	"image-model": { key: "imageModel", set: "catalog", shape: "scalar" },
+	/** Longest image edge the host passes to the model: it downscales larger images to fit first. */
+	"image-max-edge": { key: "imageMaxEdge", set: "catalog", shape: "scalar" },
 	"inline-image-byte-budget": { key: "inlineImageByteBudget", set: "catalog", shape: "scalar" },
 	/**
 	 * Most questions one System One judgment request may carry; the judge
