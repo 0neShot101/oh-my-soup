@@ -59,7 +59,7 @@ function decodeBody(body: RequestInit["body"]): Record<string, unknown> {
 }
 
 /** Fetch mock answering each `/responses` call with the next status and recording the sent `access_programs`. */
-function createFetchMock(statuses: number[], sent: unknown[]): FetchImpl {
+function createFetchMock(statuses: number[], sent: unknown[], errorBody = NOT_ENABLED_BODY): FetchImpl {
 	return (async (input: string | URL, init?: RequestInit) => {
 		const url = typeof input === "string" ? input : input.toString();
 		if (!url.endsWith("/responses")) return new Response("not found", { status: 404 });
@@ -67,7 +67,7 @@ function createFetchMock(statuses: number[], sent: unknown[]): FetchImpl {
 		const status = statuses[sent.length - 1] ?? 200;
 		return status === 200
 			? new Response(COMPLETED_SSE, { status, headers: { "content-type": "text/event-stream" } })
-			: new Response(NOT_ENABLED_BODY, { status, headers: { "content-type": "application/json" } });
+			: new Response(errorBody, { status, headers: { "content-type": "application/json" } });
 	}) as FetchImpl;
 }
 
@@ -101,9 +101,45 @@ describe("openai-codex cyber access programs", () => {
 		expect(sent).toEqual([undefined]);
 	});
 
-	it("surfaces cyber policy errors without replaying or disabling Daybreak", async () => {
-		const accountId = "acct-daybreak-cyber-policy";
-		const policyModel = createCodexModel("gpt-6-sol-cyber-policy", {
+	it.each([
+		["rejection", "The requested Cyber access program is not authorized for this workspace.", true],
+		["unrelated error", "The requested input is not valid for this model.", false],
+	] as const)("uses the message for a type-only invalid_request_error: %s", async (name, message, rejectsProgram) => {
+		const accountId = `acct-daybreak-generic-${name}`;
+		const genericModel = createCodexModel(`gpt-6-sol-generic-${name}`, {
+			preferWebsockets: false,
+			accountAccess: { [accountId]: { cyberPrograms: ["standard", "daybreak_blue"] } },
+		});
+		const sent: unknown[] = [];
+		const options = {
+			apiKey: createCodexTestToken(accountId),
+			fetch: createFetchMock(
+				[403, 200],
+				sent,
+				JSON.stringify({ error: { type: "invalid_request_error", message } }),
+			),
+		};
+
+		const result = await streamOpenAICodexResponses(genericModel, context, options).result();
+		expect(result.stopReason).toBe(rejectsProgram ? "stop" : "error");
+		if (!rejectsProgram) expect(result.errorMessage).toContain(message);
+		expect(sent).toEqual(rejectsProgram ? [{ cyber: "daybreak_blue" }, undefined] : [{ cyber: "daybreak_blue" }]);
+
+		sent.length = 0;
+		expect(
+			(
+				await streamOpenAICodexResponses(genericModel, context, {
+					...options,
+					fetch: createFetchMock([200], sent),
+				}).result()
+			).stopReason,
+		).toBe("stop");
+		expect(sent).toEqual([rejectsProgram ? undefined : { cyber: "daybreak_blue" }]);
+	});
+
+	it.each(["SSE", "HTTP"])("surfaces %s cyber policy errors without replaying or disabling Daybreak", async path => {
+		const accountId = `acct-daybreak-cyber-policy-${path}`;
+		const policyModel = createCodexModel(`gpt-6-sol-cyber-policy-${path}`, {
 			preferWebsockets: false,
 			accountAccess: { [accountId]: { cyberPrograms: ["standard", "daybreak_blue"] } },
 		});
@@ -120,11 +156,21 @@ describe("openai-codex cyber access programs", () => {
 				headers: { "content-type": "text/event-stream" },
 			});
 		}) as FetchImpl;
-		const options = { apiKey: createCodexTestToken(accountId), fetch };
+		const options = {
+			apiKey: createCodexTestToken(accountId),
+			fetch:
+				path === "HTTP"
+					? createFetchMock(
+							[403, 200],
+							sent,
+							JSON.stringify({ error: { type: "invalid_request_error", code: "cyber_policy", message } }),
+						)
+					: fetch,
+		};
 
 		const failed = await streamOpenAICodexResponses(policyModel, context, options).result();
 		expect(failed.stopReason).toBe("error");
-		expect(failed.errorMessage).toContain("cyber_policy");
+		expect(failed.errorMessage).toContain(message);
 		expect(sent).toEqual([{ cyber: "daybreak_blue" }]);
 
 		expect((await streamOpenAICodexResponses(policyModel, context, options).result()).stopReason).toBe("stop");
