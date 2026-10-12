@@ -6,6 +6,8 @@ import {
 	applyNestedPatches,
 	captureBaseline,
 	captureDeltaPatch,
+	captureIsolationBaseline,
+	cleanupIsolation,
 	cleanupTaskBranches,
 	commitToBranch,
 	ensureIsolation,
@@ -856,6 +858,9 @@ describe("detachGitDir", () => {
 		const originalWorktreeDir = process.env.OMP_WORKTREE_DIR;
 		delete process.env.OMP_WORKTREE_DIR;
 		setWorktreesDir(worktreeBase);
+		let lastBranchName = "";
+		let lastModuleCommit = "";
+		let lastLeafCommit = "";
 		try {
 			for (const backend of ["copy", "rcopy"]) {
 				if (backend === "copy") {
@@ -863,27 +868,56 @@ describe("detachGitDir", () => {
 						await fs.cp(source, destination, { recursive: true });
 					});
 				}
-				const { mergedDir: root } = await ensureIsolation(wt, `recursive-submodule-${backend}`);
+				const handle = await ensureIsolation(wt, `recursive-submodule-${backend}`);
+				const root = handle.mergedDir;
 				const module = path.join(root, "packages/module");
 				const nested = path.join(module, "nested");
-				await captureBaseline(root);
+				const baseline = await captureIsolationBaseline(root, wt);
 				for (const dir of [module, nested]) {
 					expect(await runGit(dir, ["status", "--porcelain=v1"])).toBe("");
-					const admin = await runGit(dir, ["rev-parse", "--absolute-git-dir"]);
+					// git prints forward slashes on Windows; resolve to the platform form.
+					const admin = path.resolve(await runGit(dir, ["rev-parse", "--absolute-git-dir"]));
 					expect(admin.startsWith(root + path.sep)).toBe(true);
 				}
 				await fs.writeFile(path.join(nested, "leaf.txt"), "isolated\n");
 				expect(await runGit(nested, ["diff", "--", "leaf.txt"])).toContain("+isolated");
 				expect(await runGit(wt, ["rev-parse", "HEAD"])).toBe(sourceHead);
 				expect(await runGit(wt, ["status", "--porcelain=v1"])).toBe(sourceStatus);
-				expect(await fs.readFile(path.join(wt, "packages/module/nested/leaf.txt"), "utf8")).toBe("leaf\n");
+				// A Windows checkout may apply core.autocrlf to the source tree.
+				const sourceLeaf = await fs.readFile(path.join(wt, "packages/module/nested/leaf.txt"), "utf8");
+				expect(sourceLeaf.replace(/\r\n/g, "\n")).toBe("leaf\n");
+				await runGit(nested, ["commit", "-q", "-am", "isolated leaf"]);
+				lastLeafCommit = await runGit(nested, ["rev-parse", "HEAD"]);
+				await runGit(module, ["add", "nested"]);
+				await runGit(module, ["commit", "-q", "-m", "isolated module"]);
+				lastModuleCommit = await runGit(module, ["rev-parse", "HEAD"]);
+				await runGit(root, ["add", "packages/module"]);
+				const rootPatch = (await captureDeltaPatch(root, baseline)).rootPatch;
+				expect(rootPatch).toContain(lastModuleCommit);
+				if (backend === "rcopy") {
+					const committed = await commitToBranch(root, baseline, "recursive-submodule-pin", "submodule pin");
+					if (!committed?.branchName) throw new Error("Submodule pin was not captured on a task branch");
+					lastBranchName = committed.branchName;
+				}
+				await cleanupIsolation(handle);
+				expect(await runGit(wt, ["rev-parse", "HEAD"])).toBe(sourceHead);
+				expect(await runGit(wt, ["status", "--porcelain=v1"])).toBe(sourceStatus);
+				expect(await runGit(path.join(wt, "packages/module"), ["cat-file", "-t", lastModuleCommit])).toBe("commit");
+				expect(await runGit(path.join(wt, "packages/module/nested"), ["cat-file", "-t", lastLeafCommit])).toBe(
+					"commit",
+				);
 			}
+			const merged = await mergeTaskBranches(wt, [
+				{ branchName: lastBranchName, taskId: "recursive-submodule-pin", baseSha: sourceHead },
+			]);
+			expect(merged.merged).toContain(lastBranchName);
+			expect(await runGit(wt, ["ls-tree", "HEAD", "packages/module"])).toContain(lastModuleCommit);
 		} finally {
 			setWorktreesDir(undefined);
 			if (originalWorktreeDir === undefined) delete process.env.OMP_WORKTREE_DIR;
 			else process.env.OMP_WORKTREE_DIR = originalWorktreeDir;
 		}
-	});
+	}, 30_000);
 
 	it("keeps ensureIsolation from mutating a linked-worktree parent (rcopy backend)", async () => {
 		const { wt, baseSha } = await makeLinkedWorktree();
