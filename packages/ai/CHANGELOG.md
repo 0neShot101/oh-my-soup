@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added support for `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` on the `anthropic` provider: when set, requests omit `thinking.block_binding` and `context_management` and their beta headers, so `ANTHROPIC_BASE_URL` gateways that reject them keep working.
+
 ## [18.9.2] - 2026-10-11
 
 ### Breaking Changes

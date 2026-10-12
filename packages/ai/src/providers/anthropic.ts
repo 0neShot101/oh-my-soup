@@ -9,6 +9,7 @@ import { isAnthropicOAuthToken } from "@oh-my-pi/pi-catalog/utils";
 import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
 import {
 	$env,
+	$flag,
 	isEnoent,
 	logger,
 	parseJsonWithRepair,
@@ -4003,9 +4004,26 @@ const streamAnthropicOnce = (
  * loop. The inner attempt owns Anthropic provider-failure retries.
  */
 export const streamAnthropic: StreamFunction<"anthropic-messages"> = (model, context, options) =>
-	withReplaySafeStreamRetry(model, context, options, streamAnthropicOnce, {
+	withReplaySafeStreamRetry(withoutDisabledExperimentalBetas(model), context, options, streamAnthropicOnce, {
 		retryEmptyCompletion: true,
 	});
+
+/**
+ * Honor Claude Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` kill switch for
+ * the `anthropic` provider. Gateways behind `ANTHROPIC_BASE_URL` (LiteLLM,
+ * corporate proxies, Bedrock/Vertex bridges) often reject beta-only body
+ * fields, so the switch withholds `thinking.block_binding` and
+ * `context_management` together with their `anthropic-beta` tokens. Applied
+ * through compat so every request builder and retry rung sees one decision.
+ */
+function withoutDisabledExperimentalBetas(model: Model<"anthropic-messages">): Model<"anthropic-messages"> {
+	if (model.provider !== "anthropic" || !$flag("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS")) return model;
+	if (model.compat.supportsContextManagement === false && !model.compat.supportsThinkingBindingControls) return model;
+	return {
+		...model,
+		compat: { ...model.compat, supportsContextManagement: false, supportsThinkingBindingControls: false },
+	};
+}
 
 export type AnthropicSystemBlock = {
 	type: "text";
