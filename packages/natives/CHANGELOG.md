@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.10.2] - 2026-10-12
+
 ### Added
 
 - Added in-process `env`, `du`, `chmod`, `fold`, `rmdir`, `od`, `df`, `uptime`, `id`, and `dd` shell builtins matching GNU coreutils 9.x options, output, and exit codes (`chmod` and `id` on Unix only; `dd` is disabled with the destructive set by `PI_DISABLE_UUTILS_DESTRUCTIVE`).
