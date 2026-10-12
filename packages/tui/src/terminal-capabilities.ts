@@ -469,9 +469,10 @@ function getFallbackImageProtocol(
 	if (!isTTY) return null;
 	if (terminalId === "vscode" || terminalId === "alacritty") return null;
 	const term = env.TERM?.toLowerCase() ?? "";
-	if (term.includes("screen") || term.includes("tmux") || term.includes("ghostty")) {
-		return ImageProtocol.Kitty;
-	}
+	// tmux TERM names the pane, not the attached client's graphics support.
+	// Leave unknown clients unselected so the runtime SIXEL probe can run.
+	if (env.TMUX || term.includes("tmux")) return null;
+	if (term.includes("screen") || term.includes("ghostty")) return ImageProtocol.Kitty;
 	return null;
 }
 /**

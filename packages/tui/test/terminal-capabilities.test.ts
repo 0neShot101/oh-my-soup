@@ -493,6 +493,28 @@ console.log(JSON.stringify({ id: TERMINAL_ID, imageProtocol: TERMINAL.imageProto
 	});
 });
 
+describe("tmux image protocol selection", () => {
+	it("probes unknown tmux clients instead of sending Kitty graphics", () => {
+		const env = {
+			TMUX: "/tmp/tmux/default,1,0",
+			TERM_PROGRAM: "tmux",
+			TERM: "tmux-256color",
+			COLORTERM: "truecolor",
+		};
+		const id = detectTerminalId(env);
+		expect(resolveImageProtocol(id, env, true)).toBeNull();
+		expect(resolveImageProtocol("base", { ...env, TERM: "screen-256color" }, true)).toBeNull();
+		expect(resolveImageProtocol("base", { TERM: "tmux-256color" }, true)).toBeNull();
+	});
+
+	it("keeps a known Kitty client inside tmux and the GNU screen fallback", () => {
+		expect(resolveImageProtocol("ghostty", { TMUX: "/tmp/tmux/default,1,0", TERM: "tmux-256color" }, true)).toBe(
+			ImageProtocol.Kitty,
+		);
+		expect(resolveImageProtocol("base", { TERM: "screen-256color" }, true)).toBe(ImageProtocol.Kitty);
+	});
+});
+
 describe("Herdr image protocol mask", () => {
 	it("rejects a leaked Ghostty protocol when Herdr owns the pane grid", () => {
 		const env = {
@@ -529,12 +551,11 @@ describe("Paseo embedder carve-out", () => {
 		expect(isPaseoEmbedder({ PASEO_TERMINAL_ID: "term-1" })).toBe(true);
 	});
 
-	it("drops the multiplexer-restored Kitty fallback inside Paseo", () => {
-		// Regression (getpaseo/paseo#3850): tmux inside a Paseo pane resolves to
-		// base (null static protocol) and TERM=tmux-* would restore Kitty via
-		// the fallback — the embedder carve-out must win over the fallback.
-		expect(resolveImageProtocol("base", { TERM: "tmux-256color", PASEO_TERMINAL_ID: "term-1" }, true)).toBeNull();
-		expect(resolveImageProtocol("base", { TERM: "tmux-256color" }, true)).toBe(ImageProtocol.Kitty);
+	it("drops the GNU screen Kitty fallback inside Paseo", () => {
+		// Paseo's xterm.js pane cannot draw Kitty graphics even when a multiplexer
+		// restores that protocol through its TERM fallback.
+		expect(resolveImageProtocol("base", { TERM: "screen-256color", PASEO_TERMINAL_ID: "term-1" }, true)).toBeNull();
+		expect(resolveImageProtocol("base", { TERM: "screen-256color" }, true)).toBe(ImageProtocol.Kitty);
 	});
 
 	it("drops Kitty graphics when Paseo hosts the terminal", async () => {
