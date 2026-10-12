@@ -2183,6 +2183,21 @@ export function textWithoutThinking(text: string): string {
 const PREVIOUS_SUMMARY_HEAD = "[Summary of earlier history]";
 
 /**
+ * `archive`'s kept source as a reader that excludes reasoning may unfold it.
+ * An archive persisted without {@link Archive.text} keeps only its edges, and
+ * the tail's lines before its first scope label continue a section cut off in
+ * the dropped middle, whose scope is unknown; they are left out.
+ */
+function sourceForReaderWithoutThinking(archive: Archive): string {
+	if (archive.text) return archive.text;
+	const tail = archive.textTail ?? "";
+	const labelled = tail.search(SECTION_START);
+	return [archive.textHead, labelled < 0 ? "" : tail.slice(labelled)]
+		.filter((part): part is string => typeof part === "string" && part.length > 0)
+		.join(NEWLINE_GLYPH);
+}
+
+/**
  * What a reader that excludes assistant reasoning reads for a compaction
  * whose summary is `summary` and archive `archive`: the archive's
  * {@link Archive.withoutThinking} variant when it carries one, the original
@@ -2196,11 +2211,7 @@ const PREVIOUS_SUMMARY_HEAD = "[Summary of earlier history]";
 export function viewWithoutThinking(summary: string, archive: Archive, details?: CompactionDetails): ArchiveView {
 	if (archive.withoutThinking) return archive.withoutThinking;
 	if (!summaryIncludesThinking(summary)) return { summary, archive };
-	const source =
-		archive.text ??
-		[archive.textHead, archive.textTail]
-			.filter((part): part is string => typeof part === "string" && part.length > 0)
-			.join(NEWLINE_GLYPH);
+	const source = sourceForReaderWithoutThinking(archive);
 	const text = textWithoutThinking(source);
 	const headChars = archive.textHead?.length ?? 0;
 	const tailChars = archive.textTail?.length ?? 0;
@@ -2256,11 +2267,14 @@ export async function compact<TMessage = Message>(
 	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(messages);
 	const serialized = serializeConversation(llmMessages, options);
 	const previousArchive = getPreservedArchive(previousPreserveData);
+	const excludeThinking = options?.includeThinking === false;
 	const previousTextRaw =
-		previousArchive?.text ??
-		[previousArchive?.textHead, previousArchive?.textTail]
-			.filter((part): part is string => typeof part === "string" && part.length > 0)
-			.join(NEWLINE_GLYPH);
+		excludeThinking && previousArchive
+			? sourceForReaderWithoutThinking(previousArchive)
+			: (previousArchive?.text ??
+				[previousArchive?.textHead, previousArchive?.textTail]
+					.filter((part): part is string => typeof part === "string" && part.length > 0)
+					.join(NEWLINE_GLYPH));
 	// Legacy archives may carry `¶think:` sections from before includeThinking
 	// existed, and any archive may carry an earlier summary's reasoning legend;
 	// scrub both when this compaction excludes thinking so the re-rendered
@@ -2268,7 +2282,6 @@ export async function compact<TMessage = Message>(
 	// URLs a pre-guard slice cut at any offset; heal those in archive context
 	// before the text is folded into the new source.
 	const previousTextHealed = elideDataUrls(previousTextRaw, "archive");
-	const excludeThinking = options?.includeThinking === false;
 	const previousText =
 		excludeThinking && previousTextHealed.length > 0 ? textWithoutThinking(previousTextHealed) : previousTextHealed;
 	const hasPreviousText = previousText.length > 0;

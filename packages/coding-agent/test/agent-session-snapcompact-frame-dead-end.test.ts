@@ -334,7 +334,7 @@ describe("AgentSession snapcompact frame dead-end rescue", () => {
 		stale.preserveData = {
 			snapcompact: { frames: makeFrames(SEEDED_FRAME_COUNT), text, totalChars: text.length, truncatedChars: 0 },
 		};
-		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session.agent, "prompt").mockResolvedValue();
 		vi.spyOn(session.agent, "continue").mockResolvedValue();
 		vi.spyOn(session, "getContextUsage").mockImplementation(() =>
 			sessionManager.getBranch().filter(isCompaction).length > 1

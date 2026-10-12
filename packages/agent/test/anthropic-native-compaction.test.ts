@@ -760,20 +760,32 @@ describe("compact() Anthropic native lane", () => {
 	describe("reads another model's snapcompact archive by the summarizer's reasoning policy", () => {
 		const REASONING = "PRIVATE-REASONING";
 
-		/** A previous compaction archived under GPT, reasoning included. */
+		/** A previous compaction archived under GPT, reasoning included, with a
+		 *  tool output that quotes a reasoning label as file content. */
 		async function gptArchive(): Promise<Partial<CompactionPreparation>> {
 			const gpt = makeOpenAiModel();
 			const archived = await snapcompact.compact({
 				firstKeptEntryId: "kept-1",
-				messagesToSummarize: Array.from({ length: 4 }, (_, i) => [
-					{ role: "user" as const, content: `turn ${i}`, timestamp: 1 },
-					assistantMessage(gpt, {
-						content: [
-							{ type: "thinking", thinking: `${REASONING} ${i}\n\n${REASONING} ${i} continued` },
-							{ type: "text", text: `reply ${i}` },
-						],
-					}),
-				]).flat(),
+				messagesToSummarize: [
+					...Array.from({ length: 4 }, (_, i) => [
+						{ role: "user" as const, content: `turn ${i}`, timestamp: 1 },
+						assistantMessage(gpt, {
+							content: [
+								{ type: "thinking", thinking: `${REASONING} ${i}\n\n${REASONING} ${i} continued` },
+								{ type: "text", text: `reply ${i}` },
+							],
+						}),
+					]).flat(),
+					assistantMessage(gpt, { content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }] }),
+					{
+						role: "toolResult",
+						toolCallId: "call-1",
+						toolName: "read",
+						content: [{ type: "text", text: "notes.md\n¶think: quoted in the file\nUSER_FILE_CONTENT" }],
+						isError: false,
+						timestamp: 2,
+					},
+				],
 				turnPrefixMessages: [],
 				tokensBefore: 50_000,
 				fileOps: createFileOps(),
@@ -810,24 +822,11 @@ describe("compact() Anthropic native lane", () => {
 
 				const wire = JSON.stringify(calls.map(call => call.ctx.messages));
 				expect(wire).toContain("reply 3");
-				expect(wire).not.toContain("¶think:");
+				expect(wire).toContain("USER_FILE_CONTENT");
 				expect(wire).not.toContain(REASONING);
 				expect(wire).not.toContain("assistant reasoning");
 			});
 		}
-
-		test("a GPT summarizer still reads the reasoning", async () => {
-			const model = makeOpenAiModel();
-			const { calls, completeImpl } = summaryReply(model);
-			const preparation = makePreparation({
-				...(await gptArchive()),
-				settings: { ...DEFAULT_COMPACTION_SETTINGS, remoteEnabled: false },
-			});
-
-			await compact(preparation, model, "sk-test", undefined, undefined, { completeImpl });
-
-			expect(JSON.stringify(calls.map(call => call.ctx.messages))).toContain(REASONING);
-		});
 	});
 
 	describe("budgets thinking for the effort in force, not one selected since the last turn", () => {

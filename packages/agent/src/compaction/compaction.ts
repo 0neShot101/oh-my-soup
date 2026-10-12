@@ -1650,8 +1650,9 @@ export async function compact(
 
 	// An archive keeps the reasoning policy of the model it was rendered for;
 	// Claude refuses inputs that reproduce reasoning (issue #6093), so an
-	// Anthropic-dialect summarizer reads the archive's no-reasoning view, and
-	// summary or archive text with no such view is scrubbed of `¶think:` sections.
+	// Anthropic-dialect summarizer reads the archive's no-reasoning view (scrubbed
+	// while its tool-output spans are still marked), and a summary with no
+	// archive behind it is scrubbed of `¶think:` sections.
 	const withoutThinking = preferredDialect(model.id) === "anthropic";
 	const storedSnapcompactArchive = snapcompact.getPreservedArchive(previousPreserveData);
 	const snapcompactView =
@@ -1663,13 +1664,9 @@ export async function compact(
 		withoutThinking && previousSummary !== undefined
 			? (snapcompactView?.summary ?? snapcompact.textWithoutThinking(previousSummary))
 			: previousSummary;
-	const previousArchiveSourceText = previousSnapcompactArchive
+	const previousSnapcompactArchiveText = previousSnapcompactArchive
 		? snapcompact.archiveSourceText(previousSnapcompactArchive)
 		: undefined;
-	const previousSnapcompactArchiveText =
-		withoutThinking && previousArchiveSourceText
-			? snapcompact.textWithoutThinking(previousArchiveSourceText)
-			: previousArchiveSourceText;
 	const previousSummaryForCompaction = mergePreviousSummaryWithSnapcompactArchive(
 		previousSummaryForReader,
 		previousSnapcompactArchiveText,

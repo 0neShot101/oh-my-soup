@@ -11103,7 +11103,8 @@ export class AgentSession implements SettingsScope {
 	 * to preserve the prompt cache unless `tools: false` is requested. The
 	 * model is reminded not to call tools and any tool calls are discarded. The side request
 	 * does not block on, or interfere with, any in-flight main turn. The
-	 * session's history and persisted state are NOT modified by this call.
+	 * session's history is NOT modified by this call (a snapcompact archive's
+	 * no-reasoning view may be stored on its compaction entry).
 	 *
 	 * Used by `BtwController` (`/btw`) and `OmfgController` (`/omfg`) to share
 	 * the snapshot + stream pipeline. The snapshot includes any in-flight

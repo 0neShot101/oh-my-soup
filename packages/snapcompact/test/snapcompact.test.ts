@@ -1371,6 +1371,40 @@ describe("archive helpers", () => {
 			const stripped = "¶user: ask\n¶ai: answer one\nfiller middle line\n¶ai: answer two";
 			expect(view.archive.truncatedChars).toBe(5 + stripped.length - textHead.length - textTail.length);
 		});
+
+		it("leaves out a tail's opening lines when the archive kept no whole source to scope them", async () => {
+			// Without `text` the tail may open inside a thought whose label sat in
+			// the dropped middle; both the fail-closed view and a re-render skip it.
+			const legacy = {
+				frames: [frame],
+				totalChars: 100,
+				truncatedChars: 0,
+				textHead: "¶user: ask\n¶ai: answer one",
+				textTail: "secret continuation\n¶ai: answer two",
+			};
+			const view = snapcompact.viewWithoutThinking(THINKING_SUMMARY, legacy);
+			const sent = snapcompact
+				.historyBlocks(view.archive)
+				.map(block => (block.type === "text" ? block.text : ""))
+				.join("\n");
+			expect(sent).not.toContain("secret");
+			expect(sent).toContain("answer two");
+
+			const rendered = await snapcompact.compact(
+				{
+					firstKeptEntryId: "kept",
+					messagesToSummarize: [createUserMessage("Continue.")],
+					turnPrefixMessages: [],
+					tokensBefore: 0,
+					previousPreserveData: { [snapcompact.PRESERVE_KEY]: legacy },
+					fileOps: snapcompact.createFileOps(),
+				},
+				{ frameSize: TEST_FRAME_SIZE, includeThinking: false },
+			);
+			const source = snapcompact.getPreservedArchive(rendered.preserveData)?.text ?? "";
+			expect(source).not.toContain("secret");
+			expect(source).toContain("answer two");
+		});
 	});
 
 	it("textWithoutThinking drops reasoning sections and the reasoning scope from either legend wording", () => {

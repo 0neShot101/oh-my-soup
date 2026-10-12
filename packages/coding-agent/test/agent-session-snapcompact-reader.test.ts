@@ -288,4 +288,28 @@ describe("snapcompact archive read by a Claude model", () => {
 		expect(snapcompact.getPreservedArchive(entry.preserveData)?.withoutThinking).toBeUndefined();
 		expectOriginalIntact(entry, original);
 	});
+
+	it("checks only messages appended since the previous model call of a tool loop", async () => {
+		const sessionManager = SessionManager.inMemory();
+		const original = await seedArchive(sessionManager);
+		const { session, mock } = startSession(sessionManager, claude);
+		const summaryChecks = vi.spyOn(snapcompact, "summaryIncludesThinking");
+		const checksAtCall: number[] = [];
+		for (let call = 0; call < 4; call++) {
+			mock.push(() => {
+				checksAtCall.push(summaryChecks.mock.calls.length);
+				return call < 3
+					? { content: [{ type: "toolCall", name: "missing_tool", arguments: {} }] }
+					: { content: ["done"] };
+			});
+		}
+
+		await session.prompt("Continue.");
+
+		expect(checksAtCall).toHaveLength(4);
+		// The swap replaces the agent's message list once, which the next call
+		// checks in full; after that only the appended tool turns are visited.
+		expect(checksAtCall[3]).toBe(checksAtCall[2]);
+		expectVariantSent(sessionManager, original, mock.calls[3]?.context);
+	});
 });

@@ -582,6 +582,11 @@ export class SessionMaintenance {
 	>();
 	/** The original summary message behind each reader copy, restored for readers that keep reasoning. */
 	readonly #originalSummaries = new WeakMap<AgentMessage, AgentMessage>();
+	/** How far each live message list was scanned for summaries to swap, and under which reasoning policy. */
+	readonly #summaryScans = new WeakMap<
+		readonly AgentMessage[],
+		{ excludeThinking: boolean; length: number; first: AgentMessage | undefined }
+	>();
 	readonly #host: SessionMaintenanceHost;
 
 	get #model(): Model | undefined {
@@ -4398,22 +4403,44 @@ export class SessionMaintenance {
 	async renderArchiveForModel(activeMessages?: AgentMessage[]): Promise<void> {
 		const model = this.#model;
 		if (!model) return;
-		const replacements = await this.#summaryReplacements(model, this.#host.agent.state.messages, activeMessages);
-		if (replacements.size === 0) return;
-		// Re-read after the awaits: the agent may have appended messages meanwhile.
-		const agentMessages = this.#host.agent.state.messages;
-		if (agentMessages.some(message => replacements.has(message))) {
-			this.#host.agent.replaceMessages(agentMessages.map(message => replacements.get(message) ?? message));
+		const excludeThinking = !snapcompactIncludesThinking(model);
+		const lists = activeMessages
+			? [this.#host.agent.state.messages, activeMessages]
+			: [this.#host.agent.state.messages];
+		const scanned = lists.map(list => list.length);
+		const replacements = await this.#summaryReplacements(
+			model,
+			...lists.map(list => list.slice(this.#summaryScanStart(list, excludeThinking))),
+		);
+		if (replacements.size > 0) {
+			// Re-read after the awaits: the agent may have appended messages meanwhile.
+			const agentMessages = this.#host.agent.state.messages;
+			if (agentMessages.some(message => replacements.has(message))) {
+				this.#host.agent.replaceMessages(agentMessages.map(message => replacements.get(message) ?? message));
+			}
+			if (activeMessages) {
+				let changed = false;
+				for (let index = 0; index < activeMessages.length; index++) {
+					const replacement = replacements.get(activeMessages[index]!);
+					if (!replacement) continue;
+					activeMessages[index] = replacement;
+					changed = true;
+				}
+				if (changed) invalidateConvertToLlmArrayCache(activeMessages);
+			}
 		}
-		if (!activeMessages) return;
-		let changed = false;
-		for (let index = 0; index < activeMessages.length; index++) {
-			const replacement = replacements.get(activeMessages[index]!);
-			if (!replacement) continue;
-			activeMessages[index] = replacement;
-			changed = true;
-		}
-		if (changed) invalidateConvertToLlmArrayCache(activeMessages);
+		lists.forEach((list, index) => {
+			this.#summaryScans.set(list, { excludeThinking, length: scanned[index]!, first: list[0] });
+		});
+	}
+
+	/** Where a scan of `list` for summaries to swap starts: past the prefix already
+	 *  scanned under the same reasoning policy, unless the list was cleared or refilled. */
+	#summaryScanStart(list: readonly AgentMessage[], excludeThinking: boolean): number {
+		const scan = this.#summaryScans.get(list);
+		return scan?.excludeThinking === excludeThinking && scan.first === list[0] && scan.length <= list.length
+			? scan.length
+			: 0;
 	}
 
 	/**
@@ -4526,9 +4553,10 @@ export class SessionMaintenance {
 			return readableView();
 		}
 		const preserveData = entry.preserveData;
+		const slot = preserveData?.[snapcompact.PRESERVE_KEY];
 		entry.preserveData = {
 			...preserveData,
-			[snapcompact.PRESERVE_KEY]: { ...(preserveData?.[snapcompact.PRESERVE_KEY] as object), withoutThinking: view },
+			[snapcompact.PRESERVE_KEY]: { ...(isRecord(slot) ? slot : {}), withoutThinking: view },
 		};
 		try {
 			await this.#host.sessionManager.rewriteEntries();
