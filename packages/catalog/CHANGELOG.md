@@ -22,6 +22,9 @@
 ### Fixed
 
 - Applied `max-image-dimension` and `max-image-payload-bytes` to Google API models, and declared the 5 MiB per-image limit of Claude on Google Antigravity ([#15444](https://github.com/can1357/oh-my-pi/pull/15444) by [@will-bogusz](https://github.com/will-bogusz))
+### Added
+
+- Added the `image-max-edge` axis and `resolveImageMaxEdge()` for hosts that shrink images before the model reads them; Cursor's Claude and GPT models and its `default` (Auto) route fit 1024×1024 ([#15448](https://github.com/can1357/oh-my-pi/pull/15448) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.10.0] - 2026-10-12
 

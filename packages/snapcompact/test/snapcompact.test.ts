@@ -404,6 +404,35 @@ describe("shape resolution", () => {
 		expect(legacyOnAnthropic.frameTokenEstimate).toBe(69 * 69);
 	});
 
+	it("renders frames no wider than the host's image edge, priced at that size", async () => {
+		// Cursor fits Claude and GPT images into 1024×1024 before the model reads them.
+		const claude = snapcompact.resolveShape({ provider: "cursor", api: "cursor-agent", id: "claude-opus-5-high" });
+		expect(claude).toMatchObject({ cellWidth: 11, frameSize: 1024, frameTokenEstimate: 37 * 37 });
+		const gpt = snapcompact.resolveShape({ provider: "cursor", api: "cursor-agent", id: "gpt-5.4-nano" });
+		expect(gpt).toMatchObject({ cellHeight: 22, frameSize: 1024, frameTokenEstimate: Math.ceil(32 * 32 * 1.2) });
+		expect(
+			snapcompact.resolveShape({ provider: "cursor", api: "cursor-agent", id: "claude-opus-5-high" }, "5x8-bw")
+				.frameSize,
+		).toBe(1024);
+		const [frame] = await snapcompact.renderMany("cursor ".repeat(2000), { shape: claude, maxFrames: 1 });
+		expect(decodePng(Buffer.from(frame.data, "base64")).width).toBe(1024);
+		// Targets naming only the host or only Cursor's wire reach the same backend.
+		expect(snapcompact.resolveShape({ provider: "cursor", id: "claude-opus-5-high" }).frameSize).toBe(1024);
+		const [apiOnly] = await snapcompact.renderMany("cursor ".repeat(2000), {
+			model: { api: "cursor-agent", id: "claude-opus-5-high" },
+			maxFrames: 1,
+		});
+		expect(decodePng(Buffer.from(apiOnly.data, "base64")).width).toBe(1024);
+
+		// Readers whose host passes images through keep their own frame size.
+		expect(
+			snapcompact.resolveShape({ provider: "cursor", api: "cursor-agent", id: "gemini-3.7-flash" }).frameSize,
+		).toBe(2048);
+		expect(
+			snapcompact.resolveShape({ provider: "anthropic", api: "anthropic-messages", id: "claude-opus-5" }),
+		).toMatchObject({ frameSize: 1932, frameTokenEstimate: 69 * 69 });
+	});
+
 	it("prices frames by the reading model's lineage, not the wire API", () => {
 		const codex = snapcompact.resolveShape({ api: "openai-codex-responses", id: "gpt-6-astra" });
 		expect(codex.frameSize).toBe(1568);

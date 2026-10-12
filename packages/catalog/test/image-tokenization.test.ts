@@ -3,6 +3,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
 	type ImageTokenization,
 	imageTokens,
+	resolveImageMaxEdge,
 	resolveImageTokenization,
 } from "@oh-my-pi/pi-catalog/compat/image-tokenization";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -303,5 +304,37 @@ describe("compiled image-tokenization payloads", () => {
 		}
 		expect(checked).toBeGreaterThan(0);
 		expect(offenders).toEqual([]);
+	});
+});
+
+describe("resolveImageMaxEdge", () => {
+	it("reports Cursor's 1024px edge for its Claude and GPT readers and none where images pass through", () => {
+		for (const id of [
+			"claude-opus-5-high",
+			"claude-4.6-sonnet-medium",
+			"claude-fable-5-1-high",
+			"gpt-5.4-nano",
+			"default",
+		]) {
+			const model = getBundledModel("cursor", id);
+			if (!model) throw new Error(`Expected bundled cursor/${id}`);
+			expect(resolveImageMaxEdge(model)).toBe(1024);
+		}
+		// Partial targets naming only the host or only Cursor's wire are shrunk the same way.
+		expect(resolveImageMaxEdge({ provider: "cursor", id: "claude-opus-5-high" })).toBe(1024);
+		expect(resolveImageMaxEdge({ api: "cursor-agent", id: "claude-opus-5-high" })).toBe(1024);
+		expect(resolveImageMaxEdge({ api: "cursor-agent", id: "gpt-5.4-nano" })).toBe(1024);
+		expect(resolveImageMaxEdge({ provider: "cursor", id: "composer-2.5" })).toBeUndefined();
+		expect(resolveImageMaxEdge({ api: "cursor-agent", id: "composer-2.5" })).toBeUndefined();
+		for (const [provider, id] of [
+			["cursor", "gemini-3.7-flash"],
+			["cursor", "composer-2.5"],
+			["anthropic", "claude-opus-5-5"],
+			["openai-codex", "gpt-6.1-sol"],
+		] as const) {
+			const model = getBundledModel(provider, id);
+			if (!model) throw new Error(`Expected bundled ${provider}/${id}`);
+			expect(resolveImageMaxEdge(model)).toBeUndefined();
+		}
 	});
 });
