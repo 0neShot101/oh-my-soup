@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added a KDL opt-in for sibling subagent prompt-cache sharing, enabled for Muse Code's Muse Spark 1.3 and 1.3 Contributor over the Responses API ([#15467](https://github.com/can1357/oh-my-pi/pull/15467) by [@iliaal](https://github.com/iliaal))
+- Added a KDL opt-in for sibling subagent prompt-cache sharing, enabled for Muse Code's Spark 1.3, Wonder 1.0, and Wonder Full 1.0 variants over the Responses API ([#15467](https://github.com/can1357/oh-my-pi/pull/15467) by [@iliaal](https://github.com/iliaal))
 
 ## [18.10.2] - 2026-10-12
 

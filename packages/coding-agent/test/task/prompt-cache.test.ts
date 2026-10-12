@@ -5,6 +5,7 @@ import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { buildTransformedCodexRequestBody } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { buildParams as buildResponsesParams } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -45,6 +46,46 @@ describe("task sibling prompt-cache routing", () => {
 			"parent-provider-lineage:task",
 		],
 		[
+			"Wonder provider-session fallback",
+			"muse-code",
+			"muse-wonder-1.0",
+			undefined,
+			undefined,
+			"parent-provider-lineage:task",
+		],
+		[
+			"Wonder Contributor provider-session fallback",
+			"muse-code",
+			"muse-wonder-1.0-contributor",
+			undefined,
+			undefined,
+			"parent-provider-lineage:task",
+		],
+		[
+			"Wonder Full provider-session fallback",
+			"muse-code",
+			"muse-wonder-full-1.0",
+			undefined,
+			undefined,
+			"parent-provider-lineage:task",
+		],
+		[
+			"Wonder Full Contributor provider-session fallback",
+			"muse-code",
+			"muse-wonder-full-1.0-contributor",
+			undefined,
+			undefined,
+			"parent-provider-lineage:task",
+		],
+		[
+			"Wonder explicit parent key",
+			"muse-code",
+			"muse-wonder-full-1.0-contributor",
+			"explicit-parent",
+			"automatic-parent",
+			"explicit-parent:task",
+		],
+		[
 			"Muse explicit parent key",
 			"muse-code",
 			"muse-spark-1.3-contributor",
@@ -60,10 +101,22 @@ describe("task sibling prompt-cache routing", () => {
 		async (_name, provider, modelId, parentCacheKey, parentTaskKey, expected) => {
 			using directory = TempDir.createSync("@omp-task-cache-");
 			vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network is disabled in this test"));
-			const model = getBundledModel(provider, modelId);
 			const authStorage = await AuthStorage.create(directory.join("auth.db"));
-			authStorage.keys.setRuntime(provider, "test-key");
+			authStorage.keys.setRuntime(
+				provider,
+				provider === "muse-code"
+					? JSON.stringify({ oauthAccessToken: "test-oauth", apiKey: "test-key" })
+					: "test-key",
+			);
+			const modelRegistry = new ModelRegistry(authStorage, directory.join("models.yml"), {
+				fetch: async () =>
+					Response.json({ data: [{ id: modelId, object: "model", created: 0, owned_by: "meta" }] }),
+			});
+			if (provider === "muse-code") await modelRegistry.refreshProvider(provider, "online");
+			const model = modelRegistry.find(provider, modelId);
+			if (!model) throw new Error(`Model missing from offline catalog fixture: ${provider}/${modelId}`);
 			const requests: Array<{
+				modelId: string;
 				sessionId: string | undefined;
 				cacheKey: string | undefined;
 				state: Map<string, ProviderSessionState> | undefined;
@@ -122,6 +175,7 @@ describe("task sibling prompt-cache routing", () => {
 							wireKey = JSON.stringify(request).includes('"prompt_cache_key"');
 						}
 						requests.push({
+							modelId: requestModel.id,
 							sessionId: streamOptions?.sessionId,
 							cacheKey: streamOptions?.promptCacheKey,
 							state: streamOptions?.providerSessionState,
@@ -139,6 +193,7 @@ describe("task sibling prompt-cache routing", () => {
 					cwd: directory.path(),
 					agentDir: directory.path(),
 					authStorage,
+					modelRegistry,
 					model,
 					providerSessionId: "parent-provider-lineage",
 					providerPromptCacheKey: parentCacheKey,
@@ -171,6 +226,7 @@ describe("task sibling prompt-cache routing", () => {
 					expect(result.details?.results[0]?.exitCode, JSON.stringify(result)).toBe(0);
 				}
 				expect(requests).toHaveLength(2);
+				expect(requests.map(request => request.modelId)).toEqual([modelId, modelId]);
 				expect(requests.map(request => request.cacheKey)).toEqual([expected, expected]);
 				expect(requests[0]?.sessionId).not.toBe(requests[1]?.sessionId);
 				expect(requests[0]?.sessionId).not.toBe("parent-provider-lineage");
@@ -277,7 +333,8 @@ describe("task sibling prompt-cache routing", () => {
 		},
 	);
 
-	it("rechecks the actual request model while explicit session and request keys win", async () => {
+	const cacheModels = ["muse-spark-1.3-contributor", "muse-wonder-full-1.0-contributor"];
+	it.each(cacheModels)("rechecks %s while explicit session and request keys win", async modelId => {
 		using directory = TempDir.createSync("@omp-task-cache-model-");
 		vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network is disabled in this test"));
 		const requests: Array<{ provider: string; options: SimpleStreamOptions | undefined; wireKey: unknown }> = [];
@@ -310,16 +367,23 @@ describe("task sibling prompt-cache routing", () => {
 			),
 		);
 		const authStorage = await AuthStorage.create(directory.join("auth.db"));
-		authStorage.keys.setRuntime("muse-code", "test-key");
+		authStorage.keys.setRuntime("muse-code", JSON.stringify({ oauthAccessToken: "test-oauth", apiKey: "test-key" }));
 		authStorage.keys.setRuntime("openai-codex", "test-key");
 		try {
-			const muse = getBundledModel("muse-code", "muse-spark-1.3-contributor");
+			const modelRegistry = new ModelRegistry(authStorage, directory.join("models.yml"), {
+				fetch: async () =>
+					Response.json({ data: [{ id: modelId, object: "model", created: 0, owned_by: "meta" }] }),
+			});
+			await modelRegistry.refreshProvider("muse-code", "online");
+			const muse = modelRegistry.find("muse-code", modelId);
+			if (!muse) throw new Error(`Model missing from offline catalog fixture: muse-code/${modelId}`);
 			const luna = getBundledModel("openai-codex", "gpt-6-luna");
 			const { session } = await sdk.createAgentSession({
 				cwd: directory.path(),
 				agentDir: directory.path(),
 				authStorage,
-				modelPattern: "muse-code/muse-spark-1.3-contributor",
+				modelRegistry,
+				modelPattern: `muse-code/${modelId}`,
 				providerSessionId: "child-conversation",
 				providerPromptCacheKey: "configured-child",
 				taskPromptCacheKey: "parent:task",
