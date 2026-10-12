@@ -208,6 +208,13 @@ export class Tokenizer {
 	 */
 	#estimates = new WeakMap<AgentMessage, MessageEstimate>();
 
+	/**
+	 * Reasoning-only tokens of a natively replayed turn: `usage.output` minus its
+	 * visible blocks when first counted. In-place rewrites of the visible text
+	 * (shake) keep it, so the count falls by what they remove.
+	 */
+	#hiddenReasoning = new WeakMap<AssistantMessage, number>();
+
 	constructor(model?: TokenizerModel | null) {
 		this.#encoding = tokenizerEncodingForModel(model);
 		this.#frameBilling = snapcompact.frameBilling(model ?? undefined);
@@ -396,7 +403,12 @@ export class Tokenizer {
 					this.#replaysReasoningNatively(message)
 				) {
 					const visible = fragments.length === 0 ? extra : extra + this.countTokens(fragments);
-					return Math.max(visible, message.usage.output);
+					let hidden = this.#hiddenReasoning.get(message);
+					if (hidden === undefined) {
+						hidden = Math.max(0, message.usage.output - visible);
+						if (isEstimateCacheable(message)) this.#hiddenReasoning.set(message, hidden);
+					}
+					return visible + hidden;
 				}
 				break;
 			}

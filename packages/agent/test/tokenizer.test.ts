@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "bun:test";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import * as natives from "@oh-my-pi/pi-natives";
+import { invalidateMessageCache } from "../src/compaction/message-cache";
 import { Tokenizer, tokenizerEncodingForModel } from "../src/tokenizer";
 import type { AgentMessage } from "../src/types";
 
@@ -288,6 +289,20 @@ describe("countMessage replayed thinking", () => {
 		};
 		const tokenizer = new Tokenizer(opus);
 		expect(tokenizer.countMessage(turn)).toBe(tokenizer.countMessage(turn, { excludeEncryptedReasoning: true }));
+	});
+
+	test("lowers a native Claude replay by the visible text a shake rewrite removes", () => {
+		// The turn's output was mostly a 2,000-token code block; shake replaces it
+		// in place, the reasoning still replays.
+		const block = `\`\`\`\n${"x".repeat(7_992)}\n\`\`\``;
+		const turn = signedTurn(opus, VISIBLE, SIGNATURE);
+		turn.content = [turn.content[0], { type: "text", text: block }];
+		const tokenizer = new Tokenizer(opus);
+		expect(tokenizer.countMessage(turn)).toBe(OUTPUT_TOKENS);
+		turn.content = [turn.content[0], { type: "text", text: "[shaken]" }];
+		invalidateMessageCache(turn);
+		// 3,000 output − (7 thinking + 2,000 block) visible = 993 reasoning, plus 7 + 2 visible now.
+		expect(tokenizer.countMessage(turn)).toBe(993 + 7 + 2);
 	});
 
 	test("keeps the compaction floor at the visible blocks of a native Claude replay", () => {
