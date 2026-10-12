@@ -408,8 +408,9 @@ async function disposeOwned(candidates: Iterable<QueryCandidate>): Promise<void>
 
 /**
  * Lift a text match to its clickable ancestor and measure it, or return null for a match with no box.
- * Geometry comes from `getBoundingClientRect`: `isIntersectingViewport` waits on an
- * `IntersectionObserver` callback that background tabs never deliver.
+ * Geometry comes from `getBoundingClientRect`, clipped by the viewport and every `overflow` ancestor
+ * as an `IntersectionObserver` would clip it; `isIntersectingViewport` waits on an observer callback
+ * that background tabs never deliver.
  */
 async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal): Promise<QueryCandidate | null> {
 	let candidate = handle;
@@ -427,14 +428,37 @@ async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal
 		} else await proxy.dispose();
 		const box = (await untilAborted(signal, () =>
 			candidate.evaluate(el => {
-				const rect = (el as unknown as PageElement).getBoundingClientRect();
-				const page = globalThis as unknown as PageGlobals & { scrollX: number; scrollY: number };
+				const element = el as unknown as PageElement;
+				const page = globalThis as unknown as {
+					innerWidth: number;
+					innerHeight: number;
+					scrollX: number;
+					scrollY: number;
+					getComputedStyle(element: PageElement): { overflowX: string; overflowY: string };
+				};
+				const rect = element.getBoundingClientRect();
+				const view = { left: 0, top: 0, right: page.innerWidth, bottom: page.innerHeight };
+				// <html> and <body> overflow normally applies to the viewport, which is already the starting clip.
+				for (let node = element.parentElement ?? element.getRootNode().host ?? null; node;) {
+					if (node.tagName === "BODY" || node.tagName === "HTML") break;
+					const style = page.getComputedStyle(node);
+					const clip = node.getBoundingClientRect();
+					if (style.overflowX !== "visible") {
+						view.left = Math.max(view.left, clip.left);
+						view.right = Math.min(view.right, clip.right);
+					}
+					if (style.overflowY !== "visible") {
+						view.top = Math.max(view.top, clip.top);
+						view.bottom = Math.min(view.bottom, clip.bottom);
+					}
+					node = node.parentElement ?? node.getRootNode().host ?? null;
+				}
 				return {
 					x: rect.left + page.scrollX,
 					y: rect.top + page.scrollY,
 					sized: rect.width >= 1 && rect.height >= 1,
 					onScreen:
-						rect.right > 0 && rect.bottom > 0 && rect.left < page.innerWidth && rect.top < page.innerHeight,
+						rect.right > view.left && rect.bottom > view.top && rect.left < view.right && rect.top < view.bottom,
 				};
 			}),
 		)) as { x: number; y: number; sized: boolean; onScreen: boolean };
@@ -467,31 +491,35 @@ async function scrollToClickable(handle: ElementHandle, signal?: AbortSignal): P
 
 /**
  * Resolve text-query matches to the first on-screen candidate in document order. When no match is on
- * screen, each off-screen match is scrolled into view and the first one a click can reach wins.
+ * screen, off-screen matches are scrolled into view in document order and the first one a click can
+ * reach wins.
  */
 export async function resolveActionableQueryHandlerClickTarget(
 	handles: ElementHandle[],
 	signal?: AbortSignal,
 ): Promise<ElementHandle | null> {
-	const onScreen: QueryCandidate[] = [];
-	const offScreen: QueryCandidate[] = [];
+	const candidates: QueryCandidate[] = [];
+	let winner: QueryCandidate | undefined;
 	try {
 		for (const handle of handles) {
 			const candidate = await measureQueryCandidate(handle, signal);
-			if (candidate) (candidate.onScreen ? onScreen : offScreen).push(candidate);
+			if (candidate) candidates.push(candidate);
 		}
-		if (onScreen.length === 0) {
-			for (const candidate of offScreen) {
-				if (await scrollToClickable(candidate.handle, signal)) onScreen.push(candidate);
+		candidates.sort((a, b) => a.y - b.y || a.x - b.x);
+		winner = candidates.find(candidate => candidate.onScreen);
+		if (!winner) {
+			for (const candidate of candidates) {
+				if (await scrollToClickable(candidate.handle, signal)) {
+					winner = candidate;
+					break;
+				}
 			}
 		}
 	} catch (error) {
-		await disposeOwned(new Set([...onScreen, ...offScreen]));
+		await disposeOwned(candidates);
 		throw error;
 	}
-	onScreen.sort((a, b) => a.y - b.y || a.x - b.x);
-	const winner = onScreen[0];
-	await disposeOwned(new Set([...onScreen, ...offScreen].filter(candidate => candidate !== winner)));
+	await disposeOwned(candidates.filter(candidate => candidate !== winner));
 	return winner?.handle ?? null;
 }
 

@@ -6,7 +6,10 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { disposeAllVmContexts } from "@oh-my-pi/pi-coding-agent/eval/js/context-manager";
 import { createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
 import { CmuxTab } from "@oh-my-pi/pi-coding-agent/tools/browser/cmux/cmux-tab";
-import { clickQueryHandlerText } from "@oh-my-pi/pi-coding-agent/tools/browser/interactions";
+import {
+	clickQueryHandlerText,
+	resolveActionableQueryHandlerClickTarget,
+} from "@oh-my-pi/pi-coding-agent/tools/browser/interactions";
 import { acquireBrowser, releaseBrowser } from "@oh-my-pi/pi-coding-agent/tools/browser/registry";
 import { releaseAllTabs } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
 import { TERN_KIT_SOURCE } from "@oh-my-pi/pi-coding-agent/tools/browser/tern/page-kit";
@@ -836,6 +839,69 @@ return { blocked, afterSnippets, final: await tab.evaluate(() => window.clicks) 
 			await prelude.invoke({ action: "close", name: TEXT_TAB_NAME, kill: true }, context).catch(() => undefined);
 		}
 	}, 40_000);
+
+	test("prefers an on-screen text match over one clipped by a scroll container", async () => {
+		const session = makeSession();
+		const prelude = createBrowserPrelude(session);
+		const context = { session, toolCallId: "browser-text-click-clipped" };
+		const tabName = `text-click-clipped-${crypto.randomUUID()}`;
+		const clippedHtml = `<!doctype html>
+<div id="panel" style="width: 100px; overflow: auto; white-space: nowrap"><span style="display: inline-block; width: 400px"></span><button onclick="window.picks.push('clipped')">Pick</button></div>
+<button onclick="window.picks.push('visible')">Pick</button>
+<script>window.picks = [];</script>`;
+		await prelude.invoke(
+			{ action: "open", name: tabName, url: `data:text/html,${encodeURIComponent(clippedHtml)}` },
+			context,
+		);
+		try {
+			const result = await prelude.invoke(
+				{
+					action: "run",
+					name: tabName,
+					code: `await tab.click("text/Pick");
+return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.evaluate(() => document.querySelector("#panel").scrollLeft) };`,
+					timeout: 20,
+				},
+				context,
+			);
+			expect(valueFrom<unknown>(result)).toEqual({ picks: ["visible"], panelScroll: 0 });
+		} finally {
+			await prelude.invoke({ action: "close", name: tabName, kill: true }, context).catch(() => undefined);
+		}
+	}, 30_000);
+
+	test("scrolls off-screen text matches only until the first reachable one", async () => {
+		const browserHandle = await acquireBrowser({ kind: "headless", headless: true }, { cwd: process.cwd() });
+		if (!("browser" in browserHandle)) throw new Error("Expected a Puppeteer browser");
+		const page = await browserHandle.browser.newPage();
+		try {
+			await page.setContent(`<div style="height: 3000px"></div><button id="near">Far</button>
+<div style="height: 3000px"></div><button id="farther">Far</button>`);
+			const handles = await page.$$("text/Far");
+			const winner = await resolveActionableQueryHandlerClickTarget(handles);
+			// The page stays where the last probe scrolled it, so the farther match must not have been probed.
+			const probe = await page.evaluate(() => {
+				// Puppeteer's page callback type cannot name DOM globals in this test environment.
+				const page = globalThis as unknown as {
+					scrollY: number;
+					innerHeight: number;
+					document: { querySelector(selector: string): { offsetTop: number } };
+				};
+				const nearTop = page.document.querySelector("#near").offsetTop;
+				return { scrollY: page.scrollY, nearBottomScroll: nearTop + page.innerHeight };
+			});
+			const winnerId = await winner?.evaluate(el => {
+				const element = el as unknown as { id: string };
+				return element.id;
+			});
+			expect(winnerId).toBe("near");
+			expect(probe.scrollY).toBeLessThan(probe.nearBottomScroll);
+			await Promise.all([winner, ...handles].map(handle => handle?.dispose()));
+		} finally {
+			await page.close().catch(() => undefined);
+			if (browserHandle.browser.connected) await releaseBrowser(browserHandle, { kill: true });
+		}
+	}, 30_000);
 });
 
 describe.skipIf(!CHROMIUM_AVAILABLE)("browser element handle clicks", () => {
