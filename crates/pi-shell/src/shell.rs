@@ -6105,6 +6105,41 @@ mod tests {
 		assert!(output.contains("< a\n---\n> b\n"), "diff output missing changed lines: {output:?}");
 	}
 
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn read_process_substitution_assigns_line() {
+		let (result, output) = time::timeout(
+			Duration::from_secs(5),
+			run_command_capture(
+				"read -r line < <(printf 'ok\\n'); printf '%s\\n' \"$line\"",
+				None,
+				None,
+				CancelToken::default(),
+			),
+		)
+		.await
+		.expect("read must not block its process-substitution producer");
+
+		assert_eq!(result.exit_code, Some(0), "output: {output:?}");
+		assert_eq!(output, "ok\n");
+	}
+
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+	async fn read_process_substitution_delivers_lines_and_reaches_eof() {
+		let command =
+			"while IFS= read -r l; do export X=\"$l\"; done < <(printf 'v\\n'); printf '%s\\n' \"$X\"";
+		let (result, output) = time::timeout(
+			Duration::from_secs(5),
+			run_command_capture(command, None, None, CancelToken::default()),
+		)
+		.await
+		.expect("read must not block its process-substitution producer");
+
+		assert_eq!(result.exit_code, Some(0), "output: {output:?}");
+		assert_eq!(output, "v\n");
+	}
+
 	/// Builtins share the host process, so a descriptor path must reach the
 	/// command's descriptors rather than the host's: the host's fd 0 is its
 	/// terminal (`cat /dev/stdin` once blocked on the TUI's keystrokes for
