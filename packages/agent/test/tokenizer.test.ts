@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test, vi } from "bun:test";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import * as natives from "@oh-my-pi/pi-natives";
-import { invalidateMessageCache } from "../src/compaction/message-cache";
+import type { SessionMessageEntry } from "../src/compaction/entries";
+import { applyShakeRegions, collectShakeRegions, RESCUE_SHAKE_CONFIG } from "../src/compaction/shake";
 import { Tokenizer, tokenizerEncodingForModel } from "../src/tokenizer";
 import type { AgentMessage } from "../src/types";
 
@@ -291,7 +292,22 @@ describe("countMessage replayed thinking", () => {
 		expect(tokenizer.countMessage(turn)).toBe(tokenizer.countMessage(turn, { excludeEncryptedReasoning: true }));
 	});
 
-	test("lowers a native Claude replay by the visible text a shake rewrite removes", () => {
+	test("charges only the visible blocks of a turn that abandoned its tool calls", () => {
+		// The replay strips every signature of a turn whose tool calls ended
+		// without a tool-use stop: the model ended its turn, or max_tokens cut it.
+		const toolCall = { type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.ts" } } as const;
+		const tokenizer = new Tokenizer(opus);
+		for (const stop of ["stop", "length"] as const) {
+			const turn = signedTurn(opus, VISIBLE, SIGNATURE, stop);
+			turn.content = [...turn.content, toolCall];
+			expect(tokenizer.countMessage(turn)).toBe(tokenizer.countMessage(turn, { excludeEncryptedReasoning: true }));
+		}
+		const ranTools = signedTurn(opus, VISIBLE, SIGNATURE, "toolUse");
+		ranTools.content = [...ranTools.content, toolCall];
+		expect(tokenizer.countMessage(ranTools)).toBe(OUTPUT_TOKENS);
+	});
+
+	test("lowers a native Claude replay by the visible text a shake rewrite removes, after a reload too", () => {
 		// The turn's output was mostly a 2,000-token code block; shake replaces it
 		// in place, the reasoning still replays.
 		const block = `\`\`\`\n${"x".repeat(7_992)}\n\`\`\``;
@@ -299,10 +315,19 @@ describe("countMessage replayed thinking", () => {
 		turn.content = [turn.content[0], { type: "text", text: block }];
 		const tokenizer = new Tokenizer(opus);
 		expect(tokenizer.countMessage(turn)).toBe(OUTPUT_TOKENS);
-		turn.content = [turn.content[0], { type: "text", text: "[shaken]" }];
-		invalidateMessageCache(turn);
+		const entry: SessionMessageEntry = { type: "message", id: "a", parentId: null, timestamp: "", message: turn };
+		applyShakeRegions(
+			collectShakeRegions([entry], tokenizer, RESCUE_SHAKE_CONFIG).map(region => ({
+				region,
+				replacement: "[shaken]",
+				replacementTokens: tokenizer.countTokens("[shaken]"),
+			})),
+		);
 		// 3,000 output − (7 thinking + 2,000 block) visible = 993 reasoning, plus 7 + 2 visible now.
 		expect(tokenizer.countMessage(turn)).toBe(993 + 7 + 2);
+		// A reopened session, or a model switch, counts the saved turn in a new tokenizer.
+		const saved = JSON.parse(JSON.stringify(turn)) as AssistantMessage;
+		expect(new Tokenizer(opus).countMessage(saved)).toBe(993 + 7 + 2);
 	});
 
 	test("keeps the compaction floor at the visible blocks of a native Claude replay", () => {

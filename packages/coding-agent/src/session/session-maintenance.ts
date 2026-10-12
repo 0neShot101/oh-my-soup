@@ -995,7 +995,7 @@ export class SessionMaintenance {
 			) {
 				anchoredTokensRemoved += Math.max(0, region.tokens - replacementTokenCount);
 			}
-			return { region, replacement };
+			return { region, replacement, replacementTokens: replacementTokenCount };
 		});
 
 		const entrySnapshots = new Map<SessionEntry, SessionEntry>();

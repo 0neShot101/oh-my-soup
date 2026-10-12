@@ -10,6 +10,7 @@
 ### Breaking Changes
 
 - Removed `estimateImageContentTokens()` from `@oh-my-pi/pi-agent-core/image-tokens`; use `Tokenizer.imageTokens(size, detail)`, which prices with the reading model's catalog image rule ([#15446](https://github.com/can1357/oh-my-pi/pull/15446) by [@will-bogusz](https://github.com/will-bogusz))
+- `applyShakeRegion()` and `applyShakeRegions()` take the replacement's token count (`replacementTokens`); a block rewrite of an assistant turn adds the tokens it removes to `elidedOutputTokens`, so a replayed Claude turn's count stays lowered after a reload ([#15446](https://github.com/can1357/oh-my-pi/pull/15446) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Fixed
 

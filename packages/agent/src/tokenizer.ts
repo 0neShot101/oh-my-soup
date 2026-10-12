@@ -208,13 +208,6 @@ export class Tokenizer {
 	 */
 	#estimates = new WeakMap<AgentMessage, MessageEstimate>();
 
-	/**
-	 * Reasoning-only tokens of a natively replayed turn: `usage.output` minus its
-	 * visible blocks when first counted. In-place rewrites of the visible text
-	 * (shake) keep it, so the count falls by what they remove.
-	 */
-	#hiddenReasoning = new WeakMap<AssistantMessage, number>();
-
 	constructor(model?: TokenizerModel | null) {
 		this.#encoding = tokenizerEncodingForModel(model);
 		this.#frameBilling = snapcompact.frameBilling(model ?? undefined);
@@ -353,11 +346,18 @@ export class Tokenizer {
 			}
 			case "assistant": {
 				const signaturesPriced = this.thinkingReplayTokens === "signature";
-				// Only an aborted or errored turn's final block can hold a partial
-				// signature, which the replay drops; every earlier block completed.
+				// The replay's signature rule (`transformMessages`): an aborted or
+				// errored turn's final block can hold a partial signature, and a turn
+				// whose tool calls ended without a tool-use stop is abandoned, so all
+				// its signatures are stripped. Every other block completed. The latest
+				// assistant turn keeps an abandoned turn's signatures byte-for-byte;
+				// a per-message count cannot see position, so it follows the rule for
+				// older turns, and that latest turn's own usage anchors transcript counts.
 				const content = message.content;
-				const untrustedIndex =
-					message.stopReason === "aborted" || message.stopReason === "error" ? content.length - 1 : -1;
+				const invalidStop = message.stopReason === "aborted" || message.stopReason === "error";
+				const abandonedToolUse =
+					!invalidStop && message.stopReason !== "toolUse" && content.some(block => block.type === "toolCall");
+				const untrustedIndex = invalidStop ? content.length - 1 : -1;
 				let signedReasoning = false;
 				for (let index = 0; index < content.length; index++) {
 					const block = content[index];
@@ -374,7 +374,7 @@ export class Tokenizer {
 						if (block.thinkingSignature && !excludeEncryptedReasoning && signaturesPriced) {
 							fragments.push(block.thinkingSignature);
 						}
-						if (block.thinkingSignature && index !== untrustedIndex) signedReasoning = true;
+						if (block.thinkingSignature && !abandonedToolUse && index !== untrustedIndex) signedReasoning = true;
 					} else if (block.type === "toolCall") {
 						fragments.push(block.name);
 						fragments.push(stringifyJson(block.arguments) ?? "null");
@@ -394,8 +394,8 @@ export class Tokenizer {
 				}
 				// The visible text undercounts a native replay: the provider rebuilds
 				// the full reasoning from its signature, billed at the turn's output
-				// size. The floor keeps the visible count, which later edits of the
-				// turn's text lower while the output size stays fixed.
+				// size less the visible text shake has since elided from it. The
+				// floor keeps the visible count.
 				if (
 					signedReasoning &&
 					!excludeEncryptedReasoning &&
@@ -403,12 +403,7 @@ export class Tokenizer {
 					this.#replaysReasoningNatively(message)
 				) {
 					const visible = fragments.length === 0 ? extra : extra + this.countTokens(fragments);
-					let hidden = this.#hiddenReasoning.get(message);
-					if (hidden === undefined) {
-						hidden = Math.max(0, message.usage.output - visible);
-						if (isEstimateCacheable(message)) this.#hiddenReasoning.set(message, hidden);
-					}
-					return visible + hidden;
+					return Math.max(visible, message.usage.output - (message.elidedOutputTokens ?? 0));
 				}
 				break;
 			}
