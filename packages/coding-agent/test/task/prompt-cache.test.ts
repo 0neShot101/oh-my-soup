@@ -29,6 +29,14 @@ describe("task sibling prompt-cache routing", () => {
 
 	it.each([
 		[
+			"Muse standard provider-session fallback",
+			"muse-code",
+			"muse-spark-1.3",
+			undefined,
+			undefined,
+			"parent-provider-lineage:task",
+		],
+		[
 			"Muse provider-session fallback",
 			"muse-code",
 			"muse-spark-1.3-contributor",

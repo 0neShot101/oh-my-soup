@@ -8,7 +8,7 @@
 
 ### Changed
 
-- Improved prompt-cache reuse between sibling subagents using Muse Code's Muse Spark 1.3 Contributor while keeping their conversations separate ([#15467](https://github.com/can1357/oh-my-pi/pull/15467) by [@iliaal](https://github.com/iliaal), based on [#15285](https://github.com/can1357/oh-my-pi/pull/15285) by [@YueyuHoshizora](https://github.com/YueyuHoshizora))
+- Improved prompt-cache reuse between sibling subagents using Muse Code's Muse Spark 1.3 and 1.3 Contributor while keeping their conversations separate ([#15467](https://github.com/can1357/oh-my-pi/pull/15467) by [@iliaal](https://github.com/iliaal), based on [#15285](https://github.com/can1357/oh-my-pi/pull/15285) by [@YueyuHoshizora](https://github.com/YueyuHoshizora))
 
 ## [18.10.1] - 2026-10-12
 

@@ -28,10 +28,9 @@ provider "muse-code" {
 	// on this endpoint", so apply-patch must stay a function tool here.
 	edit-prompt-variant "compact"
 	on-api "openai-responses" {
-		// Warmed sibling requests hit 10/10 vs 0/10 with per-child keys (2026-10-12).
-		// Exact residue: taxonomy does not distinguish Contributor from standard 1.3;
-		// other SKUs and hosts have not been measured.
-		models "muse-spark-1.3-contributor" {
+		// Contributor warmed sibling requests hit 10/10 vs 0/10 with per-child keys (2026-10-12).
+		// Both 1.3 variants share cache routing; keep other SKUs and hosts outside this opt-in.
+		models "muse-spark-1.3" "muse-spark-1.3-contributor" {
 			task-sibling-prompt-cache #true
 		}
 	}

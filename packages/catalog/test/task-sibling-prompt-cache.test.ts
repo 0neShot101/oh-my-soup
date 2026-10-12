@@ -8,10 +8,10 @@ import type { Model } from "../src/types";
 describe("task sibling prompt-cache opt-in", () => {
 	const muse = getBundledModel("muse-code", "muse-spark-1.3-contributor");
 
-	test("enables only the measured provider, model, and API route", () => {
+	test("enables both Muse 1.3 variants only on the Muse Code Responses route", () => {
 		expect(resolveCatalogPolicy(muse).taskSiblingPromptCache).toBe(true);
+		expect(resolveCatalogPolicy(getBundledModel("muse-code", "muse-spark-1.3")).taskSiblingPromptCache).toBe(true);
 		const unmeasured: Model[] = [
-			{ ...muse, id: "muse-spark-1.3" },
 			{ ...muse, id: "muse-spark-1.2-contributor" },
 			{ ...muse, id: "muse-spark-1.4-contributor" },
 			{ ...muse, provider: "meta", providerType: undefined },
