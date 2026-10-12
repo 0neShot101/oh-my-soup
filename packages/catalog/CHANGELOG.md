@@ -30,6 +30,10 @@
 
 - Google Antigravity, xAI and Cursor requests keep up to 60 images, 20 for Claude on Antigravity and Cursor, up from 5; this counts snapcompact frames and live screenshots together ([#15449](https://github.com/can1357/oh-my-pi/pull/15449) by [@will-bogusz](https://github.com/will-bogusz))
 - Snapcompact sizes archives at the frame prices measured for Antigravity Gemini (a fixed 1,089 tokens), Grok 4.6 to 4.20, and Claude Sonnet 4.6's standard tier ([#15449](https://github.com/can1357/oh-my-pi/pull/15449) by [@will-bogusz](https://github.com/will-bogusz))
+- Snapcompact sizes archives at the frame prices measured for Antigravity Gemini (a fixed 1,089 tokens), Grok 4.6 to 4.20, and Claude Sonnet's standard tier ([#15449](https://github.com/can1357/oh-my-pi/pull/15449) by [@will-bogusz](https://github.com/will-bogusz))
+### Added
+
+- Added the `thinking-replay-tokens` axis; Claude lines set it to `output` on every host, since a replayed signed thinking block bills the turn's full reasoning, not the signature's bytes ([#15446](https://github.com/can1357/oh-my-pi/pull/15446) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.10.0] - 2026-10-12
 

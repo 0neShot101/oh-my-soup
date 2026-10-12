@@ -7,6 +7,15 @@
 ### Added
 
 - Added `AgentLoopConfig.onDetachedToolUpdate`: a tool's `onUpdate` frames that arrive after its run's event stream ended (a returned call whose background job keeps reporting) reach it instead of being dropped; `Agent` forwards them to its subscribers as `tool_execution_update` events
+### Breaking Changes
+
+- Removed `estimateImageContentTokens()` from `@oh-my-pi/pi-agent-core/image-tokens`; use `Tokenizer.imageTokens(size, detail)`, which prices with the reading model's catalog image rule ([#15446](https://github.com/can1357/oh-my-pi/pull/15446) by [@will-bogusz](https://github.com/will-bogusz))
+- `applyShakeRegion()` and `applyShakeRegions()` take the replacement's token count (`replacementTokens`); a block rewrite of an assistant turn adds the tokens it removes to `elidedOutputTokens`, so a replayed Claude turn's count stays lowered after a reload ([#15446](https://github.com/can1357/oh-my-pi/pull/15446) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Fixed
+
+- Fixed Claude context counts reading Opus 5.5 requests about 55% over their billed input: a replayed thinking turn now counts at the output size Claude billed for it, not its signature's bytes ([#15446](https://github.com/can1357/oh-my-pi/pull/15446) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed screenshots and other non-frame images being counted at the OpenAI rate for every model instead of the reading model's own; Claude billed them about 16% higher ([#15446](https://github.com/can1357/oh-my-pi/pull/15446) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.9.2] - 2026-10-11
 
