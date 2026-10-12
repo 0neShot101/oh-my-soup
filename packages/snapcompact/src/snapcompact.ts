@@ -1963,6 +1963,53 @@ export function historyBlocks(archive: Archive, options: HistoryBlockOptions = {
 	return blocks;
 }
 
+/**
+ * Re-applies a smaller frame byte budget to blocks {@link historyBlocks} already built: keeps the newest frames that
+ * fit, priced as {@link historyBlocks} prices them, and replaces each run of dropped frames with one omission notice.
+ * Returns `blocks` itself when every frame fits.
+ */
+export function capFrameDataBytes(
+	blocks: (TextContent | ImageContent)[],
+	maxFrameDataBytes: number,
+): (TextContent | ImageContent)[] {
+	const kept = new Set<number>();
+	let usedBytes = 0;
+	let dropped = false;
+	for (let index = blocks.length - 1; index >= 0; index--) {
+		const block = blocks[index];
+		if (block.type !== "image") continue;
+		if (usedBytes + block.data.length > maxFrameDataBytes) {
+			dropped = true;
+			continue;
+		}
+		usedBytes += block.data.length;
+		kept.add(index);
+	}
+	if (!dropped) return blocks;
+
+	const capped: (TextContent | ImageContent)[] = [];
+	let omittedFrames = 0;
+	let omittedBytes = 0;
+	const flushOmitted = (): void => {
+		if (omittedFrames === 0) return;
+		capped.push({ type: "text", text: omittedFrameNotice(omittedFrames, omittedBytes) });
+		omittedFrames = 0;
+		omittedBytes = 0;
+	};
+	for (let index = 0; index < blocks.length; index++) {
+		const block = blocks[index];
+		if (block.type === "image" && !kept.has(index)) {
+			omittedFrames++;
+			omittedBytes += block.data.length;
+			continue;
+		}
+		flushOmitted();
+		capped.push(block);
+	}
+	flushOmitted();
+	return capped;
+}
+
 // ============================================================================
 // Compaction entry point
 // ============================================================================

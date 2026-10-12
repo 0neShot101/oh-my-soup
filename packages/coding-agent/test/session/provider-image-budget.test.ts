@@ -5,6 +5,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
 import { decorateContextImages } from "@oh-my-pi/pi-coding-agent/blob-broker/context-images";
 import {
+	capArchiveFrameBytes,
 	clampProviderContextImageBytes,
 	clampProviderContextImages,
 } from "@oh-my-pi/pi-coding-agent/session/provider-image-budget";
@@ -483,5 +484,31 @@ describe("provider context image budgets", () => {
 		};
 
 		expect(clampProviderContextImages(context, UMANS_MODEL)).toBe(context);
+	});
+
+	it("caps summary archive frames at the request model's frame budget and leaves other images alone", () => {
+		const frame = (fill: string) => image(fill.repeat(1_600_000));
+		const context: Context = {
+			systemPrompt: [],
+			tools: [],
+			messages: [
+				{
+					role: "user",
+					content: [text("summary"), frame("A"), frame("B"), frame("C"), text("tail")],
+					historyRewriteAt: 1,
+					timestamp: 1,
+				},
+				{ role: "user", content: [text("screenshot"), frame("D")], timestamp: 2 },
+			],
+		};
+
+		const capped = capArchiveFrameBytes(context, ANTHROPIC_PROXY_MODEL);
+
+		expect(imageData(capped).map(data => data[0])).toEqual(["C", "D"]);
+		const [summary] = capped.messages;
+		if (summary?.role !== "user" || !Array.isArray(summary.content)) throw new Error("Expected the summary message");
+		expect(summary.content.map(block => block.type)).toEqual(["text", "text", "image", "text"]);
+		expect(textData(capped)).toContainEqual(expect.stringContaining("2 archived image frames could not be included"));
+		expect(capArchiveFrameBytes(context, ANTHROPIC_MODEL)).toBe(context);
 	});
 });

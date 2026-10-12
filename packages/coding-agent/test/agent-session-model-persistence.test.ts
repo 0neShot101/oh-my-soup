@@ -1,7 +1,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
+import * as zlib from "node:zlib";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { type Api, type AssistantMessage, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { type Api, type AssistantMessage, type Context, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -14,6 +16,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
+import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 describe("AgentSession model persistence", () => {
 	let tempDir: TempDir;
@@ -534,10 +537,37 @@ describe("AgentSession model persistence", () => {
 		});
 	});
 
+	/** A valid 800x500 RGB PNG stored without compression: ~1.6 MB of base64, decodable by the send path's image checks. */
+	function framePng(fill: number): string {
+		const width = 800;
+		const height = 500;
+		const rows = Buffer.alloc(height * (1 + width * 3), fill);
+		for (let row = 0; row < height; row++) rows[row * (1 + width * 3)] = 0;
+		const chunk = (type: string, data: Buffer): Buffer => {
+			const length = Buffer.alloc(4);
+			length.writeUInt32BE(data.length);
+			const typeAndData = Buffer.concat([Buffer.from(type, "ascii"), data]);
+			const crc = Buffer.alloc(4);
+			crc.writeUInt32BE(Bun.hash.crc32(typeAndData));
+			return Buffer.concat([length, typeAndData, crc]);
+		};
+		const header = Buffer.alloc(13);
+		header.writeUInt32BE(width, 0);
+		header.writeUInt32BE(height, 4);
+		header[8] = 8; // bit depth
+		header[9] = 2; // RGB
+		return Buffer.concat([
+			Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+			chunk("IHDR", header),
+			chunk("IDAT", zlib.deflateSync(rows, { level: 0 })),
+			chunk("IEND", Buffer.alloc(0)),
+		]).toString("base64");
+	}
+
 	/** Appends a 4.8 MB three-frame archive: over the 3 MB default, inside half of Anthropic's 24 MB inline-image budget. */
 	function appendFrameArchive(sessionManager: SessionManager, firstKeptEntryId: string): void {
-		const frame = (fill: string) => ({
-			data: fill.repeat(1_600_000),
+		const frame = (fill: number) => ({
+			data: framePng(fill),
 			mimeType: "image/png",
 			cols: 8,
 			rows: 8,
@@ -546,7 +576,7 @@ describe("AgentSession model persistence", () => {
 		sessionManager.appendCompaction("Archived history.", "archive", firstKeptEntryId, 150_000, {
 			preserveData: {
 				[snapcompact.PRESERVE_KEY]: {
-					frames: [frame("a"), frame("b"), frame("c")],
+					frames: [frame(0x40), frame(0x80), frame(0xc0)],
 					totalChars: 24,
 					truncatedChars: 0,
 				},
@@ -560,7 +590,11 @@ describe("AgentSession model persistence", () => {
 		return summary.blocks?.filter(block => block.type === "image").length ?? 0;
 	}
 
-	it("restores a snapcompact archive at the resumed model's frame payload budget", async () => {
+	/** Resumes a session whose archive was compacted on the official Anthropic API. */
+	async function resumeArchivedSession(
+		authStorage: AuthStorage,
+		modelRegistry: ModelRegistry,
+	): Promise<CreateAgentSessionResult> {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
 		const settings = Settings.isolated();
 		settings.setModelRole("default", modelValue(defaultModel));
@@ -572,11 +606,11 @@ describe("AgentSession model persistence", () => {
 			timestamp: Date.now(),
 		});
 		appendFrameArchive(sessionManager, firstKeptEntryId);
-		const result = await createAgentSession({
+		return createAgentSession({
 			cwd: tempDir.path(),
 			agentDir: tempDir.path(),
-			authStorage: sharedAuthStorage,
-			modelRegistry: sharedModelRegistry,
+			authStorage,
+			modelRegistry,
 			sessionManager,
 			settings,
 			disableExtensionDiscovery: true,
@@ -588,10 +622,66 @@ describe("AgentSession model persistence", () => {
 			enableLsp: false,
 			skipPythonPreflight: true,
 		});
+	}
+
+	it("restores a snapcompact archive at the resumed model's frame payload budget", async () => {
+		const result = await resumeArchivedSession(sharedAuthStorage, sharedModelRegistry);
 		session = result.session;
 
 		expect(archiveImages(result.session.messages)).toBe(3);
 	});
+
+	it.each([
+		["setModel", "openrouter", "anthropic/claude-sonnet-4.5", 1],
+		["setModelTemporary", "amazon-bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", 1],
+		["setModel", "anthropic", "claude-sonnet-4-5-20250929", 3],
+	] as const)(
+		"after %s to %s/%s the next request carries only the archive frames that model's budget allows",
+		async (switchPath, provider, id, frames) => {
+			const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
+			try {
+				for (const keyed of ["anthropic", "openrouter", "amazon-bedrock"])
+					authStorage.keys.setRuntime(keyed, "test-key");
+				const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+				const target = getBundledModel(provider, id);
+				if (!target) throw new Error(`Expected ${provider}/${id}`);
+				const result = await resumeArchivedSession(authStorage, modelRegistry);
+				session = result.session;
+				const summary = session.messages.find(message => message.role === "compactionSummary");
+
+				if (switchPath === "setModel") await session.setModel(target);
+				else await session.setModelTemporary(target, undefined, { ephemeral: true });
+				let request: Context | undefined;
+				session.agent.streamFn = (_model, context) => {
+					request = context;
+					const stream = new AssistantMessageEventStream();
+					const message = createAssistantMessage("done");
+					stream.push({ type: "done", reason: "stop", message });
+					stream.end(message);
+					return stream;
+				};
+				await session.agent.continue();
+
+				const requestSummary = request?.messages.find(
+					message => message.role === "user" && message.historyRewriteAt !== undefined,
+				);
+				if (requestSummary?.role !== "user" || !Array.isArray(requestSummary.content)) {
+					throw new Error("Expected the archive summary in the request");
+				}
+				const requestFrames = requestSummary.content.filter(block => block.type === "image");
+				expect(requestFrames).toHaveLength(frames);
+				expect(requestFrames.reduce((bytes, frame) => bytes + frame.data.length, 0)).toBeLessThanOrEqual(
+					snapcompact.frameDataBytesBudget(target),
+				);
+				// The agent keeps the archive it was built with; only the request is capped.
+				expect(session.messages.find(message => message.role === "compactionSummary")).toBe(summary);
+			} finally {
+				await session?.dispose();
+				session = undefined;
+				authStorage.close();
+			}
+		},
+	);
 
 	it.each([
 		["a proxy to the official Anthropic API", "anthropic-proxy", "anthropic", 3],
