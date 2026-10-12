@@ -1064,7 +1064,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		// Context rewrites can remove the text while retaining its details.
 		const contractInContext =
 			this.session.sessionManager
-				?.buildSessionContext?.()
+				?.buildSessionContext?.({ resolveFrameData: undefined })
 				.messages.some(
 					message =>
 						message.role === "toolResult" &&

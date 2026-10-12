@@ -23,6 +23,7 @@ import { isIrcEnabled } from "@oh-my-pi/pi-coding-agent/irc/messaging";
 import { createAgentsHubDeps } from "@oh-my-pi/pi-coding-agent/modes/agents-hub-deps";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { BlobStore } from "@oh-my-pi/pi-coding-agent/session/blob-store";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
@@ -35,6 +36,7 @@ import { hasWaitTool } from "@oh-my-pi/pi-coding-agent/tools/wait";
 import { snapshotJobs } from "@oh-my-pi/pi-coding-agent/async/job-control";
 import { cfgTaskAgentModelOverrides, cfgTaskMaxConcurrency } from "@oh-my-pi/pi-coding-agent/task/settings";
 import { prompt, TempDir } from "@oh-my-pi/pi-utils";
+import * as snapcompact from "@oh-my-pi/snapcompact";
 import taskAsyncContractTemplate from "../../src/prompts/tools/task-async-contract.md" with { type: "text" };
 import { createAssistantMessage, createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
@@ -244,6 +246,99 @@ describe("task spawn routing", () => {
 			await manager.dispose({ timeoutMs: 1000 });
 			await sessionManager.flush();
 			await temp.remove();
+		}
+	});
+
+	it("checks async guidance without reading persisted snapcompact frame blobs", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [taskAgent], projectAgentsDir: null });
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => makeResult(options.id ?? "?"));
+		using temp = TempDir.createSync("task-contract-frames-");
+		const manager = createManager();
+		let sessionManager = SessionManager.create(temp.path(), temp.path());
+		const frameData = Buffer.alloc(300_000, 7).toString("base64");
+		const anchor = sessionManager.appendMessage({ role: "user", content: "Review the parser.", timestamp: 1 });
+		sessionManager.appendMessage(createAssistantMessage("Earlier review."));
+		const compactionId = sessionManager.appendCompaction("Earlier review finished.", undefined, anchor, 1000, {
+			preserveData: {
+				[snapcompact.PRESERVE_KEY]: {
+					frames: [
+						{
+							data: frameData,
+							mimeType: "image/png",
+							cols: 196,
+							rows: 71,
+							chars: 13_916,
+							font: "8x13",
+							variant: "bw",
+						},
+					],
+					totalChars: 13_916,
+					truncatedChars: 0,
+					textHead: "Earlier review",
+					textTail: "Parser details",
+				} satisfies snapcompact.Archive,
+			},
+		});
+		try {
+			await sessionManager.flush();
+			const sessionFile = sessionManager.getSessionFile();
+			if (!sessionFile) throw new Error("Expected a persisted session file");
+			await sessionManager.close();
+			sessionManager = await SessionManager.open(sessionFile, temp.path(), undefined, { suppressBreadcrumb: true });
+			const compacted = sessionManager.getEntry(compactionId);
+			if (compacted?.type !== "compaction") throw new Error("Expected a persisted compaction");
+			expect(snapcompact.getPreservedArchive(compacted.preserveData)?.frames[0]?.data).toStartWith("blob:sha256:");
+			const read = vi.spyOn(BlobStore.prototype, "getSync");
+			const size = vi.spyOn(BlobStore.prototype, "sizeSync");
+			const asyncRead = vi.spyOn(BlobStore.prototype, "get");
+			const summary = sessionManager
+				.buildSessionContext()
+				.messages.find(message => message.role === "compactionSummary");
+			if (summary?.role !== "compactionSummary") throw new Error("Expected a model context summary");
+			expect(summary.blocks?.find(block => block.type === "image")?.data).toBe(frameData);
+			expect(read).toHaveBeenCalledTimes(1);
+			read.mockClear();
+			size.mockClear();
+			const session: ToolSession = { ...createSession({ manager }), sessionManager };
+			const asyncContract = prompt
+				.render(taskAsyncContractTemplate, {
+					ircEnabled: isIrcEnabled(session.settings, session.taskDepth ?? 0),
+					waitTool: hasWaitTool(session),
+				})
+				.trim();
+			const tool = await TaskTool.create(session);
+			const first = await tool.execute("tc-ArchivedFirst", {
+				agent: "task",
+				name: "ArchivedFirst",
+				task: "Review the parser.",
+			} as TaskParams);
+			expect(getFirstText(first)).toContain(asyncContract);
+			sessionManager.appendMessage({
+				...createAssistantMessage(""),
+				stopReason: "toolUse",
+				content: [{ type: "toolCall", id: "tc-ArchivedFirst", name: "task", arguments: {} }],
+			});
+			sessionManager.appendMessage({
+				role: "toolResult",
+				toolCallId: "tc-ArchivedFirst",
+				toolName: "task",
+				content: first.content,
+				details: first.details,
+				isError: false,
+				timestamp: Date.now(),
+			});
+			const second = await tool.execute("tc-ArchivedSecond", {
+				agent: "task",
+				name: "ArchivedSecond",
+				task: "Review the parser.",
+			} as TaskParams);
+			expect(getFirstText(second)).not.toContain(asyncContract);
+			expect(read).not.toHaveBeenCalled();
+			expect(size).not.toHaveBeenCalled();
+			expect(asyncRead).not.toHaveBeenCalled();
+		} finally {
+			await Promise.all(manager.getAllJobs().map(job => job.promise));
+			await sessionManager.close();
 		}
 	});
 
