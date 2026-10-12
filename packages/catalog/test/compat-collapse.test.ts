@@ -1707,6 +1707,42 @@ describe("antigravity discovery collapsing", () => {
 		expect(unreachable).toContain("claude-opus-5-5");
 	});
 
+	it("drops the retired Gemini 3.5 Flash family and its recycled alias from the Antigravity roster", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-retired-flash-"));
+		const flash = { supportsThinking: true, supportsImages: true, maxTokens: 1_048_576, maxOutputTokens: 65_536 };
+		const fetcher = Object.assign(
+			(input: string | URL | Request, _init?: RequestInit) =>
+				Promise.resolve(
+					String(input).includes(":fetchAvailableModels")
+						? Response.json({
+								models: {
+									"gemini-3-flash": { displayName: "Gemini 3 Flash", ...flash },
+									"gemini-3-flash-agent": { displayName: "Gemini 3.5 Flash (High)", ...flash },
+									"gemini-3.5-flash-extra-low": { displayName: "Gemini 3.5 Flash (Low)", ...flash },
+									"gemini-3.5-flash-low": { displayName: "Gemini 3.5 Flash (Medium)", ...flash },
+									"gemini-3.5-flash-lite": { displayName: "Gemini 3.5 Flash Lite", ...flash },
+									"gemini-3.7-flash-low": { displayName: "Gemini 3.7 Flash (Low)", ...flash },
+									"gemini-3.7-flash-medium": { displayName: "Gemini 3.7 Flash (Medium)", ...flash },
+									"gemini-3.7-flash-high": { displayName: "Gemini 3.7 Flash (High)", ...flash },
+								},
+							})
+						: new Response("version: 2.19.1\n"),
+				),
+			{ preconnect: fetch.preconnect },
+		);
+		const options = googleAntigravityModelManagerOptions({
+			resolveAccounts: async () => [{ accessToken: "t" }],
+			fetch: fetcher,
+		});
+		const result = await resolveProviderModels({ ...options, cacheDbPath: path.join(dir, "models.db") }, "online");
+		const ids = result.models.map(m => m.id);
+
+		expect(ids).not.toContain("gemini-3.5-flash");
+		expect(ids).not.toContain("gemini-3-flash");
+		expect(ids).toContain("gemini-3.5-flash-lite");
+		expect(ids).toContain("gemini-3.7-flash");
+	});
+
 	it("skips rejected Antigravity accounts while installing the healthy sibling's roster", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-rejected-roster-"));
 		const fetcher = Object.assign(
