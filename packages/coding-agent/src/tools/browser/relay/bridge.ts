@@ -755,6 +755,16 @@ export class RelayBridge {
 			this.#replyError(conn, msg, "relay extension is not connected");
 			return false;
 		}
+		// Sent raw, createTarget honors `newWindow` and answers with Chrome's id, which no relay command
+		// resolves; close and activate are refused ("Not allowed"). Run them in this tab's browser.
+		if (
+			msg.method === "Target.createTarget" ||
+			msg.method === "Target.closeTarget" ||
+			msg.method === "Target.activateTarget"
+		) {
+			await this.#handleBrowserCommand(conn, msg, tab);
+			return true;
+		}
 		try {
 			const result = await this.#rpc(
 				{
@@ -838,7 +848,8 @@ export class RelayBridge {
 		}
 	}
 
-	async #handleBrowserCommand(conn: CdpConnection, msg: CdpCommand): Promise<void> {
+	/** `near`: the tab whose session sent the command; a tab it creates opens in that tab's browser. */
+	async #handleBrowserCommand(conn: CdpConnection, msg: CdpCommand, near?: TabState): Promise<void> {
 		switch (msg.method) {
 			case "Browser.getVersion": {
 				this.#reply(conn, msg, {
@@ -926,7 +937,7 @@ export class RelayBridge {
 			case "Target.createTarget": {
 				const url =
 					typeof msg.params?.url === "string" && msg.params.url.length > 0 ? msg.params.url : "about:blank";
-				const inst = this.#lastHello();
+				const inst = near ? this.#instances.get(near.instanceId) : this.#lastHello();
 				if (!inst || !inst.socket) {
 					this.#replyError(conn, msg, "relay extension is not connected");
 					return;

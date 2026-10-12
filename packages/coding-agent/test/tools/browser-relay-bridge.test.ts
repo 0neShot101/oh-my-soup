@@ -1325,6 +1325,50 @@ describe("RelayBridge last-hello fallback and offline instance pruning", () => {
 		expect(bridge.listTargets().map(t => t.title)).toEqual(["Chrome tab", "Edge tab"]);
 	});
 });
+
+describe("RelayBridge page-session target lifecycle", () => {
+	it("opens, activates and closes targets a page session asks for in that page's browser", async () => {
+		const bridge = new RelayBridge({});
+		const chrome = new FakeExtSocket();
+		const edge = new FakeExtSocket();
+		connectInstance(bridge, chrome, "chrome", [
+			tab({ tabId: 1, title: "Chrome tab", url: "https://chrome.example/" }),
+		]);
+		// Edge helloes last, so browser-wide creates go there.
+		connectInstance(bridge, edge, "edge", [tab({ tabId: 1, title: "Edge tab", url: "https://edge.example/" })]);
+		const cdp = new FakeCdpSocket();
+		const connId = bridge.cdpConnected(cdp);
+		const sessionId = await attachPage(bridge, chrome, cdp, connId, 1, "chrome");
+		const send = async (method: string, params: Record<string, unknown>) => {
+			const id = ++msgSeq;
+			bridge.cdpMessage(connId, JSON.stringify({ id, sessionId, method, params }));
+			await flush();
+			return id;
+		};
+		const reply = (id: number) => cdp.messages.find(message => message.id === id);
+		const created = `PAGE${instanceCode("chrome")}.9`;
+
+		const createId = await send("Target.createTarget", { url: "https://example.com/", newWindow: true });
+		ack(bridge, chrome, "createTab", { tab: tab({ tabId: 9, title: "Created", url: "https://example.com/" }) });
+		await flush();
+		const activateId = await send("Target.activateTarget", { targetId: created });
+		ack(bridge, chrome, "activateTab");
+		await flush();
+		const closeId = await send("Target.closeTarget", { targetId: created });
+		ack(bridge, chrome, "removeTab");
+		await flush();
+
+		// Sent raw, Chrome would open its own window and answer with an id the relay cannot resolve.
+		expect(chrome.rpcs("send").map(rpc => rpc.method)).toEqual([]);
+		expect(edge.rpcs("createTab")).toHaveLength(0);
+		expect(chrome.rpcs("createTab").map(rpc => rpc.url)).toEqual(["https://example.com/"]);
+		expect(reply(createId)).toMatchObject({ sessionId, result: { targetId: created } });
+		expect(chrome.rpcs("activateTab").map(rpc => rpc.tabId)).toEqual([9]);
+		expect(reply(activateId)?.result).toEqual({});
+		expect(chrome.rpcs("removeTab").map(rpc => rpc.tabId)).toEqual([9]);
+		expect(reply(closeId)?.result).toEqual({ success: true });
+	});
+});
 describe("RelayBridge auto-attach gating", () => {
 	function destroyedIds(cdp: FakeCdpSocket): string[] {
 		const ids: string[] = [];
