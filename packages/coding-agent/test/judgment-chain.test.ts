@@ -29,6 +29,8 @@ const JEV_PREVIEW = {
 	maxTokens: 4096,
 } as Model<Api>;
 
+const JEV_IMAGE_DECLARED = { ...JEV_PREVIEW, id: "jev-image-declared", input: ["text", "image"] } as Model<Api>;
+
 const LOCAL = getBundledModel("local", "qwen2.5-1.5b");
 const ONLINE = getBundledModel("anthropic", "claude-sonnet-4-6");
 if (!LOCAL || !ONLINE) throw new Error("Expected bundled local and online judge models");
@@ -54,6 +56,13 @@ const OPENAI_DECISIONS = {
 	input: ["text", "image"],
 } as Model<Api>;
 
+const OPENAI_DECISIONS_BACKUP = {
+	...OPENAI_DECISIONS,
+	id: "gpt-6-luna-decisions-backup",
+	requestModelId: "gpt-6-luna-decisions-backup",
+	name: "GPT-6 Luna Decisions Backup",
+} as Model<Api>;
+
 const IMAGE_ONE: ImageContent = {
 	type: "image",
 	data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
@@ -71,6 +80,12 @@ const DECISIONS = {
 	api: "openrouter-decisions",
 	provider: "openrouter",
 	baseUrl: "https://decisions.example.test",
+} as Model<Api>;
+const TEXT_ONLY_NATIVE = {
+	...DECISIONS,
+	id: "text-only-openrouter",
+	name: "Text-only native",
+	input: ["text"],
 } as Model<Api>;
 
 const BUCKET_QUESTION: ChoiceQuestion<"trivial" | "moderate" | "hard"> = {
@@ -364,12 +379,18 @@ describe("ChainJudge", () => {
 		expect(local).not.toHaveBeenCalled();
 	});
 
-	it("uses a later vision chat candidate after a text-only native candidate", async () => {
+	it("uses vision chat after filtering image-incompatible native candidates", async () => {
 		const settings = Settings.isolated({
-			modelRoles: { judge: "typesafe/jev-preview" },
-			"retry.fallbackChains": { judge: [`${VISION_CHAT.provider}/${VISION_CHAT.id}`] },
+			modelRoles: { judge: `${TEXT_ONLY_NATIVE.provider}/${TEXT_ONLY_NATIVE.id}` },
+			"retry.fallbackChains": {
+				judge: [
+					`${JEV_IMAGE_DECLARED.provider}/${JEV_IMAGE_DECLARED.id}`,
+					`${VISION_CHAT.provider}/${VISION_CHAT.id}`,
+				],
+			},
 		});
-		const registry = makeRegistry([JEV_PREVIEW, VISION_CHAT], {
+		const registry = makeRegistry([TEXT_ONLY_NATIVE, JEV_IMAGE_DECLARED, VISION_CHAT], {
+			openrouter: "or-key",
 			typesafe: "ts-key",
 			[VISION_CHAT.provider]: "vision-key",
 		});
@@ -392,6 +413,130 @@ describe("ChainJudge", () => {
 		expect(native).not.toHaveBeenCalled();
 		expect(chat).toHaveBeenCalledTimes(1);
 		expect(userContent).toEqual(expect.arrayContaining([IMAGE_ONE]));
+	});
+
+	it("does not prompt after a compatible native image judgment fails", async () => {
+		const settings = Settings.isolated({
+			modelRoles: { judge: `${OPENAI_DECISIONS.provider}/${OPENAI_DECISIONS.id}` },
+			"retry.fallbackChains": { judge: [`${VISION_CHAT.provider}/${VISION_CHAT.id}`] },
+		});
+		const registry = makeRegistry([OPENAI_DECISIONS, VISION_CHAT], {
+			[OPENAI_DECISIONS.provider]: "openai-key",
+			[VISION_CHAT.provider]: "vision-key",
+		});
+		const native = vi
+			.spyOn(globalThis, "fetch")
+			.mockImplementation(asGlobalFetch(async () => new Response("native failed", { status: 400 })));
+		const chat = vi.spyOn(ai, "completeSimple");
+
+		await expect(
+			new ChainJudge({ settings, registry, purpose: "test" }).judge({
+				state: "look at this",
+				questions: { visible: { type: "noul", instructions: "Is an object visible?" } },
+				images: [IMAGE_ONE],
+			}),
+		).rejects.toThrow("400");
+
+		expect(native).toHaveBeenCalledTimes(1);
+		expect(chat).not.toHaveBeenCalled();
+	});
+
+	it("falls from one image native to another without prompting", async () => {
+		const settings = Settings.isolated({
+			modelRoles: { judge: `${OPENAI_DECISIONS.provider}/${OPENAI_DECISIONS.id}` },
+			"retry.fallbackChains": {
+				judge: [
+					`${OPENAI_DECISIONS_BACKUP.provider}/${OPENAI_DECISIONS_BACKUP.id}`,
+					`${VISION_CHAT.provider}/${VISION_CHAT.id}`,
+				],
+			},
+		});
+		const registry = makeRegistry([OPENAI_DECISIONS, OPENAI_DECISIONS_BACKUP, VISION_CHAT], {
+			[OPENAI_DECISIONS.provider]: "openai-key",
+			[VISION_CHAT.provider]: "vision-key",
+		});
+		const requestedModels: (string | undefined)[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(
+			asGlobalFetch(async (_url, init) => {
+				const body = JSON.parse(String(init?.body)) as { model?: string };
+				requestedModels.push(body.model);
+				if (requestedModels.length === 1) return new Response("native failed", { status: 400 });
+				return Response.json({
+					model: "gpt-6-luna-decisions-backup",
+					answers: [{ type: "predicate", name: "visible", probability: 0.75 }],
+					usage: { input_tokens: 8, output_tokens: 0 },
+				});
+			}),
+		);
+		const chat = vi.spyOn(ai, "completeSimple");
+
+		const result = await new ChainJudge({ settings, registry, purpose: "test" }).judge({
+			state: "look at this",
+			questions: { visible: { type: "noul", instructions: "Is an object visible?" } },
+			images: [IMAGE_ONE],
+		});
+
+		expect(result.answers.visible.noul).toBe(0.75);
+		expect(requestedModels).toEqual(["gpt-6-luna", "gpt-6-luna-decisions-backup"]);
+		expect(chat).not.toHaveBeenCalled();
+	});
+
+	it("uses a capable session model when image filtering removes every native candidate", async () => {
+		const settings = Settings.isolated({
+			modelRoles: { judge: "typesafe/jev-preview" },
+			"retry.fallbackChains": { judge: [`${TEXT_ONLY_NATIVE.provider}/${TEXT_ONLY_NATIVE.id}`] },
+		});
+		const registry = makeRegistry([JEV_PREVIEW, TEXT_ONLY_NATIVE], {
+			typesafe: "ts-key",
+			openrouter: "or-key",
+			[VISION_CHAT.provider]: "vision-key",
+		});
+		const native = vi.spyOn(globalThis, "fetch").mockImplementation(asGlobalFetch(async () => Response.json({})));
+		const chat = vi.spyOn(ai, "completeSimple").mockImplementation(async (model, _context, options) => {
+			const response = reply(model, "visible: yes");
+			options?.onAttempt?.(response);
+			return response;
+		});
+
+		const result = await new ChainJudge({
+			settings,
+			registry,
+			purpose: "test",
+			sessionModel: VISION_CHAT,
+		}).judge({
+			state: "look at this",
+			questions: { visible: { type: "noul", instructions: "Is an object visible?" } },
+			images: [IMAGE_ONE],
+		});
+
+		expect(result.answers.visible.noul).toBe(1);
+		expect(native).not.toHaveBeenCalled();
+		expect(chat).toHaveBeenCalledTimes(1);
+	});
+
+	it("rejects an image-incapable session model after filtering text-only natives", async () => {
+		const settings = Settings.isolated({
+			modelRoles: { judge: "typesafe/jev-preview" },
+			"retry.fallbackChains": { judge: [`${TEXT_ONLY_NATIVE.provider}/${TEXT_ONLY_NATIVE.id}`] },
+		});
+		const registry = makeRegistry([JEV_PREVIEW, TEXT_ONLY_NATIVE], {
+			typesafe: "ts-key",
+			openrouter: "or-key",
+			[TEXT_ONLY.provider]: "text-key",
+		});
+		const native = vi.spyOn(globalThis, "fetch").mockImplementation(asGlobalFetch(async () => Response.json({})));
+		const chat = vi.spyOn(ai, "completeSimple");
+
+		await expect(
+			new ChainJudge({ settings, registry, purpose: "test", sessionModel: TEXT_ONLY }).judge({
+				state: "look at this",
+				questions: { visible: { type: "noul", instructions: "Is an object visible?" } },
+				images: [IMAGE_ONE],
+			}),
+		).rejects.toThrow("judgment: no compatible judge candidate supports images");
+
+		expect(native).not.toHaveBeenCalled();
+		expect(chat).not.toHaveBeenCalled();
 	});
 
 	it("propagates caller abort without attempting a fallback", async () => {

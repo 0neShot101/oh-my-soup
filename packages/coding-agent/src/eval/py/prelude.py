@@ -1007,14 +1007,15 @@ if "__omp_prelude_loaded__" not in globals():
         min_ok=None,
         intent=None,
     ):
-        """Judge every state with the same ``questions`` on the host.
+        """Judge every state with the same ``questions`` on the host; returns a ``JudgmentBatch`` to drain across cells.
 
-        ``states`` is ``{key: state}`` or a list (keys are integer indexes).
+        ``states`` is ``{key: state}`` or a list (keys are indices). ``intent`` is an
+        optional nonempty progress/job label. Item failures land in ``JudgmentItem.error``;
+        only a run that dies wholesale raises from ``drain()``.
+
         ``images`` optionally maps each state key to a list of local-path
         strings or embedded
         ``{"type": "image", "data": ..., "mimeType": ...}`` attachments.
-        Item failures land in ``JudgmentItem.error``; only a run that dies
-        wholesale raises from ``drain()``.
         """
         _check_questions(questions)
         if intent is not None and (not isinstance(intent, str) or not intent.strip()):
@@ -1033,17 +1034,18 @@ if "__omp_prelude_loaded__" not in globals():
             )
         args = {"op": "create", "items": items, "questions": questions}
         if images is not None:
-            if isinstance(images, dict):
-                for key in images:
-                    if key not in state_keys:
-                        raise ValueError(
-                            f"images contains unknown input key {json.dumps(key)}"
-                        )
-                for item in items:
-                    if item["key"] in images:
-                        item["images"] = images[item["key"]]
-            else:
-                args["images"] = images
+            if not isinstance(images, dict):
+                raise TypeError(
+                    "judge_batch() images must be a dict keyed by input key"
+                )
+            for key in images:
+                if key not in state_keys:
+                    raise ValueError(
+                        f"images contains unknown input key {json.dumps(key)}"
+                    )
+            for item in items:
+                if item["key"] in images:
+                    item["images"] = images[item["key"]]
         if concurrency is not None:
             args["concurrency"] = int(concurrency)
         if retries is not None:

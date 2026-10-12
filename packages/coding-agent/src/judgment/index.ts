@@ -23,6 +23,7 @@ import {
 	chatTextBackend,
 	createNativeJudge,
 	isJudgmentApi,
+	nativeJudgmentSupportsImages,
 	type Judge,
 	type JudgeOptions,
 	type JudgmentRequest,
@@ -38,6 +39,7 @@ import {
 	tokenUsage,
 	type Usage,
 } from "@oh-my-pi/pi-ai";
+import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
@@ -174,15 +176,26 @@ function cachedJudgeRoleChain(
 	if (cached && cached.settings === settings && cached.revision === revision && now < cached.expiresAt) {
 		return requiresImages ? cached.imageList : cached.list;
 	}
-	const imageList = resolveRoleChain("judge", settings, roleCandidatePool("judge", settings, registry));
-	const list = textJudgeRoleChain(imageList);
+	const roleChain = resolveRoleChain("judge", settings, roleCandidatePool("judge", settings, registry));
+	const list = textJudgeRoleChain(roleChain);
+	const imageList = imageJudgeRoleChain(roleChain);
 	registry[kRoleChain] = { settings, revision, list, imageList, expiresAt: now + CANDIDATE_TTL_MS };
 	return requiresImages ? imageList : list;
 }
 
-/** Append the session model when no candidate is native and the chain does not already route to it. */
-function withSessionFallback(candidates: RoleChainCandidate[], sessionModel: Model | undefined): RoleChainCandidate[] {
-	if (!sessionModel || candidates.some(candidate => kindOf(candidate) === "native")) return candidates;
+/** Append a compatible session model when no candidate is native and the chain does not already route to it. */
+function withSessionFallback(
+	candidates: RoleChainCandidate[],
+	sessionModel: Model | undefined,
+	requiresImages = false,
+): RoleChainCandidate[] {
+	if (
+		!sessionModel ||
+		candidates.some(candidate => kindOf(candidate) === "native") ||
+		(requiresImages && !supportsImageJudgment(sessionModel))
+	) {
+		return candidates;
+	}
 	const sessionIdentity = formatModelStringWithRouting(sessionModel);
 	if (candidates.some(candidate => formatModelStringWithRouting(candidate.model) === sessionIdentity)) {
 		return candidates;
@@ -203,6 +216,18 @@ export function kindOf(value: RoleChainCandidate | Model): JudgeKind {
 	return "online";
 }
 
+/** Whether the model's actual judgment transport sends image input. */
+function supportsImageJudgment(model: Model): boolean {
+	switch (kindOf(model)) {
+		case "native":
+			return nativeJudgmentSupportsImages(model);
+		case "local":
+			return false;
+		case "online":
+			return sendsImageInputOnWire(model);
+	}
+}
+
 /**
  * The `judge` role's candidates in attempt order, drawn from credentialed
  * judge-capable models. From the first native candidate on, only native
@@ -213,6 +238,11 @@ function textJudgeRoleChain(chain: RoleChainCandidate[]): RoleChainCandidate[] {
 	const firstNative = chain.findIndex(candidate => kindOf(candidate) === "native");
 	if (firstNative < 0) return chain;
 	return chain.filter((candidate, index) => index < firstNative || kindOf(candidate) === "native");
+}
+
+/** Filter image-incompatible candidates before applying the native-only tail policy. */
+function imageJudgeRoleChain(chain: RoleChainCandidate[]): RoleChainCandidate[] {
+	return textJudgeRoleChain(chain.filter(candidate => supportsImageJudgment(candidate.model)));
 }
 
 function judgeRoleChain(settings: Settings, registry: ModelRegistry): RoleChainCandidate[] {
@@ -369,7 +399,7 @@ export class ChainJudge implements Judge {
 		if (candidates === this.#candidates?.chain && requiresImages === this.#candidates.requiresImages) {
 			return this.#candidates.list;
 		}
-		const list = withSessionFallback(candidates, sessionModel);
+		const list = withSessionFallback(candidates, sessionModel, requiresImages);
 		this.#candidates = { chain: candidates, list, requiresImages };
 		return list;
 	}

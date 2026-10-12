@@ -688,6 +688,34 @@ describe("NativeJudge OpenAI Decisions dialect", () => {
 		]);
 	});
 
+	it("rejects invalid base64 length and MIME before fetching", async () => {
+		const visionLuna = { ...luna, input: ["text" as const, "image" as const] };
+		let calls = 0;
+		const judge = createNativeJudge(visionLuna, {
+			apiKey: "sk-test",
+			fetch: async () => {
+				calls++;
+				return Response.json({});
+			},
+		});
+
+		for (const image of [
+			{ type: "image", data: "AAAAA", mimeType: "image/png" },
+			{ type: "image", data: "AQID", mimeType: "text/plain" },
+		] as const) {
+			const error = await judge
+				.judge({
+					state: "Inspect this image.",
+					questions: { urgent: { type: "noul", instructions: "Is it urgent?" } },
+					images: [image],
+				})
+				.catch((caught: unknown) => caught);
+			expect(error).toBeInstanceOf(ValidationError);
+		}
+
+		expect(calls).toBe(0);
+	});
+
 	it("rejects images when a catalog judgment model declares text-only input before fetching", async () => {
 		let calls = 0;
 		const judge = createNativeJudge(luna, {

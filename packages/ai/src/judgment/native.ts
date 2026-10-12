@@ -58,6 +58,13 @@ export function isJudgmentApi(api: Api): api is JudgmentApi {
 	return Object.hasOwn(JUDGMENT_WIRES, api);
 }
 
+/** Whether both the native protocol and catalog model support image input. */
+export function nativeJudgmentSupportsImages(model: Model): boolean {
+	return (
+		isJudgmentApi(model.api) && JUDGMENT_WIRES[model.api].supportsImages === true && model.input.includes("image")
+	);
+}
+
 /** `TYPESAFE_BASE_URL` when set, else the public API root; trailing slashes stripped. */
 export function typesafeBaseUrl(): string {
 	return ($env.TYPESAFE_BASE_URL?.trim() || TYPESAFE_DEFAULT_BASE_URL).replace(/\/+$/, "");
@@ -340,6 +347,6 @@ export function createNativeJudge(model: Model, connection: NativeJudgeConnectio
 		model: model.requestModelId ?? model.id,
 		baseUrl: model.baseUrl,
 		maxQuestions: resolveJudgmentQuestionsMax(model),
-		supportsImages: model.input.includes("image"),
+		supportsImages: nativeJudgmentSupportsImages(model),
 	});
 }

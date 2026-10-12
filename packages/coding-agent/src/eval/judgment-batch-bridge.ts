@@ -128,7 +128,7 @@ function parseItems(value: unknown): BatchInput[] {
 		if (seen.has(entry.key)) throw invalid(`duplicate item key ${JSON.stringify(entry.key)}`);
 		seen.add(entry.key);
 		const input: BatchInput = { key: entry.key, state: parseState(entry.state) };
-		if (Object.prototype.hasOwnProperty.call(entry, "images")) {
+		if (Object.hasOwn(entry, "images")) {
 			if (Array.isArray(entry.images)) {
 				input.imageSources = entry.images;
 			} else {
@@ -137,23 +137,6 @@ function parseItems(value: unknown): BatchInput[] {
 		}
 		return input;
 	});
-}
-
-function assignImageSources(inputs: BatchInput[], value: unknown): void {
-	if (value === undefined) return;
-	if (!isRecord(value)) throw invalid("images must be an object keyed by input key");
-
-	const inputByKey = new Map(inputs.map(input => [String(input.key), input]));
-	for (const key of Object.keys(value)) {
-		const input = inputByKey.get(key);
-		if (!input) throw invalid(`images contains unknown input key ${JSON.stringify(key)}`);
-		const sources = value[key];
-		if (!Array.isArray(sources)) {
-			input.imageSourceError = `images for input ${JSON.stringify(key)} must be an array of paths or image attachments`;
-			continue;
-		}
-		input.imageSources = sources;
-	}
 }
 
 function parseCount(value: unknown, name: string, fallback: number, max = Number.POSITIVE_INFINITY): number {
@@ -545,8 +528,8 @@ export async function runEvalJudgmentBatch(
 	const { session } = options;
 	switch (args.op) {
 		case "create": {
+			if (Object.hasOwn(args, "images")) throw invalid("images must be provided on each item");
 			const items = parseItems(args.items);
-			assignImageSources(items, args.images);
 			const questions = parseQuestions(args.questions);
 			const batch = new JudgmentBatch(
 				session,

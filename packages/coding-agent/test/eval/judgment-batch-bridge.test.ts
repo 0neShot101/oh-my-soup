@@ -1,6 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import * as vm from "node:vm";
 import type { Api, AssistantMessage, ImageContent, Model } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -8,13 +7,14 @@ import { $ } from "bun";
 import { AsyncJobManager } from "../../src/async";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
+import { disposeAllVmContexts } from "../../src/eval/js/context-manager";
+import { executeJs } from "../../src/eval/js/executor";
 import {
 	type JudgmentBatchItem,
 	type JudgmentBatchStatus,
 	releaseJudgmentBatches,
 	runEvalJudgmentBatch,
 } from "../../src/eval/judgment-batch-bridge";
-import { JAVASCRIPT_PRELUDE_SOURCE } from "../../src/eval/js/shared/prelude";
 import {
 	isJudgmentBatchProgress,
 	JUDGMENT_BATCH_PROGRESS_EVENT_CHANNEL,
@@ -64,7 +64,7 @@ interface BatchSession {
 	manager?: AsyncJobManager;
 }
 
-function makeSession(opts: { agentId?: string; jobs?: boolean; vision?: boolean } = {}): BatchSession {
+function makeSession(opts: { agentId?: string; jobs?: boolean; vision?: boolean; cwd?: string } = {}): BatchSession {
 	const settings = Settings.isolated({
 		"async.enabled": false,
 		"task.isolation.enabled": false,
@@ -75,6 +75,7 @@ function makeSession(opts: { agentId?: string; jobs?: boolean; vision?: boolean 
 	const modelRegistry = new ModelRegistry(authStorage, "/nonexistent/judgment-batch-models.yml");
 	vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([opts.vision ? VISION : SMOL]);
 	const session: Record<string, unknown> = {
+		cwd: opts.cwd ?? process.cwd(),
 		settings,
 		modelRegistry,
 		getSessionId: () => "sess-1",
@@ -163,6 +164,10 @@ afterEach(async () => {
 	vi.restoreAllMocks();
 });
 
+afterAll(async () => {
+	await disposeAllVmContexts();
+});
+
 describe("judge_batch bridge", () => {
 	it("publishes live progress between cells without a job manager or drain calls", async () => {
 		const gate = Promise.withResolvers<string>();
@@ -246,14 +251,14 @@ describe("judge_batch bridge", () => {
 		await expect(runEvalJudgmentBatch({ op: "drain", id: "jdgb-missing" }, { session })).rejects.toThrow(
 			'unknown judge_batch "jdgb-missing"',
 		);
-		const unknownImages = {
+		const legacyImages = {
 			op: "create",
 			items: [{ key: "a", state: "x" }],
 			questions: QUESTIONS,
 			images: { unknown: [IMAGE_ONE] },
 		};
-		await expect(runEvalJudgmentBatch(unknownImages, { session })).rejects.toThrow(
-			'images contains unknown input key "unknown"',
+		await expect(runEvalJudgmentBatch(legacyImages, { session })).rejects.toThrow(
+			"images must be provided on each item",
 		);
 		expect(spy).not.toHaveBeenCalled();
 	});
@@ -276,11 +281,10 @@ describe("judge_batch bridge", () => {
 			{
 				op: "create",
 				items: [
-					{ key: 0, state: "state-zero" },
-					{ key: 1, state: "state-one" },
+					{ key: 0, state: "state-zero", images: [IMAGE_ONE] },
+					{ key: 1, state: "state-one", images: [IMAGE_TWO] },
 				],
 				questions: QUESTIONS,
-				images: { "0": [IMAGE_ONE], "1": [IMAGE_TWO] },
 				concurrency: 2,
 				retries: 0,
 			},
@@ -317,11 +321,10 @@ describe("judge_batch bridge", () => {
 				{
 					op: "create",
 					items: [
-						{ key: "valid", state: "state-valid" },
-						{ key: "broken", state: "state-broken" },
+						{ key: "valid", state: "state-valid", images: [IMAGE_ONE] },
+						{ key: "broken", state: "state-broken", images: [brokenPath] },
 					],
 					questions: QUESTIONS,
-					images: { valid: [IMAGE_ONE], broken: [brokenPath] },
 					concurrency: 2,
 					retries: 0,
 				},
@@ -483,104 +486,63 @@ describe("judge_batch bridge", () => {
 	});
 });
 
-describe("judgeBatch() JS prelude", () => {
-	it("maps states to keyed items and drainIter stops on an empty drain", async () => {
-		const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
-		const drains = [
-			{
-				items: [
-					{
-						key: "a",
-						answers: { ok: { type: "bool", bool: 1 } },
-						model: "p/smol",
-					},
-				],
-			},
-			{ items: [{ key: "b", error: "boom" }] },
-			{ items: [] },
-		];
-		const sandbox: Record<string, unknown> = {
-			__omp_call_tool__: async (name: string, args: Record<string, unknown>) => {
-				calls.push({ name, args });
-				if (name !== "__judge_batch__") throw new Error(`unexpected bridge call ${name}`);
-				if (args.op === "create") return { id: "jdgb-1", total: 2 };
-				if (args.op === "drain") return drains.shift();
-				if (args.op === "status") return { id: "jdgb-1", done: 2, total: 2, failed: 1, running: false };
-				throw new Error(`unexpected op ${String(args.op)}`);
-			},
-		};
-		vm.createContext(sandbox);
-		vm.runInContext(JAVASCRIPT_PRELUDE_SOURCE, sandbox);
-
-		const seen = await vm.runInContext(
-			`(async () => {
-				const b = await judgeBatch({ a: "first", b: "second" }, { ok: { type: "bool", instructions: "?" } }, { concurrency: 4 });
-				const out = [];
-				for await (const [key, item] of b.drainIter({ timeout: 30 })) out.push([key, item.ok, item.answers ?? item.error]);
-				return { id: b.id, total: b.total, out, status: await b.status() };
-			})()`,
-			sandbox,
-		);
-
-		expect(seen).toEqual({
-			id: "jdgb-1",
-			total: 2,
-			out: [
-				["a", true, { ok: { type: "bool", bool: 1 } }],
-				["b", false, "boom"],
-			],
-			status: { id: "jdgb-1", done: 2, total: 2, failed: 1, running: false },
-		});
-		expect(calls[0]?.args).toEqual({
-			op: "create",
-			items: [
-				{ key: "a", state: "first" },
-				{ key: "b", state: "second" },
-			],
-			questions: { ok: { type: "bool", instructions: "?" } },
-			concurrency: 4,
-		});
-		const drainCalls = calls.filter(call => call.args.op === "drain");
-		expect(drainCalls).toHaveLength(3);
-		expect(drainCalls[0]?.args.id).toBe("jdgb-1");
-		expect(drainCalls[0]?.args.timeoutMs).toBeLessThanOrEqual(30_000);
-	});
-	it("forwards image maps for array states using numeric index keys", async () => {
-		const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
-		const sandbox: Record<string, unknown> = {
-			__omp_call_tool__: async (name: string, args: Record<string, unknown>) => {
-				calls.push({ name, args });
-				if (name !== "__judge_batch__") throw new Error(`unexpected bridge call ${name}`);
-				if (args.op === "create") return { id: "jdgb-images", total: 2 };
-				throw new Error(`unexpected op ${String(args.op)}`);
-			},
-		};
-		vm.createContext(sandbox);
-		vm.runInContext(JAVASCRIPT_PRELUDE_SOURCE, sandbox);
-		const imageMap = JSON.stringify({ 0: [IMAGE_ONE], 1: [IMAGE_TWO] });
-		const batch = await vm.runInContext(
-			`judgeBatch(["first", "second"], { ok: { type: "bool", instructions: "?" } }, { images: ${imageMap} })`,
-			sandbox,
-		);
-
-		expect(batch).toBeDefined();
-		expect(calls).toEqual([
-			{
-				name: "__judge_batch__",
-				args: {
-					op: "create",
-					items: [
-						{ key: 0, state: "first" },
-						{ key: 1, state: "second" },
-					],
-					questions: { ok: { type: "bool", instructions: "?" } },
-					images: { "0": [IMAGE_ONE], "1": [IMAGE_TWO] },
-				},
-			},
-		]);
+describe("judgeBatch() JS runtime", () => {
+	it("routes mapped images and settles malformed attachments per item through the actual bridge", async () => {
+		const tempDir = TempDir.createSync("@omp-eval-judge-batch-js-");
+		try {
+			const completions: Array<{ prompt: string; images: unknown[] }> = [];
+			const complete = vi.spyOn(ai, "completeSimple").mockImplementation(async (_model, context, options) => {
+				const user = context.messages.find(message => message.role === "user");
+				const content = user?.content;
+				completions.push({
+					prompt: typeof content === "string" ? content : JSON.stringify(content),
+					images: Array.isArray(content) ? content.filter(block => block.type === "image") : [],
+				});
+				const message = reply("tests: yes");
+				options?.onAttempt?.(message);
+				return message;
+			});
+			const { session } = makeSession({ vision: true, jobs: false, cwd: tempDir.path() });
+			const cell = [
+				'const questions = { tests: { type: "bool", instructions: "Does the request mention tests?" } };',
+				'const batch = await judgeBatch(["state-zero", "state-malformed"], questions, { images: { 0: [__IMAGE_ONE__], 1: "not an image list" }, concurrency: 2, retries: 0 });',
+				"const items = [];",
+				"for await (const entry of batch.drainIter({ timeout: 30 })) items.push(entry);",
+				"await batch.close();",
+				"let unknownImageError;",
+				'try { await judgeBatch(["known"], questions, { images: { unknown: [__IMAGE_TWO__] } }); }',
+				"catch (error) { unknownImageError = error.message; }",
+				"return JSON.stringify({ items: items.map(([key, item]) => [key, item.ok, item.answers ?? item.error]), unknownImageError });",
+			]
+				.join("\n")
+				.replaceAll("__IMAGE_ONE__", JSON.stringify(IMAGE_ONE))
+				.replaceAll("__IMAGE_TWO__", JSON.stringify(IMAGE_TWO));
+			const result = await executeJs(cell, {
+				cwd: tempDir.path(),
+				sessionId: "js-judge-batch-integration",
+				session,
+				sessionFile: path.join(tempDir.path(), "session.jsonl"),
+			});
+			expect(result.exitCode).toBe(0);
+			const report = JSON.parse(result.output.trim()) as {
+				items: [JudgmentBatchItem["key"], boolean, JudgmentBatchItem["answers"] | JudgmentBatchItem["error"]][];
+				unknownImageError: string;
+			};
+			expect(report.items).toHaveLength(2);
+			expect(report.items.find(([key]) => key === 0)).toEqual([0, true, { tests: { type: "bool", bool: 1 } }]);
+			expect(report.items.find(([key]) => key === 1)?.[2]).toBe(
+				'images for input "1" must be an array of paths or image attachments',
+			);
+			expect(report.unknownImageError).toBe('images contains unknown input key "unknown"');
+			expect(complete).toHaveBeenCalledTimes(1);
+			expect(completions).toHaveLength(1);
+			expect(completions[0]?.prompt).toContain("state-zero");
+			expect(completions[0]?.images).toEqual([IMAGE_ONE]);
+		} finally {
+			tempDir.removeSync();
+		}
 	});
 });
-
 async function runPythonJudgeBatchInSubprocess(tempDir: TempDir): Promise<PythonResult> {
 	const repoRoot = path.resolve(import.meta.dir, "../../..");
 	const scriptPath = path.join(tempDir.path(), "run-python-judge-batch.ts");

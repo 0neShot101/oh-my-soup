@@ -10,9 +10,9 @@
  */
 import { type } from "@oh-my-pi/omptype";
 import * as AIError from "../error";
+import { isEmbeddedImageContent } from "../judgment/wire";
 import type { JudgmentRequest, JudgmentResult } from "../judgment/types";
 import type { ImageContent } from "../types";
-
 /**
  * TypeSafe accepts `instructions` and `criteria` as strings or structured
  * JSON (https://docs.typesafe.ai/api); only `type` decides how an answer is
@@ -57,11 +57,10 @@ export function parseRequest(body: unknown): SystemOneParsedRequest {
 	// contract models string instructions only; native judgment wires transform
 	// question fields as needed, while image bytes stay separate from `state`.
 	for (const [index, image] of (parsed.images ?? []).entries()) {
-		if (!/^[A-Za-z0-9+/]+={0,2}$/.test(image.data)) {
-			throw new AIError.ValidationError(`systemone: images[${index}].data must be base64 image bytes`);
-		}
-		if (!/^image\/[A-Za-z0-9][A-Za-z0-9.+-]*$/i.test(image.mimeType)) {
-			throw new AIError.ValidationError(`systemone: images[${index}].mimeType must be an image MIME type`);
+		if (!isEmbeddedImageContent(image)) {
+			throw new AIError.ValidationError(
+				`systemone: images[${index}] must contain non-empty base64 data and an image MIME type`,
+			);
 		}
 	}
 	const images: ImageContent[] | undefined = parsed.images;
