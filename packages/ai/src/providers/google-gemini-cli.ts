@@ -576,7 +576,9 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 
 			// A host that declares an image contract (Claude behind Antigravity)
 			// rejects oversized images, and a rejected image stays in context, so
-			// clamp before building; readers without one take images as sent.
+			// clamp before building; readers without one take images as sent. The
+			// cost is one pass over the context, as on `anthropic-messages`: images
+			// already within bounds hit the per-image cache and are not decoded.
 			const requestContext =
 				model.compat.maxImageDimension !== undefined || model.compat.maxImagePayloadBytes !== undefined
 					? await prepareAnthropicImageContext(context, model)
