@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
+import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import * as natives from "@oh-my-pi/pi-natives";
 import { Tokenizer, tokenizerEncodingForModel } from "../src/tokenizer";
 import type { AgentMessage } from "../src/types";
@@ -189,6 +191,54 @@ describe("countMessage", () => {
 
 		expect(textOnly).toBeGreaterThan(0);
 		expect(withImage).toBe(textOnly + inToolResultImageEstimate(tokenizer));
+	});
+});
+
+// Contract: a replayed thinking signature counts only for readers that bill it.
+describe("countMessage thinking signatures", () => {
+	const SIGNATURE = "s".repeat(4000);
+
+	function reader(provider: "anthropic" | "openrouter" | "amazon-bedrock" | "google", id: string): Model {
+		const model = getBundledModel(provider, id);
+		if (!model) throw new Error(`missing bundled model ${provider}/${id}`);
+		return model as Model;
+	}
+
+	function signedTurn(thinkingSignature?: string): AssistantMessage {
+		return {
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "Check the call sites first.", thinkingSignature },
+				{ type: "text", text: "Done." },
+			],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-opus-5-5",
+			usage: {
+				input: 100,
+				output: 20,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 120,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: 1,
+		};
+	}
+
+	test.each([
+		["anthropic", "claude-opus-5-5"],
+		["openrouter", "~anthropic/claude-opus-latest"],
+		["amazon-bedrock", "global.anthropic.claude-opus-5-5"],
+	] as const)("leaves the signature out for Claude on %s (%s)", (provider, id) => {
+		const tokenizer = new Tokenizer(reader(provider, id));
+		expect(tokenizer.countMessage(signedTurn(SIGNATURE))).toBe(tokenizer.countMessage(signedTurn()));
+	});
+
+	test("charges the signature's bytes for a reader whose catalog bills it", () => {
+		const tokenizer = new Tokenizer(reader("google", "gemini-3-pro-preview"));
+		expect(tokenizer.countMessage(signedTurn(SIGNATURE))).toBe(tokenizer.countMessage(signedTurn()) + 1000);
 	});
 });
 

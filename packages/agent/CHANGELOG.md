@@ -7,6 +7,14 @@
 ### Added
 
 - Added `AgentLoopConfig.onDetachedToolUpdate`: a tool's `onUpdate` frames that arrive after its run's event stream ended (a returned call whose background job keeps reporting) reach it instead of being dropped; `Agent` forwards them to its subscribers as `tool_execution_update` events
+### Breaking Changes
+
+- Removed `estimateImageContentTokens()` from `@oh-my-pi/pi-agent-core/image-tokens`; use `Tokenizer.imageTokens(size, detail)`, which prices with the reading model's catalog image rule
+
+### Fixed
+
+- Fixed the token count charging Claude for replayed thinking signatures, which Claude does not bill; it read Opus 5.5 requests about 55% over their billed input
+- Fixed screenshots and other non-frame images being counted at the OpenAI rate for every model instead of the reading model's own, about 16% under what Claude bills
 
 ## [18.9.2] - 2026-10-11
 

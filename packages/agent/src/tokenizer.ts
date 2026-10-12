@@ -1,11 +1,12 @@
 import type { Model } from "@oh-my-pi/pi-ai";
+import { billsThinkingSignatures } from "@oh-my-pi/pi-catalog/compat/thinking-signatures";
 import type { ModelTokenizer } from "@oh-my-pi/pi-catalog/types";
 import * as natives from "@oh-my-pi/pi-natives";
 import { materializeString, stringifyJson } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { isEstimateCacheable, messageEstimateVersion } from "./compaction/message-cache";
-import { base64ImageSize, estimateImageContentTokens } from "./image-tokens";
+import { base64ImageSize, estimateImageTokens, type ImageDetail, type ImageSize } from "./image-tokens";
 import type { AgentMessage } from "./types";
 
 const testEnv = Bun.env.NODE_ENV === "test";
@@ -42,12 +43,12 @@ export type TokenCountMode = "strict" | "approximate" | "upperbound";
 export interface MessageCountOptions {
 	/**
 	 * Drop opaque provider reasoning payloads (`thinkingSignature`,
-	 * `redactedThinking`, native server-tool blocks) from the estimate. Those
-	 * are billed by the provider on replay, so the default counts them — but
-	 * their *local* byte size can diverge wildly from what the provider
-	 * charges, so the compaction floor (which only needs the reliably-countable,
-	 * on-wire-compressible content) excludes them to avoid false triggers on
-	 * thinking-heavy turns.
+	 * `redactedThinking`, native server-tool blocks) from the estimate. The
+	 * default counts the ones the reader bills on replay (signatures only where
+	 * its catalog says so) — but their *local* byte size can diverge wildly
+	 * from what the provider charges, so the compaction floor (which only needs
+	 * the reliably-countable, on-wire-compressible content) excludes them to
+	 * avoid false triggers on thinking-heavy turns.
 	 */
 	excludeEncryptedReasoning?: boolean;
 }
@@ -158,6 +159,8 @@ export class Tokenizer {
 	readonly #encoding: natives.Encoding | null;
 	readonly #frameBilling: snapcompact.FrameBilling;
 	readonly frameBillingKey: string;
+	/** Whether the reader bills replayed thinking signatures (catalog `bills-thinking-signatures`). */
+	readonly countsThinkingSignatures: boolean;
 
 	/** Exact counts only; byte fallbacks remain mode-dependent and uncached. */
 	readonly #nativeCounts = new LRUCache<string, number>({
@@ -180,6 +183,7 @@ export class Tokenizer {
 		this.#encoding = tokenizerEncodingForModel(model);
 		this.#frameBilling = snapcompact.frameBilling(model ?? undefined);
 		this.frameBillingKey = snapcompact.frameBillingKey(this.#frameBilling);
+		this.countsThinkingSignatures = billsThinkingSignatures(model ?? {});
 	}
 
 	get encoding(): natives.Encoding | null {
@@ -218,8 +222,8 @@ export class Tokenizer {
 	 * Settled historical messages are counted once and reused until an owner
 	 * (prune/shake/strip-images) calls `invalidateMessageCache`; streaming
 	 * assistants bypass the memo entirely (see the message-cache settle-gate
-	 * invariant). Image blocks charge {@link estimateImageContentTokens}, the
-	 * same dimension-based estimate the native remote-compaction probe applies.
+	 * invariant). Image blocks charge {@link imageTokens}, the same estimate
+	 * the native remote-compaction probe applies.
 	 */
 	countMessage(message: AgentMessage, options?: MessageCountOptions): number {
 		const floored = options?.excludeEncryptedReasoning === true;
@@ -243,6 +247,14 @@ export class Tokenizer {
 		let total = 0;
 		for (const message of messages) total += this.countMessage(message, options);
 		return total;
+	}
+
+	/**
+	 * Input tokens for one image (not a snapcompact frame) under the reader's
+	 * catalog image rule, or the generic estimate when it has none.
+	 */
+	imageTokens(size: ImageSize | null | undefined, detail?: ImageDetail): number {
+		return estimateImageTokens(size, detail, this.#frameBilling.rule);
 	}
 
 	#measureMessage(message: AgentMessage, excludeEncryptedReasoning: boolean): number {
@@ -273,7 +285,7 @@ export class Tokenizer {
 						if (block.type === "text" && block.text) {
 							fragments.push(block.text);
 						} else if (block.type === "image") {
-							extra += estimateImageContentTokens(block);
+							extra += this.imageTokens(base64ImageSize(block.data), block.detail);
 						}
 					}
 				}
@@ -285,14 +297,13 @@ export class Tokenizer {
 						fragments.push(block.text);
 					} else if (block.type === "thinking") {
 						fragments.push(block.thinking);
-						// Providers charge for the opaque signature/reasoning payload that
-						// rides alongside the thinking text (OpenAI Responses encrypted
-						// reasoning items, Anthropic signed thinking blocks, etc.). Without
-						// counting it, this estimator can read ~half of the provider-reported
-						// usage on thinking-heavy turns — see #2275 for the resulting
-						// compaction-trigger / post-check metric divergence. The compaction
-						// floor excludes it (its local byte size diverges from provider billing).
-						if (block.thinkingSignature && !excludeEncryptedReasoning) {
+						// Readers that bill the opaque signature riding alongside the thinking
+						// text (OpenAI Responses encrypted reasoning items, Gemini thought
+						// signatures) are charged its bytes; readers whose catalog says they
+						// bill only the thinking text (Claude) are not. The compaction floor
+						// excludes it either way: its local byte size diverges from provider
+						// billing.
+						if (block.thinkingSignature && !excludeEncryptedReasoning && this.countsThinkingSignatures) {
 							fragments.push(block.thinkingSignature);
 						}
 					} else if (block.type === "toolCall") {
@@ -323,7 +334,7 @@ export class Tokenizer {
 						if (block.type === "text" && block.text) {
 							fragments.push(block.text);
 						} else if (block.type === "image") {
-							extra += estimateImageContentTokens(block);
+							extra += this.imageTokens(base64ImageSize(block.data), block.detail);
 						}
 					}
 				}

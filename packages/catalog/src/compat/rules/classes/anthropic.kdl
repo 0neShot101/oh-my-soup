@@ -14,8 +14,11 @@
 // consecutive tool_use or tool_result blocks is one position. Warm-cache
 // tool-result pruning keeps its rewrites inside this window.
 // https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+// A replayed thinking block bills its thinking text as input, not its
+// signature, on every host, so the local count leaves the signature out.
 class "anthropic" {
 	prompt-cache-lookback 20
+	bills-thinking-signatures #false
 	// verified: billing matched this formula on Opus 4.7+ and Fable 5.1.
 	image-tokenization {
 		regime "anthropic-patch"
