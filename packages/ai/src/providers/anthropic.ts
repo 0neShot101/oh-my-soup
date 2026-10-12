@@ -273,25 +273,34 @@ const promptCacheBetas: Record<string, true> = {
 	[promptCachingScopeBeta]: true,
 };
 
+/** Betas withheld under the kill switch: they gate the body fields it removes. */
+const killSwitchBetas: Record<string, true> = {
+	[THINKING_BINDING_CONTROLS_BETA]: true,
+	[contextManagementBeta]: true,
+	[COMPACTION_BETA]: true,
+	[LEGACY_COMPACTION_BETA]: true,
+};
+
 /**
- * Remove the prompt-cache betas from every `anthropic-beta` entry in a header
+ * Remove the `dropped` betas from every `anthropic-beta` entry in a header
  * record. Header names are case-insensitive and the value is a comma-separated
  * list, so each matching key keeps its own casing and its remaining tokens;
  * an entry left with no token is deleted rather than sent empty. The input is
- * returned untouched when it advertises no cache beta.
+ * returned untouched when it advertises none of them.
  *
  * `model.headers` and `options.headers` are caller-controlled channels that
  * reach the wire through `buildAnthropicHeaders` (as `modelHeaders`, which an
  * override-enabled endpoint lets replace our own beta header outright), the
  * GitHub Copilot default headers, and the per-request beta override built for
- * injected clients — each of which must go through here once breakpoints drop.
+ * injected clients — each of which must go through here once breakpoints drop
+ * or the experimental-beta kill switch is on.
  */
-function stripPromptCacheBetas(headers: Record<string, string>): Record<string, string> {
+function stripHeaderBetas(headers: Record<string, string>, dropped: Record<string, true>): Record<string, string> {
 	let stripped: Record<string, string> | undefined;
 	for (const key in headers) {
 		if (key.toLowerCase() !== "anthropic-beta") continue;
 		const betas = normalizeExtraBetas(headers[key]);
-		const kept = betas.filter(beta => promptCacheBetas[beta] !== true);
+		const kept = betas.filter(beta => dropped[beta] !== true);
 		if (kept.length === betas.length) continue;
 		stripped ??= { ...headers };
 		if (kept.length === 0) {
@@ -2435,12 +2444,16 @@ const streamAnthropicOnce = (
 			// `anthropic-beta` value, so once breakpoints are dropped an unstripped
 			// base would re-attach the very cache beta the replay abandoned. Both
 			// prompt-cache betas govern `ttl`/`scope`, so the options rung has to
-			// strip them too. Read through a closure because both flags flip
-			// mid-turn.
-			const callerBetaBaseHeaders = (): Record<string, string> =>
-				dropCacheControl || dropCacheControlOptions
-					? stripPromptCacheBetas(mergedCallerHeaders)
-					: mergedCallerHeaders;
+			// strip them too. The kill switch's betas never ride, whatever the
+			// caller's header says. Read through a closure because both cache
+			// flags flip mid-turn.
+			const callerBetaBaseHeaders = (): Record<string, string> => {
+				const headers =
+					dropCacheControl || dropCacheControlOptions
+						? stripHeaderBetas(mergedCallerHeaders, promptCacheBetas)
+						: mergedCallerHeaders;
+				return killSwitchActive ? stripHeaderBetas(headers, killSwitchBetas) : headers;
+			};
 			// Keep fallback payloads aligned with the top-level Vertex effort gate:
 			// no nested effort field means the fallback scan cannot re-add its beta.
 			let fallbacks = options?.fallbacks;
@@ -4042,14 +4055,6 @@ function experimentalBetasDisabled(model: Model<"anthropic-messages">): boolean 
 	return model.compat.honorsClaudeCodeBetaKillSwitch === true && $flag("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS");
 }
 
-/** Betas withheld under the kill switch: they gate the body fields it removes. */
-const killSwitchBetas: Record<string, true> = {
-	[THINKING_BINDING_CONTROLS_BETA]: true,
-	[contextManagementBeta]: true,
-	[COMPACTION_BETA]: true,
-	[LEGACY_COMPACTION_BETA]: true,
-};
-
 /**
  * Honor Claude Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` kill switch on
  * providers whose compat opts in (`honors-claude-code-beta-kill-switch`).
@@ -4229,7 +4234,9 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		// Unlike the generic builder below, this branch has no enforced-key
 		// filter: a caller-supplied `anthropic-beta` lands in the default
 		// headers verbatim, cache betas included.
-		const defaultHeaders = dropPromptCacheBetas ? stripPromptCacheBetas(mergedCopilotHeaders) : mergedCopilotHeaders;
+		const defaultHeaders = dropPromptCacheBetas
+			? stripHeaderBetas(mergedCopilotHeaders, promptCacheBetas)
+			: mergedCopilotHeaders;
 		applyInferenceHeaders(defaultHeaders, {
 			provider: model.provider,
 			protocol: "anthropic",
@@ -4274,9 +4281,13 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	// value outright — but `allowAnthropicHeaderOverrides` lets it replace our
 	// built beta header wholesale, which would put a cache beta back on a
 	// breakpoint-free request.
-	const requestModelHeaders = dropPromptCacheBetas
-		? stripPromptCacheBetas(mergedRequestHeaders)
+	// The kill switch's betas are stripped on the same channel.
+	const cacheStrippedHeaders = dropPromptCacheBetas
+		? stripHeaderBetas(mergedRequestHeaders, promptCacheBetas)
 		: mergedRequestHeaders;
+	const requestModelHeaders = experimentalBetasDisabled(model)
+		? stripHeaderBetas(cacheStrippedHeaders, killSwitchBetas)
+		: cacheStrippedHeaders;
 	const defaultHeaders = buildAnthropicHeaders({
 		apiKey,
 		baseUrl,

@@ -99,6 +99,35 @@ describe("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", () => {
 		});
 	});
 
+	it("strips the withheld betas from caller headers an injected client's per-request betas merge into", async () => {
+		await withEnv({ CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1" }, async () => {
+			let beta = "";
+			await streamAnthropic(
+				anthropicModel(),
+				{ messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+				{
+					apiKey: "sk-ant-api-test",
+					thinkingEnabled: true,
+					reasoning: Effort.High,
+					headers: { "anthropic-beta": `${BINDING_BETA},${CONTEXT_MANAGEMENT_BETA},custom-beta-2026-01-01` },
+					client: {
+						messages: {
+							create: (_value, requestOptions) => {
+								beta = new Headers(requestOptions?.headers).get("anthropic-beta") ?? "";
+								throw new Error("captured");
+							},
+						},
+					},
+				},
+			).result();
+			// The effort beta proves the per-request merge ran over the caller header.
+			expect(beta).toContain("effort-2025-11-24");
+			expect(beta).toContain("custom-beta-2026-01-01");
+			expect(beta).not.toContain(BINDING_BETA);
+			expect(beta).not.toContain(CONTEXT_MANAGEMENT_BETA);
+		});
+	});
+
 	it("forfeits a fallback-credit redemption frozen with withheld fields and builds a fresh request", async () => {
 		await withEnv({ ...GATEWAY_ENV, CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1" }, async () => {
 			const request = await captureRequest(anthropicModel(), {
