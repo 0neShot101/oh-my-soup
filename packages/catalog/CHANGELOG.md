@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Removed Google Antigravity's Gemini 3.5 Flash and its `gemini-3-flash` alias from the model list; Antigravity retired them and answers every request with a retirement notice instead of a reply ([#15445](https://github.com/can1357/oh-my-pi/pull/15445) by [@will-bogusz](https://github.com/will-bogusz))
+
 ## [18.10.4] - 2026-10-13
 
 ### Added
@@ -68,10 +72,6 @@
 ### Added
 
 - Added the `honors-claude-code-beta-kill-switch` axis (`compat.honorsClaudeCodeBetaKillSwitch`), on for the `anthropic` provider, so a rule or `models.yml` override decides which providers honor `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` ([#15458](https://github.com/can1357/oh-my-pi/pull/15458) by [@H4vC](https://github.com/H4vC))
-
-### Fixed
-
-- Removed Google Antigravity's Gemini 3.5 Flash and its `gemini-3-flash` alias from the model list; Antigravity retired them and answers every request with a retirement notice instead of a reply
 
 ## [18.10.0] - 2026-10-12
 
