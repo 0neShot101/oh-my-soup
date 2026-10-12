@@ -1,5 +1,6 @@
 import { toModelSpec } from "../provider-models/bundled-references";
 import type { Model } from "../types";
+import { resolveCatalogPolicy } from "./catalog-policy";
 import { resolveCatalogAxes } from "./resolve";
 
 const imageBudgetCache = new Map<string, number | null>();
@@ -22,4 +23,13 @@ export function resolveInlineImageByteBudget(model: Model): number | undefined {
 		imageBudgetCache.set(key, budget);
 	}
 	return budget ?? undefined;
+}
+
+/**
+ * Most images one request to this deployment may carry (`image-count-budget` axis), or `undefined` when no
+ * rule names the host.
+ */
+export function resolveImageCountBudget(model: Model): number | undefined {
+	const value = resolveCatalogPolicy(model).imageCountBudget;
+	return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }

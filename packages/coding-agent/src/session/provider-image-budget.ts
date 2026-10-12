@@ -133,7 +133,7 @@ function clampImages(context: Context, state: ImageBudgetState): Context {
 export function clampProviderContextImages(context: Context, model: Model): Context {
 	if (!model.input.includes("image")) return context;
 	const totalImages = countImages(context);
-	const remainingDrops = totalImages - providerImageBudget(model.provider);
+	const remainingDrops = totalImages - providerImageBudget(model);
 	if (remainingDrops <= 0) return context;
 	return clampImages(context, { remainingDrops, inlineBytes: 0, byteBudget: Number.POSITIVE_INFINITY, model });
 }

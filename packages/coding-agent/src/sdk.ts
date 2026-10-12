@@ -39,6 +39,7 @@ import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
+import { frameDataBytesBudget } from "@oh-my-pi/snapcompact";
 import {
 	discoverAdvisorConfigs,
 	discoverWatchdogFiles,
@@ -4437,7 +4438,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 
 		// Restore messages if session has existing data
 		if (hasExistingSession) {
-			agent.replaceMessages(existingSession.messages);
+			// The restore above built its context before the session model was known; the agent
+			// carries the snapcompact archive at that model's frame payload budget.
+			const restored = sessionManager.buildSessionContext({ maxFrameDataBytes: frameDataBytesBudget(model) });
+			agent.replaceMessages(deobfuscateSessionContext(restored, obfuscator).messages);
 			if (persistInitialServiceTier) {
 				sessionManager.appendServiceTierChange(
 					Object.keys(initialServiceTierByFamily).length > 0 ? initialServiceTierByFamily : null,

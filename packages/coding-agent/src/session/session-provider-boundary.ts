@@ -110,7 +110,10 @@ export class SessionProviderBoundary {
 	/** Builds the current deobfuscated context for agent display and replay. */
 	buildDisplaySessionContext(): SessionContext {
 		return deobfuscateSessionContext(
-			this.#host.sessionManager.buildSessionContext({ inFlightToolCallIds: this.#inFlightToolCallIds() }),
+			this.#host.sessionManager.buildSessionContext({
+				inFlightToolCallIds: this.#inFlightToolCallIds(),
+				maxFrameDataBytes: snapcompact.frameDataBytesBudget(this.#host.model()),
+			}),
 			this.#host.obfuscator(),
 		);
 	}

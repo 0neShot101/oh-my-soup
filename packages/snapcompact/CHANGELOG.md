@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `providerImageBudget()` and `providerFrameBudget()` take the model instead of a provider id, `maxFramesForDataBudget()` takes the byte budget, and `PROVIDER_IMAGE_BUDGETS` and `FRAME_DATA_BYTES_BUDGET` are replaced by the catalog's `image-count-budget` rules, `frameDataBytesBudget(model)` and `DEFAULT_FRAME_DATA_BYTES_BUDGET`
+
 ## [18.6.3] - 2026-10-06
 
 ### Breaking Changes

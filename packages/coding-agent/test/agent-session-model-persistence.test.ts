@@ -13,6 +13,7 @@ import { EPHEMERAL_MODEL_CHANGE_ROLE } from "@oh-my-pi/pi-coding-agent/session/s
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import * as snapcompact from "@oh-my-pi/snapcompact";
 
 describe("AgentSession model persistence", () => {
 	let tempDir: TempDir;
@@ -531,6 +532,57 @@ describe("AgentSession model persistence", () => {
 				stopReason: "aborted",
 			},
 		});
+	});
+
+	it("restores a snapcompact archive at the resumed model's frame payload budget", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const settings = Settings.isolated();
+		settings.setModelRole("default", modelValue(defaultModel));
+		const sessionManager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "archived"));
+		sessionManager.appendModelChange(modelValue(defaultModel));
+		const firstKeptEntryId = sessionManager.appendMessage({
+			role: "user",
+			content: "continue",
+			timestamp: Date.now(),
+		});
+		// 4.8 MB of frames: over the 3 MB default, inside half of Anthropic's 24 MB inline-image budget.
+		const frame = (fill: string) => ({
+			data: fill.repeat(1_600_000),
+			mimeType: "image/png",
+			cols: 8,
+			rows: 8,
+			chars: 8,
+		});
+		sessionManager.appendCompaction("Archived history.", "archive", firstKeptEntryId, 150_000, {
+			preserveData: {
+				[snapcompact.PRESERVE_KEY]: {
+					frames: [frame("a"), frame("b"), frame("c")],
+					totalChars: 24,
+					truncatedChars: 0,
+				},
+			},
+		});
+		const result = await createAgentSession({
+			cwd: tempDir.path(),
+			agentDir: tempDir.path(),
+			authStorage: sharedAuthStorage,
+			modelRegistry: sharedModelRegistry,
+			sessionManager,
+			settings,
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+		});
+		session = result.session;
+
+		const summary = result.session.messages.find(message => message.role === "compactionSummary");
+		if (summary?.role !== "compactionSummary") throw new Error("Expected a restored compaction summary");
+		expect(summary.blocks?.filter(block => block.type === "image")).toHaveLength(3);
 	});
 
 	it("marks an interrupted first turn aborted when switching sessions", async () => {

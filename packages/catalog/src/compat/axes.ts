@@ -405,6 +405,11 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"hosted-image": { key: "hostedImage", set: "catalog", shape: "scalar", values: [true, false] },
 	/** How the model line bills an input image; shape and formulas in `./image-tokenization`. */
 	"image-tokenization": { key: "imageTokenization", set: "catalog", shape: "object" },
+	/**
+	 * Most images one request may carry, documents included where the host
+	 * counts them. Unassigned: unknown host, held to a conservative floor.
+	 */
+	"image-count-budget": { key: "imageCountBudget", set: "catalog", shape: "scalar" },
 	"image-model": { key: "imageModel", set: "catalog", shape: "scalar" },
 	"inline-image-byte-budget": { key: "inlineImageByteBudget", set: "catalog", shape: "scalar" },
 	/**

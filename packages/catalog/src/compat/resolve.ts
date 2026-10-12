@@ -31,6 +31,7 @@ import type {
 	ResolvedOpenAISharedCompat,
 	ThinkingConfig,
 } from "../types";
+import { CODEX_BASE_URL } from "../wire/codex";
 import {
 	isAnthropicSigningProxyUrl,
 	isAzureAnthropicRoute,
@@ -796,7 +797,10 @@ function resolveOpenAIResponsesPolicy(
 		supportsObfuscationOptOut: isOpenAIUrl || provider === "openai",
 		storeResponses: false,
 		connectionBoundNativeHistory: false,
-		officialEndpoint: isOfficialOpenAIEndpoint(provider, baseUrl),
+		// The Codex backend is official at the URL its requests default to when `baseUrl` is unset.
+		officialEndpoint:
+			isOfficialOpenAIEndpoint(provider, baseUrl) ||
+			(api === "openai-codex-responses" && (!baseUrl || baseUrl.replace(/\/+$/, "") === CODEX_BASE_URL)),
 		harmonyLeakMitigation: false,
 		rejectRootObjectUnion: false,
 		retryWithoutStrictOnGrammarError: false,
