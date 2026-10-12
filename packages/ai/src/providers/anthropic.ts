@@ -2407,6 +2407,9 @@ const streamAnthropicOnce = (
 			};
 			let dropAllThinking = droppedAllThinkingForSignature;
 			let prefixBindingRetryAttempted = false;
+			// Claude Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`; the wrapper
+			// already turned the gated compat off, this covers caller/frozen inputs.
+			const killSwitchActive = experimentalBetasDisabled(model);
 			// A live fallback-credit redemption replays its frozen body.
 			const frozenRedemption =
 				options?.fallbackCreditRedemption &&
@@ -2599,6 +2602,8 @@ const streamAnthropicOnce = (
 						}
 					}
 				}
+				// Caller betas and a frozen redemption's beta list bypass compat.
+				if (killSwitchActive) extraBetas = extraBetas.filter(beta => killSwitchBetas[beta] !== true);
 
 				clientArgs = {
 					model,
@@ -2695,9 +2700,28 @@ const streamAnthropicOnce = (
 			let fallbackCreditShape: "continuation" | "unchanged" | undefined = undefined;
 			let fallbackCreditTransientRetries = 0;
 			let params: MessageCreateParamsStreaming;
+			// A body frozen before the kill switch was set still carries the fields
+			// it withholds; the credit token is bound to that body, so forfeit it
+			// and build a fresh request. Server tools that already ran would re-run
+			// and re-bill on a tokenless retry, so surface that case instead.
+			const frozenBody = frozenRedemption?.params as MessageCreateParamsStreaming | undefined;
+			const forfeitFrozenForKillSwitch =
+				killSwitchActive &&
+				frozenBody !== undefined &&
+				(carriesThinkingBinding(frozenBody.thinking) ||
+					frozenBody.context_management !== undefined ||
+					carriesSignedCompaction(frozenBody));
+			if (
+				forfeitFrozenForKillSwitch &&
+				frozenRedemption?.refusedContent?.some(block => block.type === "anthropicServerTool")
+			) {
+				throw new AIError.ConfigurationError(
+					"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS was set after a refused turn that ran server tools; its fallback credit cannot be redeemed without the experimental fields the switch withholds.",
+				);
+			}
 			// Recheck expiry here: preparation (image resizing) is async, and an
 			// expired token must fall back to a fresh request as before.
-			if (frozenRedemption && Date.now() <= frozenRedemption.expiresAt) {
+			if (frozenRedemption && !forfeitFrozenForKillSwitch && Date.now() <= frozenRedemption.expiresAt) {
 				const redemption = frozenRedemption;
 				usingFallbackCredit = true;
 				const frozenParams = structuredClone(redemption.params as MessageCreateParamsStreaming);
@@ -2926,7 +2950,12 @@ const streamAnthropicOnce = (
 					const rawBetas = options.fallbackCreditRedemption.betaHeader
 						.split(",")
 						.map(b => b.trim())
-						.filter(b => b && !b.startsWith("server-side-fallback-"));
+						.filter(
+							b =>
+								b &&
+								!b.startsWith("server-side-fallback-") &&
+								(!killSwitchActive || killSwitchBetas[b] !== true),
+						);
 					if (!rawBetas.includes(fallbackCreditBeta) && !rawBetas.includes("fallback-credit-2026-06-01")) {
 						rawBetas.push(fallbackCreditBeta);
 					}
@@ -4008,20 +4037,39 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (model, con
 		retryEmptyCompletion: true,
 	});
 
+/** Whether Claude Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` applies to this model's provider. */
+function experimentalBetasDisabled(model: Model<"anthropic-messages">): boolean {
+	return model.compat.honorsClaudeCodeBetaKillSwitch === true && $flag("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS");
+}
+
+/** Betas withheld under the kill switch: they gate the body fields it removes. */
+const killSwitchBetas: Record<string, true> = {
+	[THINKING_BINDING_CONTROLS_BETA]: true,
+	[contextManagementBeta]: true,
+	[COMPACTION_BETA]: true,
+	[LEGACY_COMPACTION_BETA]: true,
+};
+
 /**
- * Honor Claude Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` kill switch for
- * the `anthropic` provider. Gateways behind `ANTHROPIC_BASE_URL` (LiteLLM,
- * corporate proxies, Bedrock/Vertex bridges) often reject beta-only body
- * fields, so the switch withholds `thinking.block_binding` and
- * `context_management` together with their `anthropic-beta` tokens. Applied
- * through compat so every request builder and retry rung sees one decision.
+ * Honor Claude Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` kill switch on
+ * providers whose compat opts in (`honors-claude-code-beta-kill-switch`).
+ * Gateways behind `ANTHROPIC_BASE_URL` often reject beta-only body fields,
+ * so the switch withholds `thinking.block_binding`, `context_management`, and
+ * server compaction (whose legacy replay needs a `context_management` edit)
+ * together with their betas. Applied through compat so every request builder
+ * and retry rung sees one decision; caller-supplied and frozen-redemption
+ * betas are filtered against {@link killSwitchBetas} where they are merged.
  */
 function withoutDisabledExperimentalBetas(model: Model<"anthropic-messages">): Model<"anthropic-messages"> {
-	if (model.provider !== "anthropic" || !$flag("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS")) return model;
-	if (model.compat.supportsContextManagement === false && !model.compat.supportsThinkingBindingControls) return model;
+	if (!experimentalBetasDisabled(model)) return model;
 	return {
 		...model,
-		compat: { ...model.compat, supportsContextManagement: false, supportsThinkingBindingControls: false },
+		compat: {
+			...model.compat,
+			supportsContextManagement: false,
+			supportsThinkingBindingControls: false,
+			supportsServerCompaction: false,
+		},
 	};
 }
 

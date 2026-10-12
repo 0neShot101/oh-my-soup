@@ -614,6 +614,13 @@ export interface AnthropicCompat {
 	 */
 	firstPartyProvider?: boolean;
 	/**
+	 * Whether the provider honors Claude Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`
+	 * kill switch, which withholds `thinking.block_binding`, `context_management`,
+	 * and Anthropic server compaction with their betas. Rule-owned on the
+	 * provider whose `ANTHROPIC_*` env routing Claude Code shares. Default: false.
+	 */
+	honorsClaudeCodeBetaKillSwitch?: boolean;
+	/**
 	 * Whether requests may carry `output_config.effort` (and its effort beta
 	 * header). Vertex AI rejects the field/header. Default: true.
 	 */

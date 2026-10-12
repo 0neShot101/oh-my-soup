@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added support for `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` on the `anthropic` provider: when set, requests omit `thinking.block_binding` and `context_management` and their beta headers, so `ANTHROPIC_BASE_URL` gateways that reject them keep working.
+- Added support for `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` on the `anthropic` provider: when set, requests omit `thinking.block_binding`, `context_management`, and Anthropic server compaction along with their beta headers, so `ANTHROPIC_BASE_URL` gateways that reject them keep working ([#15458](https://github.com/can1357/oh-my-pi/pull/15458) by [@H4vC](https://github.com/H4vC))
 
 ## [18.9.2] - 2026-10-11
 

@@ -186,9 +186,12 @@ When `CLAUDE_CODE_USE_FOUNDRY` is enabled, Anthropic requests switch to Foundry 
   without enabling Foundry mode.
 - `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` (same contract as Claude Code) makes
   provider `anthropic` requests omit the experimental `thinking.block_binding`
-  and `context_management` body fields along with their `anthropic-beta`
-  tokens. Use it when an `ANTHROPIC_BASE_URL` gateway rejects them; it works
-  with or without Foundry mode.
+  and `context_management` body fields and Anthropic server compaction, along
+  with their `anthropic-beta` tokens, including ones passed as caller betas.
+  Use it when an `ANTHROPIC_BASE_URL` gateway rejects them; it works with or
+  without Foundry mode. Which providers honor it is the
+  `honors-claude-code-beta-kill-switch` compat axis
+  (`compat.honorsClaudeCodeBetaKillSwitch` in `models.yml`).
 - TLS client/server material can be injected from env values:
   `NODE_EXTRA_CA_CERTS`, `CLAUDE_CODE_CLIENT_CERT`, `CLAUDE_CODE_CLIENT_KEY`.
   Each accepts either:
@@ -207,7 +210,7 @@ When `CLAUDE_CODE_USE_FOUNDRY` is enabled, Anthropic requests switch to Foundry 
 | `FOUNDRY_BASE_URL`          | URL string                                     | Anthropic endpoint base URL in Foundry mode                                                                                                                   |
 | `ANTHROPIC_FOUNDRY_API_KEY` | Token string                                   | Used for `Authorization: Bearer <token>`                                                                                                                      |
 | `ANTHROPIC_CUSTOM_HEADERS`  | Header list string                             | Extra headers; format `header-a: value, header-b: value` or newline-separated. Also forwarded outside Foundry whenever `ANTHROPIC_BASE_URL` is non-Anthropic. |
-| `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | Boolean-like string (`1`, `true`, `yes`, `on`) | Omits `thinking.block_binding`, `context_management`, and their beta headers on provider `anthropic` |
+| `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | Boolean-like string (`1`, `true`, `yes`, `on`) | Omits `thinking.block_binding`, `context_management`, server compaction, and their beta headers on provider `anthropic` |
 | `NODE_EXTRA_CA_CERTS`       | PEM path or inline PEM                         | Extra CA chain for server certificate validation                                                                                                              |
 | `CLAUDE_CODE_CLIENT_CERT`   | PEM path or inline PEM                         | mTLS client certificate                                                                                                                                       |
 | `CLAUDE_CODE_CLIENT_KEY`    | PEM path or inline PEM                         | mTLS client private key (must be paired with cert)                                                                                                            |
