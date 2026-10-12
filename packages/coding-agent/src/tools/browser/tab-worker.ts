@@ -183,6 +183,7 @@ import {
 	selectElementOptions,
 	setElementChecked,
 	type ScrollOptions,
+	type UploadDelivery,
 	uploadFilesToElement,
 	wheel,
 } from "./interactions";
@@ -1367,6 +1368,8 @@ export class WorkerCore {
 	#uninstallRejectionGuard: () => void;
 	#mode?: WorkerInitPayload["mode"];
 	#activateForScreenshot = true;
+	/** A browser the user drives (connected, relay) reads paths under its own permissions, so it gets file contents. */
+	#uploadDelivery: UploadDelivery = "paths";
 	#dialogs?: RuntimeDialogController;
 	#network?: BrowserNetworkManager;
 	#initScripts?: InitScriptManager;
@@ -1513,6 +1516,7 @@ export class WorkerCore {
 		try {
 			this.#mode = payload.mode;
 			this.#activateForScreenshot = payload.mode === "headless" || payload.activateForScreenshot !== false;
+			this.#uploadDelivery = payload.mode === "attach" && payload.userDriven === true ? "contents" : "paths";
 			const puppeteer = await loadPuppeteerInWorker(payload.safeDir);
 			registerSemanticQueryHandlers(puppeteer);
 			this.#browser = await connectPuppeteer(puppeteer, {
@@ -3075,6 +3079,7 @@ export class WorkerCore {
 				absolute,
 				`tab.uploadFile(${JSON.stringify(selector)})`,
 				signal,
+				this.#uploadDelivery,
 			);
 		} finally {
 			await handle.dispose().catch(() => undefined);

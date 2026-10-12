@@ -1,3 +1,4 @@
+import type { Protocol } from "devtools-protocol";
 import * as path from "node:path";
 import { untilAborted } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
@@ -625,6 +626,87 @@ export async function selectElementOptions(
 	return outcome.selected;
 }
 
+/** How the page gets uploaded files: paths the browser reads itself, or contents omp reads and hands over. */
+export type UploadDelivery = "paths" | "contents";
+
+/** How long a click has to open a file chooser before the target counts as a drop zone. */
+const FILE_CHOOSER_WAIT_MS = 400;
+
+/** Assign files to a file input and fire the events a user's pick would; returns why it refused. Runs in the page. */
+function assignFilePayloads(el: unknown, payloads: FilePayload[]): string | null {
+	const element = el as PageElement & { multiple: boolean };
+	const page = globalThis as unknown as PageGlobals;
+	if (payloads.length > 1 && !element.multiple)
+		return "Multiple file uploads only work with <input type=file multiple>";
+	const transfer = new page.DataTransfer();
+	for (const payload of payloads) {
+		const bytes = Uint8Array.from(atob(payload.data), character => character.charCodeAt(0));
+		transfer.items.add(new page.File([bytes], payload.name, { type: payload.type }));
+	}
+	element.files = transfer.files;
+	element.dispatchEvent(new page.Event("input", { bubbles: true }));
+	element.dispatchEvent(new page.Event("change", { bubbles: true }));
+	return null;
+}
+
+async function readFilePayloads(absolutePaths: string[], signal?: AbortSignal): Promise<FilePayload[]> {
+	const files: FilePayload[] = [];
+	for (const absolute of absolutePaths) {
+		throwIfAborted(signal);
+		const file = Bun.file(absolute);
+		const data = Buffer.from(await file.arrayBuffer()).toString("base64");
+		files.push({ name: path.basename(absolute), type: file.type || "application/octet-stream", data });
+	}
+	return files;
+}
+
+/**
+ * Click `handle` and hand the file chooser it opens the files' contents; false when no chooser opened.
+ * Puppeteer's FileChooser accepts only paths and hides its input, so the chooser is caught on a CDP session of our own.
+ */
+async function fillClickedFileChooserWithContents(
+	page: Page,
+	handle: ElementHandle,
+	absolutePaths: string[],
+	label: string,
+	signal: AbortSignal | undefined,
+): Promise<boolean> {
+	const session = await untilAborted(signal, () => page.createCDPSession());
+	try {
+		const { promise: opened, resolve } = Promise.withResolvers<Protocol.Page.FileChooserOpenedEvent | null>();
+		session.once("Page.fileChooserOpened", resolve);
+		await untilAborted(signal, () => session.send("Page.enable"));
+		await untilAborted(signal, () => session.send("Page.setInterceptFileChooserDialog", { enabled: true }));
+		await clickElement(handle, label, signal);
+		const timer = setTimeout(() => resolve(null), FILE_CHOOSER_WAIT_MS);
+		const chooser = await untilAborted(signal, () => opened).finally(() => clearTimeout(timer));
+		if (!chooser) return false;
+		if (chooser.backendNodeId === undefined) {
+			throw new ToolError(
+				`${label} opened a File System Access picker (showOpenFilePicker), which automation cannot fill; upload through the page's <input type=file> or drop zone instead`,
+			);
+		}
+		const payloads = await readFilePayloads(absolutePaths, signal);
+		const { object } = await untilAborted(signal, () =>
+			session.send("DOM.resolveNode", { backendNodeId: chooser.backendNodeId }),
+		);
+		const { result } = await untilAborted(signal, () =>
+			session.send("Runtime.callFunctionOn", {
+				objectId: object.objectId,
+				functionDeclaration: `function (payloads) { return (${assignFilePayloads.toString()})(this, payloads); }`,
+				arguments: [{ value: payloads }],
+				returnByValue: true,
+			}),
+		);
+		if (typeof result.value === "string") throw new ToolError(result.value);
+		return true;
+	} finally {
+		// The relay serves every session of a tab from one debugger attachment, so detaching alone leaves it on.
+		await session.send("Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => undefined);
+		await session.detach().catch(() => undefined);
+	}
+}
+
 /** Upload files through an input, native chooser trigger, or synthetic drop-zone event sequence. */
 export async function uploadFilesToElement(
 	page: Page,
@@ -632,6 +714,7 @@ export async function uploadFilesToElement(
 	absolutePaths: string[],
 	label: string,
 	signal?: AbortSignal,
+	delivery: UploadDelivery = "paths",
 ): Promise<void> {
 	const inputType = (await untilAborted(signal, () =>
 		handle.evaluate(el => {
@@ -640,27 +723,31 @@ export async function uploadFilesToElement(
 		}),
 	)) as { tag: string; type: string };
 	if (inputType.tag === "INPUT" && inputType.type.toLowerCase() === "file") {
+		if (delivery === "contents") {
+			const payloads = await readFilePayloads(absolutePaths, signal);
+			const refused = await untilAborted(signal, () => handle.evaluate(assignFilePayloads, payloads));
+			if (refused) throw new ToolError(refused);
+			return;
+		}
 		await untilAborted(signal, () =>
 			(handle as unknown as { uploadFile: (...paths: string[]) => Promise<void> }).uploadFile(...absolutePaths),
 		);
 		return;
 	}
 
-	const chooserPromise = page.waitForFileChooser({ timeout: 400 }).catch(() => null);
-	await clickElement(handle, label, signal);
-	const chooser = await untilAborted(signal, () => chooserPromise);
-	if (chooser) {
-		await untilAborted(signal, () => chooser.accept(absolutePaths));
-		return;
+	if (delivery === "contents") {
+		if (await fillClickedFileChooserWithContents(page, handle, absolutePaths, label, signal)) return;
+	} else {
+		const chooserPromise = page.waitForFileChooser({ timeout: FILE_CHOOSER_WAIT_MS }).catch(() => null);
+		await clickElement(handle, label, signal);
+		const chooser = await untilAborted(signal, () => chooserPromise);
+		if (chooser) {
+			await untilAborted(signal, () => chooser.accept(absolutePaths));
+			return;
+		}
 	}
 
-	const files: FilePayload[] = [];
-	for (const absolute of absolutePaths) {
-		throwIfAborted(signal);
-		const file = Bun.file(absolute);
-		const data = Buffer.from(await file.arrayBuffer()).toString("base64");
-		files.push({ name: path.basename(absolute), type: file.type || "application/octet-stream", data });
-	}
+	const files = await readFilePayloads(absolutePaths, signal);
 	await untilAborted(signal, () =>
 		handle.evaluate((el, payloads) => {
 			const element = el as unknown as PageElement;

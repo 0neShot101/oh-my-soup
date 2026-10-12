@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed browser `uploadFile` failing with "Not allowed" through a relay without file-URL access or in a Chrome on another machine, stalling behind a macOS folder-privacy prompt, and breaking the tab when dropping a file of 128 MB or more: Chrome now gets copies of the files from omp's temporary folder, a browser that cannot read them gets their contents in chunks with the cell's time to arrive, and element handles upload the same way ([#15489](https://github.com/can1357/oh-my-pi/pull/15489) by [@will-bogusz](https://github.com/will-bogusz))
+
 ## [18.10.4] - 2026-10-13
 
 ### Added
