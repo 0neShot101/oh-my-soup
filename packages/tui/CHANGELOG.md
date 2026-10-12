@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Status line `pr` segment no longer keeps the previous branch's PR after switching to the default branch, a detached HEAD, or a branch without a PR
+- Status line `pr` segment no longer keeps the previous branch's PR after switching to the default branch, a detached HEAD, or a branch without a PR ([#15455](https://github.com/can1357/oh-my-pi/pull/15455) by [@ravshansbox](https://github.com/ravshansbox))
 
 ## [18.10.1] - 2026-10-12
 
