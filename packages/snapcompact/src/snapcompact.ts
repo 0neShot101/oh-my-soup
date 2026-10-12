@@ -65,7 +65,8 @@ import {
 	resolveImageTokenization,
 } from "@oh-my-pi/pi-catalog/compat/image-tokenization";
 import { resolveImageCountBudget, resolveInlineImageByteBudget } from "@oh-my-pi/pi-catalog/compat/request-size";
-import { classifyModel, compareRevision, parseRevision, preferredDialect } from "@oh-my-pi/pi-catalog/identity";
+import { resolveModelPolicy } from "@oh-my-pi/pi-catalog/compat/resolve";
+import { classifyModel, compareRevision, parseRevision } from "@oh-my-pi/pi-catalog/identity";
 import { renderSnapcompactPng, snapcompactSupportedChars } from "@oh-my-pi/pi-natives";
 import { formatGroupedPaths, isRecord, prompt } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
@@ -2243,12 +2244,13 @@ function stripThinkingSections(text: string): string {
 
 /**
  * Whether an archive read by `model` may carry assistant reasoning. The archive
- * replays as text into every later request, and Claude refuses inputs that
- * reproduce reasoning (`reasoning_extraction`, issue #6093), so Anthropic-dialect
- * readers get `¶think:` sections and their legend left out.
+ * replays as text into every later request, and a reader whose classifier
+ * refuses reasoning quoted back into its input (the `classifier-cot-extraction`
+ * catalog axis, set for Claude: `reasoning_extraction`, issue #6093) gets
+ * `¶think:` sections and their legend left out.
  */
-export function readerIncludesThinking(model: { id: string }): boolean {
-	return preferredDialect(model.id) !== "anthropic";
+export function readerIncludesThinking(model: Model): boolean {
+	return resolveModelPolicy(model).catalog.classifierCotExtraction !== true;
 }
 
 /** Whether a snapcompact summary declares `¶think:` reasoning scopes: true for
