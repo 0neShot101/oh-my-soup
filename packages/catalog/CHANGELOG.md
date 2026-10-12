@@ -16,6 +16,9 @@
 - Added the `image-count-budget` rule for how many images one request may carry (Anthropic 90, Codex 200, other hosts unchanged) and the `official-image-count-budget` override that applies only on the official endpoint: Anthropic 600 (100 on 200k-window Claude models), Codex 2,000 ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
 - Added a 24 MB inline-image byte budget for the Codex backend, which now counts as its official endpoint at its default URL and at paths under it such as `/codex/responses` ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
 - Added `isOfficialCodexApiUrl` to `wire/codex`, moved from pi-ai ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+### Added
+
+- Added `verified` to `image-tokenization` rules, marking the Claude 4.7+ high-res tier and the GPT-5.5+ and gpt-6-astra rules as matching measured provider billing
 
 ## [18.10.0] - 2026-10-12
 

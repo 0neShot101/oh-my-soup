@@ -97,9 +97,13 @@ class "openai" {
 class "openai" {
 	// gpt-5.6 sizing, shared by later lines. `<10` keeps separator-collapsed
 	// revisions (`openai-gpt-52-codex` parses as 52) off the 5.6+ sizing.
+	// Billing-verified on Codex: gpt-5.6-sol/terra/luna, gpt-6-sol/luna, gpt-6.1-sol
+	// and gpt-daybreak billed 2,881.98–2,882.10 per 1568×1562 frame against 2,882
+	// here (8–18 requests each).
 	revision ">=5.6 <10" {
 		image-tokenization {
 			regime "openai-patch"
+			verified #true
 			multiplier 1.2
 			auto "original"
 			low {
@@ -114,9 +118,12 @@ class "openai" {
 			}
 		}
 	}
+	// Billing-verified on Codex gpt-5.5: 2,877–2,880 per 1568×1562 frame and
+	// 4,392–4,394 per 1932×1920 against 2,882 and 4,392 here (5 requests).
 	revision "=5.5" {
 		image-tokenization {
 			regime "openai-patch"
+			verified #true
 			multiplier 1.2
 			auto "original"
 			low {
@@ -173,9 +180,12 @@ class "openai" {
 		}
 	}
 	// residue: astra's limits differ from the rest of its revision.
+	// Billing-verified on Codex: 2,882.04 ± 0.09 per 1568×1562 frame against
+	// 2,882 here (8 requests).
 	models "*gpt-6-astra*" {
 		image-tokenization {
 			regime "openai-patch"
+			verified #true
 			multiplier 1.2
 			auto "original"
 			low {

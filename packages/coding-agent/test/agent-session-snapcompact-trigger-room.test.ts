@@ -101,9 +101,9 @@ describe("snapcompact archive sized by the compaction trigger", () => {
 		return { session, notices };
 	}
 
-	/** What the frame cap charges per frame of `model`'s shape: its own price, at least the ceiling. */
+	/** What the frame cap charges per frame of `model`'s shape. */
 	function framePrice(model: Model): number {
-		return Math.max(snapcompact.FRAME_TOKEN_ESTIMATE, snapcompact.resolveShape(model).frameTokenEstimate);
+		return snapcompact.plannedFrameTokens(snapcompact.resolveShape(model));
 	}
 
 	/** Tokens the session's tokenizer charges for the committed archive's frames. */
@@ -327,9 +327,10 @@ describe("snapcompact archive sized by the compaction trigger", () => {
 			spy.mockRestore();
 			return maxFrames;
 		};
-		const plain = await frames("sig");
+		// Both signatures outweigh keepRecentTokens, so the same turns stay kept.
+		const plain = await frames("x".repeat(40_000));
 		expect(plain).toBeGreaterThan(1);
-		// ~40k tokens of signature text, which the trigger never counts.
+		// ~30k more tokens of signature text, which the trigger never counts.
 		expect(await frames("x".repeat(160_000))).toBe(plain);
 	});
 
@@ -353,6 +354,28 @@ describe("snapcompact archive sized by the compaction trigger", () => {
 		expect(onHaiku).toBeGreaterThan(0);
 		expect(onHaiku * framePrice(haiku)).toBeLessThanOrEqual(SHARE * 40_000);
 		expect(onOpus).toBeGreaterThan(onHaiku);
+	});
+
+	it("divides the room by a billing-verified frame price and keeps the ceiling for an unverified one", async () => {
+		const openai = (id: string): Model => {
+			const bundled = getBundledModel("openai", id);
+			if (!bundled) throw new Error(`Expected bundled openai/${id}`);
+			return { ...bundled, contextWindow: 1_000_000, maxTokens: 64_000 };
+		};
+		// gpt-5.5's rule is billing-verified, gpt-5.4's is not; both bill a 1568px frame alike.
+		const verified = openai("gpt-5.5");
+		const unverified = openai("gpt-5.4");
+		const price = snapcompact.resolveShape(verified).frameTokenEstimate;
+		expect(snapcompact.resolveShape(unverified).frameTokenEstimate).toBe(price);
+		expect(price).toBeLessThan(snapcompact.FRAME_TOKEN_ESTIMATE);
+
+		const settings = { "compaction.thresholdTokens": 100_000 };
+		const atPrice = await requestedFrames(verified, settings);
+		const atCeiling = await requestedFrames(unverified, settings);
+		expect(atCeiling).toBeGreaterThan(1);
+		// The same room under the trigger, divided by the frame price instead of the ceiling.
+		expect(atPrice).toBeGreaterThanOrEqual(Math.floor((atCeiling * snapcompact.FRAME_TOKEN_ESTIMATE) / price));
+		expect(atPrice).toBeLessThan(snapcompact.maxFramesForDataBudget(snapcompact.resolveShape(verified)));
 	});
 
 	it("still commits a manual compaction that leaves no room under the trigger", async () => {
