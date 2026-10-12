@@ -10,13 +10,13 @@
 - Fixed macOS `press()` on a scrolled-out row in a Mac Catalyst app reporting success while nothing happened: the element is asked to scroll into view first ([#15607](https://github.com/can1357/oh-my-pi/pull/15607) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed shell builtins on Windows resolving drive-relative paths (`C:`, `C:name`) against the agent process's start directory instead of the shell's working directory, which let `cd /c/Temp/x && rm -rf C:` delete the start directory; `rm` now also refuses a bare drive operand like `.` ([#15511](https://github.com/can1357/oh-my-pi/issues/15511))
 - Fixed `renderMermaidAscii` printing character references in labels verbatim: HTML entities (`&lt;`, `&amp;`, `&#60;`, `&#x3C;`) and Mermaid entity codes (`#quot;`, `#60;`) now render as the characters they name ([#15619](https://github.com/can1357/oh-my-pi/issues/15619))
+- Fixed `read` and `while read` hanging on process-substitution input ([#15501](https://github.com/can1357/oh-my-pi/issues/15501))
 
 ## [18.10.4] - 2026-10-13
 
 ### Fixed
 
 - Fixed `pwsh` code blocks rendering without PowerShell syntax colors ([#15008](https://github.com/can1357/oh-my-pi/issues/15008)).
-- Fixed `read` and `while read` hanging on process-substitution input ([#15501](https://github.com/can1357/oh-my-pi/issues/15501)).
 
 ## [18.10.2] - 2026-10-12
 
