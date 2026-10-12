@@ -14,12 +14,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { pruneToolOutputs } from "@oh-my-pi/pi-agent-core/compaction/pruning";
+import { Tokenizer } from "@oh-my-pi/pi-agent-core/tokenizer";
 import { type AsyncJob, AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentsHubDeps } from "@oh-my-pi/pi-coding-agent/modes/agents-hub-deps";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -29,7 +32,8 @@ import type { AgentProgress, SingleResult, TaskParams } from "@oh-my-pi/pi-tui/t
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { snapshotJobs } from "@oh-my-pi/pi-coding-agent/async/job-control";
 import { cfgTaskAgentModelOverrides, cfgTaskMaxConcurrency } from "@oh-my-pi/pi-coding-agent/task/settings";
-import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
+import { TempDir } from "@oh-my-pi/pi-utils";
+import { createAssistantMessage, createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
 const taskAgent: AgentDefinition = {
 	name: "task",
@@ -158,6 +162,80 @@ describe("task spawn routing", () => {
 		expect(job!.resultText).toContain("history://Spawnling");
 		expect(runSpy).toHaveBeenCalledTimes(1);
 		expect(runSpy.mock.calls[0]?.[0].modelOverride).toEqual(["openai/gpt-4.1-mini"]);
+	});
+
+	it("restores async guidance after persisted pruning or compaction removes its carrier", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [taskAgent], projectAgentsDir: null });
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => makeResult(options.id ?? "?"));
+		const temp = TempDir.createSync("task-contract-");
+		const manager = createManager();
+		let sessionManager = SessionManager.create(temp.path(), temp.path());
+		const session: ToolSession = { ...createSession({ manager }), sessionManager };
+		try {
+			const tool = await TaskTool.create(session);
+			const spawn = (name: string) =>
+				tool.execute(`tc-${name}`, { agent: "task", name, task: "Review the parser." } as TaskParams);
+			const first = await spawn("First");
+			expect(getFirstText(first)).toContain("Results auto-deliver; NEVER poll.");
+			sessionManager.appendMessage({
+				...createAssistantMessage(""),
+				stopReason: "toolUse",
+				content: [{ type: "toolCall", id: "tc-First", name: "task", arguments: {} }],
+			});
+			sessionManager.appendMessage({
+				role: "toolResult",
+				toolCallId: "tc-First",
+				toolName: "task",
+				content: first.content,
+				details: first.details,
+				isError: false,
+				timestamp: Date.now(),
+			});
+			await sessionManager.ensureOnDisk();
+			expect(getFirstText(await spawn("Second"))).not.toContain("Results auto-deliver");
+			const pruning = pruneToolOutputs(sessionManager.getBranch(), new Tokenizer(), {
+				protectTokens: 0,
+				minimumSavings: 0,
+				protectedTools: [],
+				pruneUseless: false,
+			});
+			expect(pruning.prunedCount).toBe(1);
+			await sessionManager.rewriteEntries();
+			await sessionManager.flush();
+			const sessionFile = sessionManager.getSessionFile();
+			if (!sessionFile) throw new Error("Expected a persisted session file");
+			sessionManager = await SessionManager.open(sessionFile, temp.path());
+			session.sessionManager = sessionManager;
+			const afterPrune = await spawn("AfterPrune");
+			expect(getFirstText(afterPrune)).toContain("Results auto-deliver; NEVER poll.");
+			sessionManager.appendMessage({
+				...createAssistantMessage(""),
+				stopReason: "toolUse",
+				content: [{ type: "toolCall", id: "tc-AfterPrune", name: "task", arguments: {} }],
+			});
+			sessionManager.appendMessage({
+				role: "toolResult",
+				toolCallId: "tc-AfterPrune",
+				toolName: "task",
+				content: afterPrune.content,
+				details: afterPrune.details,
+				isError: false,
+				timestamp: Date.now(),
+			});
+			expect(getFirstText(await spawn("StillVisible"))).not.toContain("Results auto-deliver");
+			const kept = sessionManager.appendMessage({
+				role: "user",
+				content: "Continue reviewing.",
+				timestamp: Date.now(),
+			});
+			sessionManager.appendCompaction("Earlier review finished.", undefined, kept, 1000);
+			expect(getFirstText(await spawn("AfterCompaction"))).toContain("Results auto-deliver; NEVER poll.");
+		} finally {
+			await Promise.all(manager.getAllJobs().map(job => job.promise));
+			await manager.dispose({ timeoutMs: 1000 });
+			await sessionManager.flush();
+			await temp.remove();
+		}
 	});
 
 	it("uses the persisted /agents model after replacing a session-only task selection", async () => {

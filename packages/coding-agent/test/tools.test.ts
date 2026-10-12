@@ -2348,14 +2348,24 @@ function b() {
 			expect(result.details?.timeoutSeconds).toBe(300);
 		});
 
-		it("should record wall time in text content and details", async () => {
+		it("omits subsecond wall time from model text while retaining timing details", async () => {
 			const result = await bashTool.execute("test-call-walltime", { command: "echo wt" });
 
 			const output = getTextOutput(result);
 			expect(output).toContain("wt");
-			expect(output).toMatch(/Wall time: \d+\.\d{2} seconds/);
+			expect(output).not.toContain("Wall time:");
 			expect(typeof result.details?.wallTimeMs).toBe("number");
 			expect(result.details?.wallTimeMs).toBeGreaterThanOrEqual(0);
+			expect(result.details?.wallTimeMs).toBeLessThan(1000);
+		});
+
+		it("retains wall time and exit status for slow failed commands", async () => {
+			const result = await bashTool.execute("test-call-walltime-slow", { command: "sleep 1.1; echo wt; exit 7" });
+			expect(getTextOutput(result)).toContain("wt");
+			expect(getTextOutput(result)).toMatch(/Wall time: \d+\.\d{2} seconds/);
+			expect(result.details?.wallTimeMs).toBeGreaterThanOrEqual(1000);
+			expect(result.details?.exitCode).toBe(7);
+			expect(result.isError).toBe(true);
 		});
 
 		it("should block built-in interceptor commands when enabled with default patterns", async () => {
