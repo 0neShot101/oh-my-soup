@@ -122,14 +122,22 @@ type ReadEntry = {
 	status: "pending" | "success" | "warning" | "error";
 	correctedFrom?: string;
 	contentText?: string;
-	/** Preview as rendered Markdown instead of numbered source; see {@link readResultIsMarkdown}. */
-	markdown?: boolean;
+	/** The result's `details.contentType`; see {@link previewsMarkdown}. */
+	contentType?: string;
 	/** The call's `raw` arg, which keeps Markdown previews as source. */
 	raw?: boolean;
 	conflictCount?: number;
 	codeStartLine?: number;
 	codeLineNumbers?: Array<number | null>;
 };
+
+/**
+ * Whether an entry previews as rendered Markdown instead of numbered source.
+ * Derived on each render so `raw`/path args that land after the result still apply.
+ */
+function previewsMarkdown(entry: ReadEntry): boolean {
+	return readResultIsMarkdown({ contentType: entry.contentType }, { path: entry.path, raw: entry.raw });
+}
 
 type ReadUsageRow = {
 	toolCallIds: readonly string[];
@@ -490,7 +498,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			typeof details?.conflictCount === "number" && details.conflictCount > 0 ? details.conflictCount : undefined;
 		entry.conflictCount = conflictCount;
 		entry.status = result.isError ? "error" : suffixResolution ? "warning" : "success";
-		entry.markdown = readResultIsMarkdown(details, { path: entry.path, raw: entry.raw });
+		entry.contentType = details?.contentType;
 		// Store clean display content for preview/expanded display when the read
 		// tool provides it; fall back to model-facing text for legacy results.
 		const displayContent = details?.displayContent;
@@ -723,7 +731,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	/** One read's content, clamped per file while the group is collapsed. */
 	#nativePreview(entry: ReadEntry): NativeChild[] {
-		if (entry.markdown) {
+		if (previewsMarkdown(entry)) {
 			return [
 				card(
 					{
@@ -815,7 +823,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 						preview: { lines: COLLAPSED_PREVIEW_LINES },
 					},
 					[
-						entry.markdown
+						previewsMarkdown(entry)
 							? md(entry.contentText ?? "")
 							: code(entry.contentText ?? "", {
 									lang: getLanguageFromPath(split.path),
@@ -1173,7 +1181,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			render: (width: number) => {
 				if (cachedLines && cachedWidth === width) return cachedLines;
 				const status = entry.status === "success" ? "complete" : entry.status;
-				cachedLines = entry.markdown
+				cachedLines = previewsMarkdown(entry)
 					? renderMarkdownCell(
 							{
 								content: entry.contentText ?? "",

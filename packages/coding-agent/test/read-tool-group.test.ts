@@ -409,6 +409,24 @@ describe("ReadToolGroupComponent", () => {
 			expect(source).toContain("Some **bold** text.");
 		}
 	});
+
+	it("switches a Markdown preview back to source when raw args arrive after the result", () => {
+		const component = new ReadToolGroupComponent({ showContentPreview: true });
+		const readme = path.resolve("/tmp/README.md");
+		component.updateArgs({ path: readme }, "read-md");
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "# Title\n\nSome **bold** text." }],
+				details: { contentType: "text/markdown" },
+			},
+			false,
+			"read-md",
+		);
+		expect(Bun.stripANSI(component.render(120).join("\n"))).not.toContain("# Title");
+
+		component.updateArgs({ path: readme, raw: true }, "read-md");
+		expect(Bun.stripANSI(component.render(120).join("\n"))).toContain("Some **bold** text.");
+	});
 });
 
 describe("readArgsCollapseIntoGroup", () => {
