@@ -56,6 +56,7 @@ type ActionabilityResult = { ok: true; x: number; y: number } | { ok: false; rea
 interface FilePayload {
 	name: string;
 	type: string;
+	lastModified: number;
 	data: string;
 }
 
@@ -119,8 +120,8 @@ interface PageGlobals {
 		pointerEvents: string;
 		opacity: string;
 	};
-	Event: new (type: string, options: { bubbles: boolean }) => unknown;
-	File: new (parts: Uint8Array[], name: string, options: { type: string }) => unknown;
+	Event: new (type: string, options: { bubbles: boolean; composed?: boolean }) => unknown;
+	File: new (parts: Uint8Array[], name: string, options: { type: string; lastModified?: number }) => unknown;
 	DataTransfer: new () => { items: { add(file: unknown): void }; files: unknown };
 	DragEvent: new (type: string, options: { bubbles: boolean; cancelable: boolean; dataTransfer: unknown }) => unknown;
 }
@@ -638,13 +639,16 @@ function assignFilePayloads(el: unknown, payloads: FilePayload[]): string | null
 	const page = globalThis as unknown as PageGlobals;
 	if (payloads.length > 1 && !element.multiple)
 		return "Multiple file uploads only work with <input type=file multiple>";
+	if (element.tagName !== "INPUT" || element.type?.toLowerCase() !== "file") return "Node is not a file input element";
 	const transfer = new page.DataTransfer();
 	for (const payload of payloads) {
 		const bytes = Uint8Array.from(atob(payload.data), character => character.charCodeAt(0));
-		transfer.items.add(new page.File([bytes], payload.name, { type: payload.type }));
+		// A browser picking the file itself reports the bare MIME type and the file's modification time.
+		const type = payload.type.split(";")[0];
+		transfer.items.add(new page.File([bytes], payload.name, { type, lastModified: payload.lastModified }));
 	}
 	element.files = transfer.files;
-	element.dispatchEvent(new page.Event("input", { bubbles: true }));
+	element.dispatchEvent(new page.Event("input", { bubbles: true, composed: true }));
 	element.dispatchEvent(new page.Event("change", { bubbles: true }));
 	return null;
 }
@@ -655,10 +659,29 @@ async function readFilePayloads(absolutePaths: string[], signal?: AbortSignal): 
 		throwIfAborted(signal);
 		const file = Bun.file(absolute);
 		const data = Buffer.from(await file.arrayBuffer()).toString("base64");
-		files.push({ name: path.basename(absolute), type: file.type || "application/octet-stream", data });
+		files.push({
+			name: path.basename(absolute),
+			type: file.type || "application/octet-stream",
+			lastModified: file.lastModified,
+			data,
+		});
 	}
 	return files;
 }
+
+/** Give a file input the files' contents instead of their paths. */
+export async function uploadFileContents(
+	handle: ElementHandle,
+	absolutePaths: string[],
+	signal?: AbortSignal,
+): Promise<void> {
+	const payloads = await readFilePayloads(absolutePaths, signal);
+	const refused = await untilAborted(signal, () => handle.evaluate(assignFilePayloads, payloads));
+	if (refused) throw new ToolError(refused);
+}
+
+/** Pages with a chooser-trigger upload in flight: a second one would catch the first one's chooser. */
+const pagesAwaitingChooser = new WeakSet<Page>();
 
 /**
  * Click `handle` and hand the file chooser it opens the files' contents; false when no chooser opened.
@@ -671,15 +694,24 @@ async function fillClickedFileChooserWithContents(
 	label: string,
 	signal: AbortSignal | undefined,
 ): Promise<boolean> {
-	const session = await untilAborted(signal, () => page.createCDPSession());
+	if (pagesAwaitingChooser.has(page)) {
+		throw new ToolError(`${label} cannot run while another uploadFile on this tab waits for its file chooser`);
+	}
+	pagesAwaitingChooser.add(page);
+	let timer: NodeJS.Timeout | undefined;
+	const session = await untilAborted(signal, () => page.createCDPSession()).catch(error => {
+		pagesAwaitingChooser.delete(page);
+		throw error;
+	});
 	try {
 		const { promise: opened, resolve } = Promise.withResolvers<Protocol.Page.FileChooserOpenedEvent | null>();
 		session.once("Page.fileChooserOpened", resolve);
 		await untilAborted(signal, () => session.send("Page.enable"));
 		await untilAborted(signal, () => session.send("Page.setInterceptFileChooserDialog", { enabled: true }));
+		// The wait covers the click, so a target that only becomes clickable later counts as a drop zone.
+		timer = setTimeout(() => resolve(null), FILE_CHOOSER_WAIT_MS);
 		await clickElement(handle, label, signal);
-		const timer = setTimeout(() => resolve(null), FILE_CHOOSER_WAIT_MS);
-		const chooser = await untilAborted(signal, () => opened).finally(() => clearTimeout(timer));
+		const chooser = await untilAborted(signal, () => opened);
 		if (!chooser) return false;
 		if (chooser.backendNodeId === undefined) {
 			throw new ToolError(
@@ -690,7 +722,7 @@ async function fillClickedFileChooserWithContents(
 		const { object } = await untilAborted(signal, () =>
 			session.send("DOM.resolveNode", { backendNodeId: chooser.backendNodeId }),
 		);
-		const { result } = await untilAborted(signal, () =>
+		const { result, exceptionDetails } = await untilAborted(signal, () =>
 			session.send("Runtime.callFunctionOn", {
 				objectId: object.objectId,
 				functionDeclaration: `function (payloads) { return (${assignFilePayloads.toString()})(this, payloads); }`,
@@ -698,12 +730,19 @@ async function fillClickedFileChooserWithContents(
 				returnByValue: true,
 			}),
 		);
+		if (exceptionDetails) {
+			throw new ToolError(
+				`${label} could not fill its file chooser: ${exceptionDetails.exception?.description ?? exceptionDetails.text}`,
+			);
+		}
 		if (typeof result.value === "string") throw new ToolError(result.value);
 		return true;
 	} finally {
+		clearTimeout(timer);
 		// The relay serves every session of a tab from one debugger attachment, so detaching alone leaves it on.
 		await session.send("Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => undefined);
 		await session.detach().catch(() => undefined);
+		pagesAwaitingChooser.delete(page);
 	}
 }
 
@@ -724,9 +763,7 @@ export async function uploadFilesToElement(
 	)) as { tag: string; type: string };
 	if (inputType.tag === "INPUT" && inputType.type.toLowerCase() === "file") {
 		if (delivery === "contents") {
-			const payloads = await readFilePayloads(absolutePaths, signal);
-			const refused = await untilAborted(signal, () => handle.evaluate(assignFilePayloads, payloads));
-			if (refused) throw new ToolError(refused);
+			await uploadFileContents(handle, absolutePaths, signal);
 			return;
 		}
 		await untilAborted(signal, () =>

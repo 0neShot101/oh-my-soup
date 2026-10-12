@@ -184,6 +184,7 @@ import {
 	setElementChecked,
 	type ScrollOptions,
 	type UploadDelivery,
+	uploadFileContents,
 	uploadFilesToElement,
 	wheel,
 } from "./interactions";
@@ -684,6 +685,7 @@ export function toActionableHandle(
 	handle: ElementHandle,
 	guard?: HandleOpGuard,
 	invalidate?: () => Promise<void>,
+	uploadFiles?: (filePaths: string[], signal: AbortSignal) => Promise<void>,
 ): ActionableHandle {
 	const enriched = handle as HandleWithRawMethods;
 	const methods = enriched as unknown as Partial<Record<GuardedHandleMethod, RawHandleMethod>>;
@@ -839,6 +841,19 @@ export function toActionableHandle(
 				invalidate,
 			),
 		);
+	if (uploadFiles) {
+		enriched.uploadFile = (...filePaths: string[]) =>
+			guard<void>("handle.uploadFile()", signal =>
+				runGuardedHandleAction(
+					enriched,
+					originals,
+					"handle.uploadFile()",
+					signal,
+					() => uploadFiles(filePaths, signal),
+					invalidate,
+				),
+			);
+	}
 	return enrichElementQueries(enriched, guard);
 }
 
@@ -2125,6 +2140,15 @@ export class WorkerCore {
 					this.#clearElementCache();
 					await this.#stopLoading();
 				},
+				// A user-driven browser gets contents here too; relative paths resolve as Puppeteer's own method does.
+				this.#uploadDelivery === "contents"
+					? (filePaths, sig) =>
+							uploadFileContents(
+								handle,
+								filePaths.map(filePath => path.resolve(filePath)),
+								sig,
+							)
+					: undefined,
 			);
 		return {
 			name,
