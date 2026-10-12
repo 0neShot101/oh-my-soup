@@ -309,7 +309,13 @@ describe("compiled image-tokenization payloads", () => {
 
 describe("resolveImageMaxEdge", () => {
 	it("reports Cursor's 1024px edge for its Claude and GPT readers and none where images pass through", () => {
-		for (const id of ["claude-opus-5-high", "claude-4.6-sonnet-medium", "claude-fable-5-1-high", "gpt-5.4-nano"]) {
+		for (const id of [
+			"claude-opus-5-high",
+			"claude-4.6-sonnet-medium",
+			"claude-fable-5-1-high",
+			"gpt-5.4-nano",
+			"default",
+		]) {
 			const model = getBundledModel("cursor", id);
 			if (!model) throw new Error(`Expected bundled cursor/${id}`);
 			expect(resolveImageMaxEdge(model)).toBe(1024);

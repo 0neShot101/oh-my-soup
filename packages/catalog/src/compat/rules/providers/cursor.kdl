@@ -8,9 +8,12 @@ provider "cursor" {
 	}
 
 	thinking-mode "effort"
-	// Cursor's default route selects a differently priced backing model per request.
+	// Cursor's default route selects a differently priced backing model per
+	// request, Claude and GPT included, so its images get their 1024px edge;
+	// Gemini and Composer read 1024px pages as well as larger ones.
 	models "default" {
 		pricing-status "variable"
+		image-max-edge 1024
 	}
 
 	// Cursor re-encodes every image for its Claude and GPT upstreams to fit
