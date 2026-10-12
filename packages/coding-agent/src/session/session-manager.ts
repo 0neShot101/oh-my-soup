@@ -1254,10 +1254,7 @@ export class SessionManager {
 			id: this.#sessionId,
 			timestamp,
 			parentSession: previousSessionId,
-			providerPromptCacheKey:
-				this.#header.taskPromptCacheKey !== undefined
-					? undefined
-					: (this.#header.providerPromptCacheKey ?? previousSessionId),
+			providerPromptCacheKey: SessionManager.getInheritedProviderPromptCacheKey(this.#header),
 		};
 		this.#closeWriterEventually();
 		this.#sessionFile = to;
@@ -2431,10 +2428,7 @@ export class SessionManager {
 			cwd: this.#cwd,
 			additionalDirectories: this.#additionalDirectories.length > 0 ? [...this.#additionalDirectories] : undefined,
 			parentSession: parentSessionId,
-			providerPromptCacheKey:
-				this.#header.taskPromptCacheKey !== undefined
-					? undefined
-					: (this.#header.providerPromptCacheKey ?? parentSessionId),
+			providerPromptCacheKey: SessionManager.getInheritedProviderPromptCacheKey(this.#header),
 			taskPromptCacheKey: this.#header.taskPromptCacheKey,
 		};
 		this.#sessionName = this.#header.title;
@@ -3753,6 +3747,10 @@ export class SessionManager {
 		return this.#header;
 	}
 
+	static getInheritedProviderPromptCacheKey(header: SessionHeader | undefined): string | undefined {
+		return header?.taskPromptCacheKey !== undefined ? undefined : (header?.providerPromptCacheKey ?? header?.id);
+	}
+
 	/** Seed automatic affinity without turning a legacy fork identity into an explicit override. */
 	async setTaskPromptCacheKey(key: string): Promise<void> {
 		if (this.#header.taskPromptCacheKey === key && this.#header.providerPromptCacheKey === undefined) return;
@@ -4011,10 +4009,7 @@ export class SessionManager {
 		manager.#resetToNewSession(
 			{
 				parentSession: sourceHeader?.id,
-				providerPromptCacheKey:
-					sourceHeader?.taskPromptCacheKey !== undefined
-						? undefined
-						: (sourceHeader?.providerPromptCacheKey ?? sourceHeader?.id),
+				providerPromptCacheKey: SessionManager.getInheritedProviderPromptCacheKey(sourceHeader),
 				taskPromptCacheKey: sourceHeader?.taskPromptCacheKey,
 			},
 			options?.sessionFile,

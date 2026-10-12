@@ -95,6 +95,7 @@ describe("task sibling prompt-cache routing", () => {
 		],
 		["Muse nested lineage", "muse-code", "muse-spark-1.3-contributor", undefined, "root:task", "root:task:task"],
 		["Luna keeps child keys", "openai-codex", "gpt-6-luna", "explicit-parent", "automatic-parent", undefined],
+		["OpenAI keeps child keys", "openai", "gpt-5.4", undefined, undefined, undefined],
 		["Gemini omits cache keys", "google-antigravity", "gemini-3.8-flash", "explicit-parent", undefined, undefined],
 	] as const)(
 		"%s without sharing child conversation or response state",
@@ -138,6 +139,7 @@ describe("task sibling prompt-cache routing", () => {
 			const mock = createMockModel({
 				handler: { content: [{ type: "toolCall", name: "yield", arguments: { data: { findings: [] } } }] },
 			});
+			const followup = createMockModel({ handler: { content: [{ type: "text", text: "Review complete." }] } });
 			const realSettingsStream = settingsStream.createSettingsAwareStreamFn;
 			vi.spyOn(settingsStream, "createSettingsAwareStreamFn").mockImplementation((settings, _base, slowMode) =>
 				realSettingsStream(
@@ -183,7 +185,7 @@ describe("task sibling prompt-cache routing", () => {
 							wireKey,
 						});
 						streamOptions?.providerSessionState?.set("test-response-state", { close() {} });
-						return mock.stream(requestModel, context, streamOptions);
+						return (requests.length <= 2 ? mock : followup).stream(requestModel, context, streamOptions);
 					},
 					slowMode,
 				),
@@ -198,7 +200,7 @@ describe("task sibling prompt-cache routing", () => {
 					providerSessionId: "parent-provider-lineage",
 					providerPromptCacheKey: parentCacheKey,
 					taskPromptCacheKey: parentTaskKey,
-					sessionManager: SessionManager.inMemory(directory.path()),
+					sessionManager: SessionManager.create(directory.path(), directory.join("parent")),
 					settings: Settings.isolated({
 						"async.enabled": false,
 						"task.structured": true,
@@ -239,6 +241,45 @@ describe("task sibling prompt-cache routing", () => {
 						? [false, false]
 						: requests.map(request => expected ?? request.sessionId),
 				);
+				if (provider === "openai" || provider === "openai-codex") {
+					const child = AgentRegistry.global()
+						.list()
+						.find(candidate => candidate.session && candidate.session !== parent)?.session;
+					if (!child) throw new Error("Expected a live Task child");
+					const originalKey = child.agent.sessionId;
+					const originalFile = child.sessionManager.getSessionFile();
+					if (!originalFile) throw new Error("Expected a persisted Task child");
+					expect(await child.fork(undefined, { requireIdle: true })).toBe(true);
+					await child.prompt("Continue after forking.");
+					expect(requests.at(-1)?.wireKey).toBe(originalKey);
+					expect(requests.at(-1)?.sessionId).not.toBe(originalKey);
+					await child.sessionManager.flush();
+					const forkFile = child.sessionManager.getSessionFile()!;
+					await child.dispose();
+					const forked = await SessionManager.forkFrom(originalFile, directory.path(), directory.join("fork"));
+					const reopened = await SessionManager.open(forkFile, directory.path());
+					for (const sessionManager of [forked, reopened]) {
+						const { session } = await sdk.createAgentSession({
+							cwd: directory.path(),
+							agentDir: directory.path(),
+							authStorage,
+							modelRegistry,
+							sessionManager,
+							settings: parent.settings,
+							disableExtensionDiscovery: true,
+							skills: [],
+							contextFiles: [],
+							promptTemplates: [],
+							rules: [],
+							enableMCP: false,
+							enableLsp: false,
+						});
+						await session.prompt("Continue the copied review.");
+						expect(requests.at(-1)?.wireKey).toBe(originalKey);
+						expect(requests.at(-1)?.sessionId).not.toBe(originalKey);
+						expect(sessionManager.getHeader()?.taskPromptCacheKey).toBeUndefined();
+					}
+				}
 				if (_name === "Muse provider-session fallback") {
 					const ref = AgentRegistry.global()
 						.list()
