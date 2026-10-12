@@ -139,6 +139,8 @@ export interface InlineToolResultCandidate {
 	frames: number;
 	/** Error tool results must stay text-only for provider API validation. */
 	isError?: boolean;
+	/** The tool that produced it; `read` results are imaged only for readers that opt in. */
+	toolName?: string;
 	/** Images in the context up to and including this tool result (its own source images count). */
 	imagesThrough: number;
 }
@@ -163,6 +165,8 @@ export interface InlinePlanInput {
 	systemPrompt: InlineSystemPromptCandidate | undefined;
 	/** Whether a user message exists to carry the prompt frames. */
 	hasUserMessage: boolean;
+	/** The reader opted in to `read` results as frames (`snapcompact.readerImagesReadResults`). */
+	imageReadResults: boolean;
 }
 
 export interface InlineSwapPlan {
@@ -220,6 +224,9 @@ export function planInlineSwaps(input: InlinePlanInput): InlineSwapPlan {
 		// stop — later smaller ones may fit.
 		for (const candidate of input.toolResults) {
 			if (candidate.isError) continue;
+			// A reader that has not opted in edits from `read` output: frames lose
+			// its exact indentation, so it stays text.
+			if (candidate.toolName === "read" && !input.imageReadResults) continue;
 			if (candidate.textTokens < MIN_TOOL_RESULT_TOKENS) continue;
 			if (candidate.frames === 0 || candidate.imagesThrough + frames + candidate.frames > imageLimit) continue;
 			if (!passesSavingsGate(candidate.frames, input.shape, candidate.textTokens)) continue;
@@ -337,6 +344,7 @@ function stampCapRetractions(
 export interface InlineMessageView {
 	role: string;
 	toolCallId?: string;
+	toolName?: string;
 	content?: unknown;
 	isError?: boolean;
 }
@@ -352,6 +360,7 @@ interface BuiltInlineToolResultCandidate {
  */
 function buildInlineToolResultCandidate(
 	toolCallId: string,
+	toolName: string | undefined,
 	content: unknown,
 	messageIsError: boolean | undefined,
 	imagesThrough: number,
@@ -378,6 +387,7 @@ function buildInlineToolResultCandidate(
 			textTokens,
 			frames: !isError && textTokens >= MIN_TOOL_RESULT_TOKENS ? snapcompact.frames(text, { shape }) : 0,
 			isError,
+			...(toolName !== undefined && { toolName }),
 			imagesThrough,
 		},
 		text,
@@ -417,6 +427,7 @@ function scanInlineContext(
 		if (!renderToolResults || message.role !== "toolResult" || typeof message.toolCallId !== "string") continue;
 		const built = buildInlineToolResultCandidate(
 			message.toolCallId,
+			message.toolName,
 			message.content,
 			message.isError,
 			images,
@@ -510,6 +521,7 @@ export function estimateInlineSavings(input: {
 		toolResults: candidates,
 		systemPrompt: systemPromptCandidate,
 		hasUserMessage: true,
+		imageReadResults: snapcompact.readerImagesReadResults(model),
 	});
 
 	let savedTokens = 0;
@@ -648,6 +660,7 @@ export class SnapcompactInlineTransformer {
 			toolResults: scan.toolResults.map(built => built.candidate),
 			systemPrompt: systemPromptCandidate,
 			hasUserMessage: userIndex >= 0,
+			imageReadResults: snapcompact.readerImagesReadResults(model),
 		});
 
 		let changed = false;

@@ -44,11 +44,11 @@ function withTestShape(options: Omit<SnapcompactInlineOptions, "shape">): Snapco
 	return { ...options, shape: TEST_SHAPE };
 }
 
-function toolResult(id: string, text: string): ToolResultMessage {
+function toolResult(id: string, text: string, toolName = "grep"): ToolResultMessage {
 	return {
 		role: "toolResult",
 		toolCallId: id,
-		toolName: "read",
+		toolName,
 		content: [{ type: "text", text }],
 		isError: false,
 		timestamp: 0,
@@ -61,6 +61,7 @@ function userMessage(text: string): Message {
 
 function makeModel(
 	overrides: {
+		id?: string;
 		provider?: string;
 		input?: ("text" | "image")[];
 		api?: "anthropic-messages" | "google-generative-ai";
@@ -68,7 +69,7 @@ function makeModel(
 	} = {},
 ) {
 	return buildModel({
-		id: "test-model",
+		id: overrides.id ?? "test-model",
 		name: "Test Model",
 		api: overrides.api ?? "anthropic-messages",
 		provider: overrides.provider ?? "anthropic",
@@ -164,6 +165,31 @@ describe("SnapcompactInlineTransformer", () => {
 
 		// System prompt untouched when only tool results are enabled.
 		expect(result.systemPrompt).toBe(context.systemPrompt);
+	});
+
+	it("images a large `read` result only for a reader whose catalog rule opts in", async () => {
+		const context: Context = {
+			systemPrompt: ["system"],
+			messages: [userMessage("go"), toolResult("read-1", LARGE, "read"), toolResult("grep-1", LARGE, "grep")],
+		};
+		const imaged = (message: Message) =>
+			message.role === "toolResult" && message.content.slice(1).some(block => block.type === "image");
+		const options = withTestShape({ renderSystemPrompt: "none", renderToolResults: true });
+
+		// Opus 5.5 opts in: both results go out as frames.
+		const opus = await new SnapcompactInlineTransformer(options).transform(
+			context,
+			makeModel({ id: "claude-opus-5-5" }),
+		);
+		expect(opus.messages.map(imaged)).toEqual([false, true, true]);
+
+		// Haiku 5.5 does not: `read` keeps its text, other tools are still imaged.
+		const haiku = await new SnapcompactInlineTransformer(options).transform(
+			context,
+			makeModel({ id: "claude-haiku-5-5" }),
+		);
+		expect(haiku.messages[1]).toBe(context.messages[1]);
+		expect(haiku.messages.map(imaged)).toEqual([false, false, true]);
 	});
 
 	it("applies option changes on the next request, re-rendering cached frames when the shape changes", async () => {
@@ -716,7 +742,7 @@ describe("SnapcompactInlineTransformer", () => {
 					// The newest result is imaged on its first send.
 					expect(imageCount({ messages: [sent.messages[2]] })).toBe(2);
 				}
-				expect(imageCount(sent)).toBeLessThanOrEqual(snapcompact.providerImageBudget(model.provider));
+				expect(imageCount(sent)).toBeLessThanOrEqual(snapcompact.providerImageBudget(model));
 				previous = sent;
 			}
 		}
@@ -745,6 +771,7 @@ describe("planInlineSwaps", () => {
 			],
 			systemPrompt: undefined,
 			hasUserMessage: true,
+			imageReadResults: false,
 		});
 		expect(plan.toolResults.map(swap => swap.id)).toEqual(["ok", "newest"]);
 	});
@@ -763,6 +790,7 @@ describe("planInlineSwaps", () => {
 			],
 			systemPrompt: undefined,
 			hasUserMessage: true,
+			imageReadResults: false,
 		});
 		expect(plan.toolResults.map(swap => swap.id)).toEqual(["a", "c"]);
 	});
@@ -779,6 +807,7 @@ describe("planInlineSwaps", () => {
 			],
 			systemPrompt: { textTokens: 10000, frames: 2, imagesThrough: 0 },
 			hasUserMessage: true,
+			imageReadResults: false,
 		};
 		const first = planInlineSwaps(input);
 		expect(first.systemPrompt).toBeDefined();
@@ -807,6 +836,7 @@ describe("planInlineSwaps", () => {
 			existingImages: 0,
 			toolResults: [],
 			hasUserMessage: true,
+			imageReadResults: false,
 		};
 		// 7 frames exceeds the 6-frame system prompt cap.
 		expect(
@@ -825,6 +855,7 @@ describe("planInlineSwaps", () => {
 			planInlineSwaps({
 				...base,
 				hasUserMessage: false,
+				imageReadResults: false,
 				systemPrompt: { textTokens: 30000, frames: 6, imagesThrough: 0 },
 			}).systemPrompt,
 		).toBeUndefined();

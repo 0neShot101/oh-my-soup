@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the opt-in `snapcompact-image-reads` axis: snapcompact images a fresh `read` result only for readers whose rule sets it; Claude Opus 5.5 and later opt in ([#14249](https://github.com/can1357/oh-my-pi/pull/14249) by [@will-bogusz](https://github.com/will-bogusz))
+
 ## [18.10.2] - 2026-10-12
 
 ### Added
