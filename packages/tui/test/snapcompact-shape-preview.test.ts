@@ -23,14 +23,14 @@ interface PreviewHarness {
 }
 
 function preview(model: ShapeTarget): PreviewHarness {
-	let wake = () => {};
-	const component = new SnapcompactShapePreview("auto", { model, requestRender: () => wake() });
+	let settled = Promise.withResolvers<void>();
+	const component = new SnapcompactShapePreview("auto", { model, requestRender: () => settled.resolve() });
 	return {
 		component,
-		rendered: () =>
-			new Promise<void>(resolve => {
-				wake = resolve;
-			}),
+		rendered: () => {
+			settled = Promise.withResolvers<void>();
+			return settled.promise;
+		},
 	};
 }
 
