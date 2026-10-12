@@ -891,12 +891,6 @@ interface RunPageScope {
 	restoreInterception(): Promise<void>;
 }
 
-/** A run-owned registration: `listener` is what the page holds, `handler` what the run passed. */
-interface OwnedListener {
-	handler: unknown;
-	listener: unknown;
-}
-
 /**
  * Expose the tab page while retaining every event handler created by this run.
  * The facade removes only run-owned listeners, preserving worker-level routing,
@@ -911,7 +905,13 @@ interface OwnedListener {
  * an earlier run started.
  */
 function createRunPageScope(page: Page, restoreInterception: () => Promise<void>): RunPageScope {
-	const handlers = new Map<unknown, OwnedListener[]>();
+	const handlers = new Map<unknown, Function[]>();
+	/**
+	 * The listener the page holds for each run-owned handler. It runs the handler with
+	 * `delivering` cleared, so what the handler registers stays run-owned. One per handler,
+	 * so duplicate registrations and removals keep puppeteer's own ordering.
+	 */
+	const listeners = new Map<Function, (...args: unknown[]) => unknown>();
 	const on = page.on;
 	const off = page.off;
 	const once = page.once;
@@ -935,34 +935,35 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 			delivering = outer;
 		}
 	};
-	const remember = (type: unknown, handler: unknown, listener: unknown): OwnedListener => {
-		const entry: OwnedListener = { handler, listener };
-		const owned = handlers.get(type);
-		if (owned) owned.push(entry);
-		else handlers.set(type, [entry]);
-		Reflect.apply(on, page, [type, listener]);
-		return entry;
+	const listenerFor = (handler: Function): ((...args: unknown[]) => unknown) => {
+		let listener = listeners.get(handler);
+		if (!listener) {
+			listener = (...args: unknown[]): unknown =>
+				withDelivering(false, () => Reflect.apply(handler, undefined, args));
+			listeners.set(handler, listener);
+		}
+		return listener;
 	};
-	const drop = (type: unknown, entry: OwnedListener): void => {
+	const remember = (type: unknown, handler: Function): void => {
 		const owned = handlers.get(type);
-		const index = owned?.indexOf(entry) ?? -1;
-		if (!owned || index < 0) return;
-		Reflect.apply(off, page, [type, entry.listener]);
-		owned.splice(index, 1);
-		if (owned.length === 0) handlers.delete(type);
+		if (owned) owned.push(handler);
+		else handlers.set(type, [handler]);
+		Reflect.apply(on, page, [type, listenerFor(handler)]);
 	};
 	/** Remove run-owned registrations; reports whether any matched. */
 	const forget = (type: unknown, handler?: unknown): boolean => {
 		const owned = handlers.get(type);
 		if (!owned) return false;
 		if (handler === undefined) {
-			for (const entry of owned) Reflect.apply(off, page, [type, entry.listener]);
+			for (const registered of owned) Reflect.apply(off, page, [type, listenerFor(registered)]);
 			handlers.delete(type);
 			return true;
 		}
-		const entry = owned.findLast(registered => registered.handler === handler);
-		if (!entry) return false;
-		drop(type, entry);
+		const index = owned.findLastIndex(registered => registered === handler);
+		if (index < 0) return false;
+		Reflect.apply(off, page, [type, listenerFor(owned[index])]);
+		owned.splice(index, 1);
+		if (owned.length === 0) handlers.delete(type);
 		return true;
 	};
 
@@ -971,10 +972,7 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 			configurable: true,
 			value: (type: unknown, handler: unknown): Page => {
 				if (delivering || typeof handler !== "function") Reflect.apply(on, page, [type, handler]);
-				else
-					remember(type, handler, (...args: unknown[]): unknown =>
-						withDelivering(false, () => Reflect.apply(handler, undefined, args)),
-					);
+				else remember(type, handler);
 				return page;
 			},
 		},
@@ -985,10 +983,11 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 					Reflect.apply(once, page, [type, handler]);
 					return page;
 				}
-				const entry = remember(type, handler, (event: unknown): void => {
-					drop(type, entry);
-					withDelivering(false, () => Reflect.apply(handler, page, [event]));
-				});
+				const wrapper = (event: unknown): void => {
+					forget(type, wrapper);
+					Reflect.apply(handler, page, [event]);
+				};
+				remember(type, wrapper);
 				return page;
 			},
 		},
@@ -1004,10 +1003,11 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 			configurable: true,
 			value: (type: unknown, event?: unknown): boolean => {
 				// Puppeteer defers every `request` listener to an interception action that runs after
-				// `emit` returns, so the action keeps the delivery it was queued from.
-				const request = event as HTTPRequest | undefined;
+				// `emit` returns, so the action keeps the delivery it was queued from. The override
+				// stays on the request, which can outlive the run.
+				const request = type === "request" && typeof event === "object" ? (event as HTTPRequest | null) : null;
 				const enqueue = request?.enqueueInterceptAction;
-				if (type === "request" && request && typeof enqueue === "function") {
+				if (request && typeof enqueue === "function") {
 					Object.defineProperty(request, "enqueueInterceptAction", {
 						configurable: true,
 						value: (action: () => unknown): void => {
@@ -1055,7 +1055,7 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 			if (interceptionDescriptor) Object.defineProperty(page, "setRequestInterception", interceptionDescriptor);
 			else Reflect.deleteProperty(page, "setRequestInterception");
 			for (const [type, owned] of handlers) {
-				for (const entry of owned) Reflect.apply(off, page, [type, entry.listener]);
+				for (const handler of owned) Reflect.apply(off, page, [type, listenerFor(handler)]);
 			}
 			handlers.clear();
 		},

@@ -189,6 +189,32 @@ return await seen.promise;`,
 		expect(seen).toBe(url);
 	}, 30_000);
 
+	test("run listeners keep puppeteer's ordering, once cancellation and payloads", async () => {
+		const invoke = createHost();
+		await invoke({ action: "open", name: "contract", url: `${baseUrl}/` });
+		const result = valueOf(
+			await invoke({
+				action: "run",
+				name: "contract",
+				code: `const order = [];
+const h = () => order.push("h");
+const other = () => order.push("other");
+page.on("contract", h).on("contract", other).on("contract", h).off("contract", h);
+page.emit("contract", null);
+let onceCalls = 0;
+const counted = () => onceCalls++;
+page.once("contract-once", counted).off("contract-once", counted);
+page.emit("contract-once", null);
+let reads = 0;
+page.on("contract-payload", () => {});
+page.emit("contract-payload", { get enqueueInterceptAction() { reads++; return undefined; } });
+return { order, onceCalls, reads };`,
+			}),
+		);
+		// Puppeteer removes the first duplicate; a cancelled once still fires, as on a plain page.
+		expect(result).toEqual({ order: ["other", "h"], onceCalls: 1, reads: 0 });
+	}, 30_000);
+
 	test("puppeteer's own request subscriptions unsubscribe during a run", async () => {
 		const invoke = createHost();
 		await invoke({ action: "open", name: "unsubscribe", url: `${baseUrl}/` });
