@@ -19,6 +19,7 @@ import { Tokenizer } from "@oh-my-pi/pi-agent-core/tokenizer";
 import { type AsyncJob, AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { isIrcEnabled } from "@oh-my-pi/pi-coding-agent/irc/messaging";
 import { createAgentsHubDeps } from "@oh-my-pi/pi-coding-agent/modes/agents-hub-deps";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -30,9 +31,11 @@ import * as isolationRunner from "@oh-my-pi/pi-coding-agent/task/isolation-runne
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import type { AgentProgress, SingleResult, TaskParams } from "@oh-my-pi/pi-tui/tools/task";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { hasWaitTool } from "@oh-my-pi/pi-coding-agent/tools/wait";
 import { snapshotJobs } from "@oh-my-pi/pi-coding-agent/async/job-control";
 import { cfgTaskAgentModelOverrides, cfgTaskMaxConcurrency } from "@oh-my-pi/pi-coding-agent/task/settings";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { prompt, TempDir } from "@oh-my-pi/pi-utils";
+import taskAsyncContractTemplate from "../../src/prompts/tools/task-async-contract.md" with { type: "text" };
 import { createAssistantMessage, createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
 const taskAgent: AgentDefinition = {
@@ -171,12 +174,18 @@ describe("task spawn routing", () => {
 		const manager = createManager();
 		let sessionManager = SessionManager.create(temp.path(), temp.path());
 		const session: ToolSession = { ...createSession({ manager }), sessionManager };
+		const asyncContract = prompt
+			.render(taskAsyncContractTemplate, {
+				ircEnabled: isIrcEnabled(session.settings, session.taskDepth ?? 0),
+				waitTool: hasWaitTool(session),
+			})
+			.trim();
 		try {
 			const tool = await TaskTool.create(session);
 			const spawn = (name: string) =>
 				tool.execute(`tc-${name}`, { agent: "task", name, task: "Review the parser." } as TaskParams);
 			const first = await spawn("First");
-			expect(getFirstText(first)).toContain("Results auto-deliver; NEVER poll.");
+			expect(getFirstText(first)).toContain(asyncContract);
 			sessionManager.appendMessage({
 				...createAssistantMessage(""),
 				stopReason: "toolUse",
@@ -192,7 +201,7 @@ describe("task spawn routing", () => {
 				timestamp: Date.now(),
 			});
 			await sessionManager.ensureOnDisk();
-			expect(getFirstText(await spawn("Second"))).not.toContain("Results auto-deliver");
+			expect(getFirstText(await spawn("Second"))).not.toContain(asyncContract);
 			const pruning = pruneToolOutputs(sessionManager.getBranch(), new Tokenizer(), {
 				protectTokens: 0,
 				minimumSavings: 0,
@@ -207,7 +216,7 @@ describe("task spawn routing", () => {
 			sessionManager = await SessionManager.open(sessionFile, temp.path());
 			session.sessionManager = sessionManager;
 			const afterPrune = await spawn("AfterPrune");
-			expect(getFirstText(afterPrune)).toContain("Results auto-deliver; NEVER poll.");
+			expect(getFirstText(afterPrune)).toContain(asyncContract);
 			sessionManager.appendMessage({
 				...createAssistantMessage(""),
 				stopReason: "toolUse",
@@ -222,14 +231,14 @@ describe("task spawn routing", () => {
 				isError: false,
 				timestamp: Date.now(),
 			});
-			expect(getFirstText(await spawn("StillVisible"))).not.toContain("Results auto-deliver");
+			expect(getFirstText(await spawn("StillVisible"))).not.toContain(asyncContract);
 			const kept = sessionManager.appendMessage({
 				role: "user",
 				content: "Continue reviewing.",
 				timestamp: Date.now(),
 			});
 			sessionManager.appendCompaction("Earlier review finished.", undefined, kept, 1000);
-			expect(getFirstText(await spawn("AfterCompaction"))).toContain("Results auto-deliver; NEVER poll.");
+			expect(getFirstText(await spawn("AfterCompaction"))).toContain(asyncContract);
 		} finally {
 			await Promise.all(manager.getAllJobs().map(job => job.promise));
 			await manager.dispose({ timeoutMs: 1000 });
