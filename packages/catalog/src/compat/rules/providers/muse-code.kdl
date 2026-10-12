@@ -7,13 +7,15 @@ provider "muse-code" {
 	// Muse Code shares Meta Model API's model capabilities and equivalent token pricing.
 	seed api="openai-responses" base-url="https://api.meta.ai/v1" bundle="always" {
 		// Subscription-only rows: Model API serves neither Muse Wonder Full nor a
-		// Wonder contributor tier, so Meta publishes no per-token rate for them
-		// (see the `pricing-status` rule below). All accept image input and the
-		// `max` effort over the subscription key (verified 2026-10-12).
+		// Wonder contributor tier, so no API SKU prices them. They carry Muse
+		// Wonder's Standard-mode list price (the only way to buy Wonder by the
+		// token) so cost display reads as API-equivalent spend; for Wonder Full
+		// that rate is an estimate. All accept image input and the `max` effort
+		// over the subscription key (verified 2026-10-12).
 		model "muse-wonder-1.0-contributor" name="Muse Wonder 1.0 (C)" {
 			reasoning #true
 			input "text" "image"
-			cost input=0 output=0 cache-read=0 cache-write=0
+			cost input=4 output=20 cache-read=0.2 cache-write=0
 			limits context=1048576 max-tokens=131072
 			thinking-mode "effort"
 			thinking-efforts "minimal" "low" "medium" "high" "xhigh" "max"
@@ -23,7 +25,7 @@ provider "muse-code" {
 		model "muse-wonder-full-1.0" name="Muse Wonder Full 1.0" {
 			reasoning #true
 			input "text" "image"
-			cost input=0 output=0 cache-read=0 cache-write=0
+			cost input=4 output=20 cache-read=0.2 cache-write=0
 			limits context=1048576 max-tokens=131072
 			thinking-mode "effort"
 			thinking-efforts "minimal" "low" "medium" "high" "xhigh" "max"
@@ -33,7 +35,7 @@ provider "muse-code" {
 		model "muse-wonder-full-1.0-contributor" name="Muse Wonder Full 1.0 (C)" {
 			reasoning #true
 			input "text" "image"
-			cost input=0 output=0 cache-read=0 cache-write=0
+			cost input=4 output=20 cache-read=0.2 cache-write=0
 			limits context=1048576 max-tokens=131072
 			thinking-mode "effort"
 			thinking-efforts "minimal" "low" "medium" "high" "xhigh" "max"
@@ -41,13 +43,6 @@ provider "muse-code" {
 			include-encrypted-reasoning #true
 		}
 		models-from "meta"
-	}
-
-	// Muse Wonder Full (Power and Maximum Usage plans) and the Wonder
-	// contributor tier draw on the subscription's included usage instead of a
-	// published token rate.
-	models "muse-wonder-1.0-contributor" "muse-wonder-full-1.0" "muse-wonder-full-1.0-contributor" {
-		pricing-status "included"
 	}
 
 	include-encrypted-reasoning #true

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { getBundledModel, getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import {
@@ -122,7 +122,7 @@ describe("Muse Code subscription provider", () => {
 		]);
 	});
 
-	test("prices Muse Wonder at the API rate and subscription-only Wonder tiers as included usage", async () => {
+	test("records API-equivalent spend for every Muse Wonder tier, including subscription-only ones", async () => {
 		const options = museCodeModelManagerOptions({
 			apiKey: "LLM|subscription-key",
 			fetch: async () =>
@@ -133,18 +133,18 @@ describe("Muse Code subscription provider", () => {
 					"muse-wonder-full-1.0-contributor",
 				]),
 		});
-		const discovered = new Map(
-			((await options.fetchDynamicModels?.()) ?? []).map(spec => [spec.id, buildModel(spec)]),
-		);
-		const wonder = discovered.get("muse-wonder-1.0")!;
-		expect(wonder.cost).toEqual({ input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 });
-		expect(getModelPricingStatus(wonder)).toBe("fixed");
-		// Meta publishes no token rate for Wonder Full or a Wonder contributor
-		// tier; they must read as included usage, not unknown or free.
-		for (const id of ["muse-wonder-1.0-contributor", "muse-wonder-full-1.0", "muse-wonder-full-1.0-contributor"]) {
-			expect(getModelPricingStatus(discovered.get(id)!)).toBe("included");
-		}
-		for (const model of discovered.values()) {
+		const discovered = (await options.fetchDynamicModels?.()) ?? [];
+		expect(discovered.map(spec => spec.id)).toEqual([
+			"muse-wonder-1.0",
+			"muse-wonder-1.0-contributor",
+			"muse-wonder-full-1.0",
+			"muse-wonder-full-1.0-contributor",
+		]);
+		// Wonder Full and the Wonder contributor tier have no Model API SKU;
+		// they record Muse Wonder's Standard-mode list price instead of $0.
+		for (const spec of discovered) {
+			const model = buildModel(spec);
+			expect(model.cost).toEqual({ input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 });
 			expect(model.reasoning).toBe(true);
 			expect(model.thinking).toEqual(MUSE_SPARK_MAX_THINKING);
 		}
