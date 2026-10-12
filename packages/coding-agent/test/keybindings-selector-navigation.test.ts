@@ -26,6 +26,8 @@ const tempDirs: TempDir[] = [];
 
 beforeAll(() => {
 	initTheme();
+	// The default registry is TUI-only; the app registry carries the `app.tree.*` branch bindings.
+	setKeybindings(KeybindingsManager.inMemory());
 });
 
 afterEach(async () => {
@@ -342,6 +344,35 @@ describe("selector navigation keybindings", () => {
 		}
 
 		expect(selected).toEqual(["a", "b", "a2", "a1", "a"]);
+	});
+
+	it("follows rebound and unbound branch keybindings", () => {
+		const root = createMessageNode("root", null, "Root");
+		const activeBranch = createMessageNode("active-branch", "root", "Active branch");
+		const siblingBranch = createMessageNode("sibling-branch", "root", "Sibling branch");
+		root.children.push(activeBranch, siblingBranch);
+		const navigate = (keys: string[]) => {
+			const selected: string[] = [];
+			const selector = new TreeSelectorComponent(
+				[root],
+				"active-branch",
+				40,
+				id => selected.push(id),
+				() => {},
+			);
+			for (const key of keys) {
+				selector.handleInput(key);
+				selector.handleInput("\n");
+			}
+			return selected;
+		};
+
+		setKeybindings(KeybindingsManager.inMemory({ "app.tree.nextBranch": "ctrl+n" }));
+		// Shift+Right no longer jumps (it lands back on the selection); the rebound key does.
+		expect(navigate(["\x1b[1;2C", CTRL_N])).toEqual(["active-branch", "sibling-branch"]);
+
+		setKeybindings(KeybindingsManager.inMemory({ "app.tree.previousBranch": [], "app.tree.nextBranch": [] }));
+		expect(navigate(["\x1b[1;2C", "\x1b[1;2D"])).toEqual(["active-branch", "active-branch"]);
 	});
 
 	it("recomputes branch targets after the filter changes", () => {

@@ -56,7 +56,8 @@ import { resolveAssistantErrorPresentation } from "../chat/transcript-render-hel
 import { OverlayPanel, PanelDivider } from "../chrome/overlay-box";
 import { TreeView, type TreeAncestor, type TreeRow } from "../components/tree-view";
 import { formatKeyHint, formatKeyHints } from "../app-keybindings";
-import { boundKeys, editorKeys, interruptKey } from "../chrome/keybinding-hints";
+import { boundKeys, editorKey, editorKeys, interruptKey } from "../chrome/keybinding-hints";
+import { getKeybindings } from "../keybindings";
 import type { TspPickerItem, TspPickerProps, TspSpan, TspText } from "@oh-my-pi/pi-wire";
 import type { ThemeColor } from "../theme/schema";
 import { col, keyed, node, span, text } from "../native/describe";
@@ -1314,9 +1315,9 @@ class TreeList implements Component {
 					(node.entry.message.role === "user" || node.entry.message.role === "assistant"),
 				1,
 			);
-		} else if (matchesKey(keyData, "shift+left")) {
+		} else if (getKeybindings().matches(keyData, "app.tree.previousBranch")) {
 			this.#moveBranch(-1);
-		} else if (matchesKey(keyData, "shift+right")) {
+		} else if (getKeybindings().matches(keyData, "app.tree.nextBranch")) {
 			this.#moveBranch(1);
 		} else if (matchesKey(keyData, "home")) {
 			this.#tree.setSelectionIndex(0);
@@ -1506,6 +1507,10 @@ export class TreeSelectorComponent extends OverlayPanel {
 		this.#treeContainer.addChild(this.#treeList);
 
 		this.#labelInputContainer = new Container();
+		// Either action may be unbound; hint only the keys that still do something.
+		const branchKeys = [editorKey("app.tree.previousBranch"), editorKey("app.tree.nextBranch")]
+			.filter(Boolean)
+			.join("/");
 
 		this.addChild(new Spacer(1));
 		this.addChild(
@@ -1515,7 +1520,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 					[
 						`${formatKeyHint("enter")}: switch.`,
 						`${formatKeyHints(["alt+up", "alt+down"])}: previous/next turn.`,
-						`${formatKeyHints(["shift+left", "shift+right"])}: previous/next branch.`,
+						...(branchKeys ? [`${branchKeys}: previous/next branch.`] : []),
 						`${editorKeys("tui.select.pageUp", "tui.select.pageDown")} (${formatKeyHints(["left", "right"])}): page.`,
 						`${formatKeyHints(["home", "end"])}: first/last item.`,
 						`${formatKeyHint("shift+enter")}: summarize & switch.`,
@@ -1672,7 +1677,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 			hintsRow([
 				{ keys: ["enter"], label: "switch" },
 				{ keys: ["alt+up", "alt+down"], label: "previous/next turn" },
-				{ keys: ["shift+left", "shift+right"], label: "previous/next branch" },
+				actionHint(["app.tree.previousBranch", "app.tree.nextBranch"], "previous/next branch"),
 				actionHint(["tui.select.pageUp", "tui.select.pageDown"], "page"),
 				{ keys: ["home", "end"], label: "first/last" },
 				{ keys: ["shift+enter"], label: "summarize & switch" },

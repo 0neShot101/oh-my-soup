@@ -59,6 +59,8 @@ interface AppKeybindings {
 	"app.session.deleteNoninvasive": true;
 	"app.tree.foldOrUp": true;
 	"app.tree.unfoldOrDown": true;
+	"app.tree.previousBranch": true;
+	"app.tree.nextBranch": true;
 	"app.plan.toggle": true;
 	"app.history.search": true;
 	"app.stt.pushToTalk": true;
@@ -234,6 +236,14 @@ export const KEYBINDINGS = {
 	"app.tree.unfoldOrDown": {
 		defaultKeys: ["ctrl+right", "alt+right"],
 		description: "Unfold or move down",
+	},
+	"app.tree.previousBranch": {
+		defaultKeys: "shift+left",
+		description: "Jump to the previous branch in /tree",
+	},
+	"app.tree.nextBranch": {
+		defaultKeys: "shift+right",
+		description: "Jump to the next branch in /tree",
 	},
 	"app.plan.toggle": {
 		defaultKeys: "alt+shift+p",
