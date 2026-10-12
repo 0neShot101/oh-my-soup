@@ -6,6 +6,10 @@
 
 - `AssistantMessageComponent`'s native turn footer leads with a Copy icon (`omp.turn.copy`) and a dot instead of the clock icon; it copies the answer's text and shows when the host handles transcript actions
 
+### Changed
+
+- `UserMessageComponent`'s native hover toolbar (`omp.user.tools`) leads with Copy and Rewind icon buttons (`copy`, `rewind`) instead of text labels, then a dot and the time, like the turn usage footer
+
 ## [18.10.0] - 2026-10-12
 
 ### Breaking Changes
