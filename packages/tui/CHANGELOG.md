@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `Shift+Left` / `Shift+Right` navigation across visible `/tree` branches and nested fork depths, rebindable as `app.tree.previousBranch` / `app.tree.nextBranch` ([#12623](https://github.com/can1357/oh-my-pi/pull/12623) by [@azain47](https://github.com/azain47)).
+- Added opt-in `/tree` branch navigation across visible branches and nested fork depths; bind `app.tree.previousBranch` / `app.tree.nextBranch` (e.g. to `Shift+Left` / `Shift+Right`) in `keybindings.yml` ([#12623](https://github.com/can1357/oh-my-pi/pull/12623) by [@azain47](https://github.com/azain47)).
 
 ### Removed
 

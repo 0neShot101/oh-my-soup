@@ -228,11 +228,11 @@ export const KEYBINDINGS = {
 		description: "Delete session (non-invasive)",
 	},
 	"app.tree.previousBranch": {
-		defaultKeys: "shift+left",
+		defaultKeys: [],
 		description: "Jump to the previous branch in /tree",
 	},
 	"app.tree.nextBranch": {
-		defaultKeys: "shift+right",
+		defaultKeys: [],
 		description: "Jump to the next branch in /tree",
 	},
 	"app.plan.toggle": {
