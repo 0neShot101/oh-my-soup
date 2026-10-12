@@ -985,6 +985,10 @@ function resolveGooglePolicy(
 		claudeThinkingBetaHeader: false,
 		antigravityClaudeToolMode: false,
 		stripImageInput: false,
+		// Unset means "no image contract": images go out as sent. Keys exist so
+		// a KDL rule or a user `compat` block can declare one.
+		maxImageDimension: undefined,
+		maxImagePayloadBytes: undefined,
 	};
 	applyWireAxes(compat, axes.wire, spec.api);
 	applyCompatOverrides(compat, spec.compat);
