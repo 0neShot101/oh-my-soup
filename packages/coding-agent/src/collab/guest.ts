@@ -477,7 +477,10 @@ export class CollabGuestLink {
 			...pending.header,
 			id: this.#replicaId,
 			parentSession: pending.header.id,
-			providerPromptCacheKey: pending.header.providerPromptCacheKey ?? pending.header.id,
+			providerPromptCacheKey:
+				pending.header.taskPromptCacheKey !== undefined
+					? undefined
+					: (pending.header.providerPromptCacheKey ?? pending.header.id),
 		};
 		const lines = [header, ...pending.entries].map(entry => JSON.stringify(entry)).join("\n");
 		const storage = new FileSessionStorage();

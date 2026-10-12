@@ -174,6 +174,34 @@ describe("task sibling prompt-cache routing", () => {
 						? [false, false]
 						: requests.map(request => expected ?? request.sessionId),
 				);
+				if (_name === "Muse provider-session fallback") {
+					const ref = AgentRegistry.global()
+						.list()
+						.find(candidate => candidate.session && candidate.session !== parent);
+					if (!ref?.session || !ref.sessionFile) throw new Error("Expected a revivable Task child");
+					await ref.session.sessionManager.setTaskPromptCacheKey("persisted:task");
+					const lifecycle = AgentLifecycleManager.global();
+					await lifecycle.park(ref.id);
+					const restored = await lifecycle.ensureLive(ref.id);
+					await restored.prompt("Continue the review.");
+					expect(requests.findLast(request => request.sessionId === restored.agent.sessionId)?.wireKey).toBe(
+						"persisted:task",
+					);
+					await lifecycle.park(ref.id);
+					const records = Bun.JSONL.parse(await Bun.file(ref.sessionFile).text()) as Array<{
+						type: string;
+						taskPromptCacheKey?: string;
+					}>;
+					for (const record of records) {
+						if (record.type === "session") delete record.taskPromptCacheKey;
+					}
+					await Bun.write(ref.sessionFile, `${records.map(record => JSON.stringify(record)).join("\n")}\n`);
+					const withoutCandidate = await lifecycle.ensureLive(ref.id);
+					await withoutCandidate.prompt("Continue without inherited affinity.");
+					expect(
+						requests.findLast(request => request.sessionId === withoutCandidate.agent.sessionId)?.wireKey,
+					).toBe(withoutCandidate.agent.sessionId);
+				}
 			} finally {
 				await Promise.all(sessions.splice(0).map(session => session.dispose()));
 				authStorage.close();

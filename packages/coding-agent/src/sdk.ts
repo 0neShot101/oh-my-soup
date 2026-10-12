@@ -1870,6 +1870,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		await sessionManager.setAdditionalDirectories(merged);
 	}
 	const providerSessionId = options.providerSessionId ?? sessionManager.getSessionId();
+	const taskPromptCacheKey = options.taskPromptCacheKey ?? sessionManager.getHeader()?.taskPromptCacheKey;
+	if (taskPromptCacheKey !== undefined) await sessionManager.setTaskPromptCacheKey(taskPromptCacheKey);
 	if (options.credentialSourceSessionId) {
 		// A revived or resumed child already pins, in its own transcript, the accounts that
 		// hold its conversation cache. Inheriting the parent's automatic sticky for those
@@ -1903,10 +1905,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		options.toolNames !== undefined ||
 		options.customTools !== undefined ||
 		options.mcpTools !== undefined;
-	const inheritedPromptCacheKey = forkCacheShapeChanged
-		? undefined
-		: sessionManager.getHeader()?.providerPromptCacheKey;
-	const providerPromptCacheKey = options.providerPromptCacheKey ?? inheritedPromptCacheKey;
+	const inheritedPromptCacheKey =
+		forkCacheShapeChanged || taskPromptCacheKey !== undefined
+			? undefined
+			: sessionManager.getHeader()?.providerPromptCacheKey;
+	const providerPromptCacheKey =
+		taskPromptCacheKey !== undefined && options.providerPromptCacheKeySource === "fork"
+			? undefined
+			: (options.providerPromptCacheKey ?? inheritedPromptCacheKey);
 	const providerPromptCacheKeySource =
 		options.providerPromptCacheKey !== undefined
 			? (options.providerPromptCacheKeySource ?? "explicit")
@@ -4660,7 +4666,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			providerSessionId: options.providerSessionId,
 			accountPoolScope,
 			providerPromptCacheKeySource,
-			taskPromptCacheKey: options.taskPromptCacheKey,
 			advisorTools,
 			// Same per-call `grep` seam the primary bridge gets, built against the
 			// advisor's own tool session so a `pi_grep` frame's context width and

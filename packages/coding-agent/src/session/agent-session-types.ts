@@ -342,8 +342,6 @@ export interface AgentSessionConfig {
 	accountPoolScope?: SessionAccountPoolScope;
 	/** Whether the provider prompt-cache key was explicit or fork-inherited. */
 	providerPromptCacheKeySource?: "explicit" | "fork";
-	/** Task-derived cache candidate for the main loop and side requests using its context. */
-	taskPromptCacheKey?: string;
 	/** Full advisor toolset built against an advisor-scoped tool session. */
 	advisorTools?: AgentTool[];
 	/**

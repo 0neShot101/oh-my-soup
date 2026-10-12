@@ -1041,7 +1041,6 @@ export class AgentSession implements SettingsScope {
 	#lazyContextRefreshed = new Set<string>();
 	#onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
 	#sideStreamFn: StreamFn;
-	readonly #taskPromptCacheKey: string | undefined;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
 
@@ -1918,7 +1917,6 @@ export class AgentSession implements SettingsScope {
 		this.#autoTitle = config.autoTitle === true;
 		this.#transformContext = config.transformContext ?? (messages => messages);
 		this.#sideStreamFn = config.sideStreamFn ?? streamSimple;
-		this.#taskPromptCacheKey = config.taskPromptCacheKey;
 		this.#onPayload = config.onPayload;
 		this.rawSseDebugBuffer = config.rawSseDebugBuffer ?? new RawSseDebugBuffer();
 		// Avoid wrapping in an `async` closure when no user callback is configured: the
@@ -6679,12 +6677,11 @@ export class AgentSession implements SettingsScope {
 
 	/** Cache identity for the main loop and side requests that reuse its context. */
 	getPromptCacheKeyForModel(model: Model | undefined): string | undefined {
+		const candidate = this.sessionManager.getHeader()?.taskPromptCacheKey;
 		return (
 			this.agent.promptCacheKey ??
-			(this.#taskPromptCacheKey !== undefined &&
-			model !== undefined &&
-			resolveCatalogPolicy(model).taskSiblingPromptCache === true
-				? this.#taskPromptCacheKey
+			(candidate !== undefined && model !== undefined && resolveCatalogPolicy(model).taskSiblingPromptCache === true
+				? candidate
 				: undefined)
 		);
 	}

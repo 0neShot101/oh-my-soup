@@ -387,6 +387,7 @@ const FIELD_RULES: Record<string, Rule> = {
 		"retryFallback",
 		"workPoolYieldItems",
 		"providerPromptCacheKey",
+		"taskPromptCacheKey",
 		"providerFile",
 		"providerMetadata",
 		"toolCallAbortMessages",
