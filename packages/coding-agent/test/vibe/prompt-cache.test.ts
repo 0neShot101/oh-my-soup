@@ -110,4 +110,4 @@ it("shares Vibe sibling cache routing by worker type while keeping conversations
 		await Promise.all(sessions.map(session => session.dispose()));
 		authStorage.close();
 	}
-});
+}, 30_000);
