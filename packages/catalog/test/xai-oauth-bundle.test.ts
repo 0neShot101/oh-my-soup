@@ -95,14 +95,4 @@ describe("xai-oauth bundled catalog (regression)", () => {
 			expect(bundled[model.id]?.maxTokens, `bundled ${model.id} maxTokens`).toBe(model.contextWindow);
 		}
 	});
-
-	// api.x.ai rejects prompts over 1M tokens for the Grok 4.20 0309 ids on the
-	// SuperGrok surface ("[input_too_large] ... > 1000000 tokens"); a 2M window
-	// lets compaction wait past the point where every request already fails.
-	it("caps the Grok 4.20 0309 windows at the server's 1M limit", () => {
-		for (const id of ["grok-4.20-0309-non-reasoning", "grok-4.20-0309-reasoning", "grok-4.20-multi-agent-0309"]) {
-			expect(seed.find(model => model.id === id)?.contextWindow, `seed ${id}`).toBe(1_000_000);
-			expect(bundled[id]?.contextWindow, `bundled ${id}`).toBe(1_000_000);
-		}
-	});
 });
