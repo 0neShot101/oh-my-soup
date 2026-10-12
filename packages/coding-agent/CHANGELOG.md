@@ -10,6 +10,10 @@
 
 - Running agents and background jobs in Tern now share one compact counter over the composer (an icon and a count each, the words on hover) instead of two "N running" pills; each count still opens its own sheet
 
+### Fixed
+
+- Fixed `grep` on a single file showing in Tern as separate boxed snippets with no file row or syntax colors; it now looks the same as a `grep` over a directory
+
 ## [18.10.0] - 2026-10-12
 
 ### Added
