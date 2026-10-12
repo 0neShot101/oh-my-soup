@@ -1,7 +1,6 @@
 //! `nl` builtin: write files to standard output with line numbers added.
 //!
-//! Ported from uutils coreutils 0.8.0, then aligned with GNU `nl` where the
-//! port diverged: `pBRE` takes a basic regular expression (back-references
+//! Behavior notes: `pBRE` takes a basic regular expression (back-references
 //! included), an unreadable operand is reported and skipped instead of ending
 //! the run, `-l` counts only blank lines numbered under the `a` style,
 //! unnumbered lines are indented by the separator's width, and malformed
