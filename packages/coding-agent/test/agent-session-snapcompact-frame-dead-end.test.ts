@@ -13,6 +13,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import type { CompactionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { computeNonMessageTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 
@@ -330,12 +331,20 @@ describe("AgentSession snapcompact frame dead-end rescue", () => {
 		if (!verified || !unverified) throw new Error("Expected bundled openai/gpt-5.5 and gpt-5.4");
 		const price = snapcompact.resolveShape(verified).frameTokenEstimate;
 		expect(snapcompact.resolveShape(unverified).frameTokenEstimate).toBe(price);
-		expect(price).toBeLessThan(snapcompact.FRAME_TOKEN_ESTIMATE);
+		expect(price).toBe(2882);
 
-		const rebuildFrames = async (model: Model): Promise<number> => {
+		const rebuildFrames = async (model: Model): Promise<{ frames: number; budget: number }> => {
 			await createSession({ frameCount: SEEDED_FRAME_COUNT, model });
 			const [firstEntry] = sessionManager.getBranch();
-			if (!firstEntry) throw new Error("Expected a seeded entry");
+			if (firstEntry?.type !== "message") throw new Error("Expected the seeded user turn first");
+			// The 80% recovery band of the 60k trigger, less the fixed context, the kept
+			// user turn, the archive's text edges and the summary template.
+			const budget =
+				Math.floor(60_000 * 0.8) -
+				computeNonMessageTokens(session, session.agent.tokenizer, session.settings.revision) -
+				session.agent.tokenizer.countMessage(firstEntry.message) -
+				Math.ceil((2 * snapcompact.geometry(snapcompact.resolveShape(model)).capacity * 1.15) / 4) -
+				2000;
 			vi.spyOn(session.agent, "prompt").mockImplementation(async () => {});
 			vi.spyOn(session.agent, "continue").mockResolvedValue();
 			let rebuilt = false;
@@ -356,7 +365,7 @@ describe("AgentSession snapcompact frame dead-end rescue", () => {
 				};
 			});
 			await triggerMaintenance();
-			return compactSpy.mock.calls[0]?.[1]?.maxFrames ?? 0;
+			return { frames: compactSpy.mock.calls[0]?.[1]?.maxFrames ?? 0, budget };
 		};
 		const atCeiling = await rebuildFrames(unverified);
 		await session.dispose();
@@ -364,10 +373,10 @@ describe("AgentSession snapcompact frame dead-end rescue", () => {
 		vi.restoreAllMocks();
 		const atPrice = await rebuildFrames(verified);
 
-		expect(atCeiling).toBeGreaterThan(1);
-		expect(atPrice).toBeLessThan(SEEDED_FRAME_COUNT);
-		// The same recovery-band budget, divided by the frame price instead of the ceiling.
-		expect(atPrice).toBeGreaterThanOrEqual(Math.floor((atCeiling * snapcompact.FRAME_TOKEN_ESTIMATE) / price));
+		expect(atPrice.frames).toBe(Math.floor(atPrice.budget / price));
+		expect(atCeiling.frames).toBe(Math.floor(atCeiling.budget / snapcompact.FRAME_TOKEN_ESTIMATE));
+		expect(atPrice.frames).toBeGreaterThan(atCeiling.frames);
+		expect(atPrice.frames).toBeLessThan(SEEDED_FRAME_COUNT);
 	});
 
 	it("rebuilds the just-written archive when a completed pass dead-ends on its own frames", async () => {

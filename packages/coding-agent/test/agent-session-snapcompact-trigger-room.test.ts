@@ -367,15 +367,40 @@ describe("snapcompact archive sized by the compaction trigger", () => {
 		const unverified = openai("gpt-5.4");
 		const price = snapcompact.resolveShape(verified).frameTokenEstimate;
 		expect(snapcompact.resolveShape(unverified).frameTokenEstimate).toBe(price);
-		expect(price).toBeLessThan(snapcompact.FRAME_TOKEN_ESTIMATE);
+		expect(price).toBe(2882);
 
-		const settings = { "compaction.thresholdTokens": 100_000 };
-		const atPrice = await requestedFrames(verified, settings);
-		const atCeiling = await requestedFrames(unverified, settings);
-		expect(atCeiling).toBeGreaterThan(1);
-		// The same room under the trigger, divided by the frame price instead of the ceiling.
-		expect(atPrice).toBeGreaterThanOrEqual(Math.floor((atCeiling * snapcompact.FRAME_TOKEN_ESTIMATE) / price));
-		expect(atPrice).toBeLessThan(snapcompact.maxFramesForDataBudget(snapcompact.resolveShape(verified)));
+		// Room for 15 frames at 2,882 but not at 3,000, so a near-miss divisor fails too.
+		const thresholdTokens = 102_000;
+		const plan = async (model: Model): Promise<{ frames: number; room: number }> => {
+			const { session } = createSession(model, { "compaction.thresholdTokens": thresholdTokens });
+			const spy = vi.spyOn(snapcompact, "compact").mockImplementation(async preparation => ({
+				summary: "stub",
+				shortSummary: "stub",
+				firstKeptEntryId: preparation.firstKeptEntryId,
+				tokensBefore: preparation.tokensBefore,
+				details: { readFiles: [], modifiedFiles: [] },
+				preserveData: { snapcompact: { frames: [], totalChars: 0, truncatedChars: 0 } },
+			}));
+			await session.compact(undefined, { mode: "snapcompact" });
+			const frames = spy.mock.calls[0]?.[1]?.maxFrames ?? 0;
+			spy.mockRestore();
+			// The stub committed an empty archive: the rest is the system prompt, tools and kept turns.
+			const summary = session.messages.find(message => message.role === "compactionSummary");
+			if (!summary) throw new Error("Expected a compaction summary message");
+			const archiveText =
+				Math.ceil((2 * snapcompact.geometry(snapcompact.resolveShape(model)).capacity * 1.15) / 4) + 2000;
+			const fixedTokens = storedContextTokens(session) - session.agent.tokenizer.countMessage(summary) + archiveText;
+			return {
+				frames,
+				room: Math.min(SHARE * (thresholdTokens - fixedTokens), TARGET * thresholdTokens - fixedTokens),
+			};
+		};
+		const atPrice = await plan(verified);
+		const atCeiling = await plan(unverified);
+		expect(atPrice.frames).toBe(Math.floor(atPrice.room / price));
+		expect(atCeiling.frames).toBe(Math.floor(atCeiling.room / snapcompact.FRAME_TOKEN_ESTIMATE));
+		expect(atPrice.frames).toBeGreaterThan(atCeiling.frames);
+		expect(atPrice.frames).toBeLessThan(snapcompact.maxFramesForDataBudget(snapcompact.resolveShape(verified)));
 	});
 
 	it("still commits a manual compaction that leaves no room under the trigger", async () => {

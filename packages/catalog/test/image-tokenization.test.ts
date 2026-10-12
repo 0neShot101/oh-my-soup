@@ -116,6 +116,12 @@ describe("resolveImageTokenization", () => {
 		// gpt-5.4 and older follow the guide without a billing probe.
 		expect(ruleFor("openai", "gpt-5.4").verified).toBeUndefined();
 		expect(ruleFor("openai-codex", "gpt-5.3-codex").verified).toBeUndefined();
+		// Lines after 6.1 size like gpt-5.6 but are not measured yet.
+		for (const id of ["gpt-6.2-sol", "gpt-7-luna"]) {
+			const rule = ruleFor("openai-codex", id);
+			expect(rule.verified).toBeUndefined();
+			expect(imageTokens(rule, { width: 1568, height: 1562 }, "original")).toBe(2882);
+		}
 	});
 
 	it("sizes each detail level the way the guide lists for that model", () => {
