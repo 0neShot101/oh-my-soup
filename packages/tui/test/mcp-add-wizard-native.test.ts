@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import { KeybindingsManager, setKeyHintPlatform } from "@oh-my-pi/pi-tui/app-keybindings";
 import { setKeybindings } from "@oh-my-pi/pi-tui";
 import { stripVTControlCharacters } from "node:util";
 import type { DescribeContext, NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
@@ -81,11 +81,14 @@ describe("MCP add wizard under a native surface", () => {
 	beforeEach(() => {
 		setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "escape" }));
 		setNativeRendering(true);
+		// Tooltip keycaps are platform-aware (`⌃C` on macOS, `Ctrl+C` elsewhere).
+		setKeyHintPlatform("darwin");
 	});
 
 	afterEach(() => {
 		setKeybindings(KeybindingsManager.inMemory());
 		setNativeRendering(false);
+		setKeyHintPlatform(undefined);
 	});
 
 	it("names the step, lights its phase, and keeps keys in the footer buttons' tooltips", () => {
