@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Improved prompt-cache reuse between sibling subagents while keeping their conversations separate ([#15285](https://github.com/can1357/oh-my-pi/pull/15285) by [@YueyuHoshizora](https://github.com/YueyuHoshizora))
+
 ## [18.10.1] - 2026-10-12
 
 ### Added
