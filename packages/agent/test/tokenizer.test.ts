@@ -215,6 +215,7 @@ describe("countMessage replayed thinking", () => {
 		from: Pick<Model, "api" | "provider" | "id">,
 		thinking: string,
 		thinkingSignature?: string,
+		stopReason: AssistantMessage["stopReason"] = "toolUse",
 	): AssistantMessage {
 		return {
 			role: "assistant",
@@ -233,36 +234,60 @@ describe("countMessage replayed thinking", () => {
 				totalTokens: 100 + OUTPUT_TOKENS,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
-			stopReason: "toolUse",
+			stopReason,
 			timestamp: 1,
 		};
 	}
 
+	const opus = reader("anthropic", "claude-opus-5-5");
+	const bedrockOpus = reader("amazon-bedrock", "global.anthropic.claude-opus-5-5");
+	const openRouterOpus = reader("openrouter", "~anthropic/claude-opus-latest");
+
 	test.each([
-		["anthropic", "claude-opus-5-5", VISIBLE],
-		["amazon-bedrock", "global.anthropic.claude-opus-5-5", VISIBLE],
+		["on the Claude API", opus, opus, VISIBLE, "toolUse"],
+		["on Bedrock", bedrockOpus, bedrockOpus, VISIBLE, "toolUse"],
 		// Omitted display: no visible thinking, the same reasoning billed.
-		["anthropic", "claude-opus-5-5", ""],
-	] as const)("charges a Claude turn replayed natively on %s (%s) its output size", (provider, id, thinking) => {
-		const model = reader(provider, id);
-		expect(new Tokenizer(model).countMessage(signedTurn(model, thinking, SIGNATURE))).toBe(OUTPUT_TOKENS);
+		["with its thinking omitted", opus, opus, "", "toolUse"],
+		// The Claude API keeps another model's signature from the same deployment,
+		// and Opus 5.5 reads Opus 5's thinking.
+		[
+			"from another Claude model on the same deployment",
+			opus,
+			reader("anthropic", "claude-opus-5"),
+			VISIBLE,
+			"toolUse",
+		],
+		// The thinking finished, signed, before the text hit max_tokens.
+		["that stopped on length", opus, opus, VISIBLE, "length"],
+		// The thinking finished, signed, before the abort cut the text short.
+		["aborted after its thinking", opus, opus, VISIBLE, "aborted"],
+	] as const)("charges a Claude turn replayed natively %s its output size", (_case, model, from, thinking, stop) => {
+		expect(new Tokenizer(model).countMessage(signedTurn(from, thinking, SIGNATURE, stop))).toBe(OUTPUT_TOKENS);
 	});
 
 	test.each([
-		// Signatures are model-bound: another model's turn replays its thinking as text.
+		// A signature is bound to the deployment that minted it.
+		["a turn from another host", bedrockOpus, opus],
+		// Bedrock binds it to the model too: another model's turn replays as text.
 		[
-			"a turn from another Claude model",
-			reader("anthropic", "claude-opus-5-5"),
-			reader("anthropic", "claude-opus-5"),
+			"another Claude model's turn on Bedrock",
+			bedrockOpus,
+			reader("amazon-bedrock", "global.anthropic.claude-opus-5"),
 		],
 		// OpenRouter filters reasoning history out of the request.
-		[
-			"a reader that filters reasoning history",
-			reader("openrouter", "~anthropic/claude-opus-latest"),
-			reader("openrouter", "~anthropic/claude-opus-latest"),
-		],
+		["a reader that filters reasoning history", openRouterOpus, openRouterOpus],
 	] as const)("charges only the visible blocks for %s, never the signature", (_case, model, from) => {
 		expect(new Tokenizer(model).countMessage(signedTurn(from, VISIBLE, SIGNATURE))).toBe(VISIBLE_TOKENS);
+	});
+
+	test("charges only the visible thinking of an aborted turn's final, partly signed block", () => {
+		// The replay drops that block's signature, so no reasoning rides along.
+		const turn: AssistantMessage = {
+			...signedTurn(opus, VISIBLE, SIGNATURE, "aborted"),
+			content: [{ type: "thinking", thinking: VISIBLE, thinkingSignature: SIGNATURE }],
+		};
+		const tokenizer = new Tokenizer(opus);
+		expect(tokenizer.countMessage(turn)).toBe(tokenizer.countMessage(turn, { excludeEncryptedReasoning: true }));
 	});
 
 	test("keeps the compaction floor at the visible blocks of a native Claude replay", () => {

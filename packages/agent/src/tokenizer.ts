@@ -28,7 +28,8 @@ export function tokenizerEncodingForModel(model: Pick<Model, "tokenizer"> | null
 	return model?.tokenizer ? NATIVE_ENCODING[model.tokenizer] : null;
 }
 
-type TokenizerModel = Pick<Model, "tokenizer"> & snapcompact.ShapeTarget & { compat?: Model["compat"] };
+type TokenizerModel = Pick<Model, "tokenizer"> &
+	snapcompact.ShapeTarget & { compat?: Model["compat"]; thinking?: Model["thinking"] };
 
 /** The model an assistant turn's native reasoning (signed thinking, Responses history) is replayed to. */
 interface ReasoningReplayReader {
@@ -184,6 +185,8 @@ export class Tokenizer {
 	readonly #frameBilling: snapcompact.FrameBilling;
 	readonly frameBillingKey: string;
 	readonly #reasoningReader: ReasoningReplayReader | undefined;
+	/** Claude's own API and prefix-bound hosts keep another model's signature from their deployment. */
+	readonly #readsDeploymentSignatures: boolean;
 	readonly reasoningReplayKey: string;
 	/** How the reader bills replayed signed thinking (catalog `thinking-replay-tokens`). */
 	readonly thinkingReplayTokens: ThinkingReplayTokens;
@@ -210,6 +213,11 @@ export class Tokenizer {
 		this.#frameBilling = snapcompact.frameBilling(model ?? undefined);
 		this.frameBillingKey = snapcompact.frameBillingKey(this.#frameBilling);
 		this.#reasoningReader = reasoningReplayReader(model);
+		const compat = model?.compat;
+		this.#readsDeploymentSignatures =
+			model?.api === "anthropic-messages" &&
+			((compat !== undefined && "officialEndpoint" in compat && compat.officialEndpoint) ||
+				model.thinking?.prefixBinding === true);
 		this.reasoningReplayKey = reasoningReplayKey(model);
 		this.thinkingReplayTokens = resolveThinkingReplayTokens(model ?? {});
 	}
@@ -286,18 +294,19 @@ export class Tokenizer {
 	}
 
 	/**
-	 * Whether `message`'s signed reasoning reaches this reader natively (same
-	 * model, host and wire, from a completed turn), where a reader billing
-	 * replayed thinking at `output` size charges what the turn billed as output.
+	 * Whether `message`'s signed reasoning reaches this reader natively: from
+	 * the same model, host and wire, or from another Claude model on the same
+	 * Anthropic deployment, which keeps the signature (`transformMessages`).
+	 * Claude bills that reasoning when the reader can read it and drops the
+	 * block otherwise, so such a turn counts high rather than low.
 	 */
 	#replaysReasoningNatively(message: AssistantMessage): boolean {
 		const reader = this.#reasoningReader;
 		return (
 			reader !== undefined &&
 			message.api === reader.api &&
-			message.model === reader.id &&
 			message.provider === reader.provider &&
-			(message.stopReason === "stop" || message.stopReason === "toolUse")
+			(message.model === reader.id || this.#readsDeploymentSignatures)
 		);
 	}
 
@@ -337,8 +346,14 @@ export class Tokenizer {
 			}
 			case "assistant": {
 				const signaturesPriced = this.thinkingReplayTokens === "signature";
+				// Only an aborted or errored turn's final block can hold a partial
+				// signature, which the replay drops; every earlier block completed.
+				const content = message.content;
+				const untrustedIndex =
+					message.stopReason === "aborted" || message.stopReason === "error" ? content.length - 1 : -1;
 				let signedReasoning = false;
-				for (const block of message.content) {
+				for (let index = 0; index < content.length; index++) {
+					const block = content[index];
 					if (block.type === "text") {
 						fragments.push(block.text);
 					} else if (block.type === "thinking") {
@@ -352,7 +367,7 @@ export class Tokenizer {
 						if (block.thinkingSignature && !excludeEncryptedReasoning && signaturesPriced) {
 							fragments.push(block.thinkingSignature);
 						}
-						if (block.thinkingSignature) signedReasoning = true;
+						if (block.thinkingSignature && index !== untrustedIndex) signedReasoning = true;
 					} else if (block.type === "toolCall") {
 						fragments.push(block.name);
 						fragments.push(stringifyJson(block.arguments) ?? "null");
