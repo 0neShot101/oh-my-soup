@@ -162,6 +162,19 @@ describe("SessionAnonymizer", () => {
 		expect(at(toolResult, "message", "details")).toEqual({ matchCount: 1, searchPath: cwd });
 	});
 
+	test("preserves suppressed Bash timing and delivered async guidance flags", () => {
+		const anonymizer = new SessionAnonymizer();
+		const results = [
+			{ toolName: "bash", details: { wallTimeNoticeEmitted: false } },
+			{ toolName: "task", details: { async: { contractDelivered: true } } },
+		].map(result => anonymizer.entry({ type: "message", message: { role: "toolResult", ...result } }));
+
+		expect(results.map(result => at(result, "message", "details"))).toEqual([
+			{ wallTimeNoticeEmitted: false },
+			{ async: { contractDelivered: true } },
+		]);
+	});
+
 	test("rewrites shell commands keeping programs, flags, and operators", () => {
 		const anonymizer = new SessionAnonymizer();
 		const out = anonymizer.command(
@@ -421,6 +434,8 @@ describe("SessionAnonymizer", () => {
 					details: {
 						status: "customer-acme",
 						jobId: "account_12345",
+						wallTimeNoticeEmitted: "customer-acme",
+						async: { contractDelivered: "customer-acme" },
 						results: [{ structuredOutput: { data: { status: "customer-acme" } } }],
 						progress: [{ status: "completed", tokens: 12 }],
 					},

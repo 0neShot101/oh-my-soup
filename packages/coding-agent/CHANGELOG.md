@@ -10,6 +10,10 @@
 
 - Reduced tool-result tokens by omitting subsecond bash timing, redundant task size metadata, and async guidance already visible in context, with guidance restored after pruning or compaction ([#15468](https://github.com/can1357/oh-my-pi/pull/15468) by [@iliaal](https://github.com/iliaal); [#15265](https://github.com/can1357/oh-my-pi/issues/15265); based on [#15284](https://github.com/can1357/oh-my-pi/pull/15284) by [@YueyuHoshizora](https://github.com/YueyuHoshizora))
 
+### Fixed
+
+- Fixed anonymized session exports losing whether bash timing or async guidance was shown ([#15468](https://github.com/can1357/oh-my-pi/pull/15468) by [@iliaal](https://github.com/iliaal))
+
 ## [18.10.1] - 2026-10-12
 
 ### Added

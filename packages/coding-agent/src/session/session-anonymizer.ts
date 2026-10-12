@@ -138,6 +138,8 @@ const FIELD_RULES: Record<string, Rule> = {
 		"count",
 		"timeoutSeconds",
 		"wallTimeMs",
+		"wallTimeNoticeEmitted",
+		"contractDelivered",
 		"maxBytes",
 		"maxColumn",
 		"firstChangedLine",
