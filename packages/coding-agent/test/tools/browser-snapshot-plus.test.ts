@@ -142,6 +142,8 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser snapshot and readable parity", () 
 		const invoke = createHost();
 		const name = `snapshot-password-${crypto.randomUUID()}`;
 		const secret = "Fake-Secret-9931";
+		// Quotes, a backslash, a double space and ": " make Playwright normalize, JSON-quote and YAML-quote this one.
+		const pinnedValue = `${secret}-pinned "q" \\ x  y: it's`;
 		// Besides a plain field: password inputs Playwright gives no ref (no pointer events, zero size), a control
 		// named by a password input through aria-labelledby, whose accessible name is the input's value, an input
 		// carrying the page's own `value` accessor (React's change tracker installs one), one whose accessor the page
@@ -171,15 +173,16 @@ await tab.evaluate(s => {
 	Object.defineProperty(tracked, "value", { configurable: true, get: window.trackerGet, set(v) { native.set.call(this, v); } });
 	tracked.value = s + "-tracked";
 }, ${JSON.stringify(secret)});
-await tab.evaluate(s => {
+await tab.evaluate((s, p) => {
 	const native = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
 	const form = document.querySelector("form");
 	const pinned = form.appendChild(document.createElement("input"));
 	pinned.type = "password";
 	pinned.id = "pinned";
 	pinned.setAttribute("aria-label", "Pinned");
-	native.set.call(pinned, s + "-pinned");
+	native.set.call(pinned, p);
 	Object.defineProperty(pinned, "value", { get() { return native.get.call(this); } });
+	form.appendChild(document.createElement("button")).setAttribute("aria-labelledby", "pinned");
 	const frame = document.body.appendChild(document.createElement("iframe"));
 	const adopted = frame.contentDocument.createElement("input");
 	adopted.type = "password";
@@ -189,7 +192,7 @@ await tab.evaluate(s => {
 	// The page holding it keeps the element's wrapper, and so its prototype, from the frame it came from.
 	window.adoptedInput = adopted;
 	form.appendChild(document.createElement("button")).setAttribute("aria-labelledby", "adopted");
-}, ${JSON.stringify(secret)});`,
+}, ${JSON.stringify(secret)}, ${JSON.stringify(pinnedValue)});`,
 			});
 			const snapshot = valueFrom<string>(
 				await invoke({ action: "run", name, code: "return await tab.ariaSnapshot();" }),
@@ -216,20 +219,21 @@ await tab.evaluate(s => {
 				await invoke({
 					action: "run",
 					name,
-					code: `return await tab.evaluate((script, s) => {
+					code: `return await tab.evaluate((script, s, p) => {
 	const snapshot = (0, eval)(script);
 	const value = id => document.getElementById(id).value;
-	const kept = value("pw") === s && value("tracked") === s + "-tracked" && value("pinned") === s + "-pinned" && value("adopted") === s + "-adopted"
+	const kept = value("pw") === s && value("tracked") === s + "-tracked" && value("pinned") === p && value("adopted") === s + "-adopted"
 		&& Object.getOwnPropertyDescriptor(document.getElementById("tracked"), "value")?.get === window.trackerGet
 		&& !Object.getOwnPropertyDescriptor(document.getElementById("adopted"), "value");
 	return { snapshot, kept, crossRealm: !(window.adoptedInput instanceof HTMLInputElement) };
-}, ${JSON.stringify(buildAriaSnapshotScript(undefined))}, ${JSON.stringify(secret)});`,
+}, ${JSON.stringify(buildAriaSnapshotScript(undefined))}, ${JSON.stringify(secret)}, ${JSON.stringify(pinnedValue)});`,
 				}),
 			);
 			expect(pageWorld.snapshot).not.toContain(secret);
 			expect(pageWorld.snapshot).toMatch(
-				new RegExp(`textbox "Pinned" \\[ref=e\\d+\\]: •{${secret.length + "-pinned".length}}$`, "m"),
+				new RegExp(`textbox "Pinned" \\[ref=e\\d+\\]: "?•{${pinnedValue.length}}"?$`, "m"),
 			);
+			expect(pageWorld.snapshot).toContain(`button "${"•".repeat(pinnedValue.length)}"`);
 			expect(pageWorld.snapshot).toContain(`button "${"•".repeat(secret.length + "-adopted".length)}"`);
 			expect(pageWorld.crossRealm).toBeTrue();
 			expect(pageWorld.kept).toBeTrue();

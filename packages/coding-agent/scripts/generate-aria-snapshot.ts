@@ -44,6 +44,7 @@ const VENDOR_FILES: Array<[string, string]> = [
 // `window`.
 const ENTRY_SOURCE = `
 import { generateAriaTree, renderAriaTree } from "./injected/ariaSnapshot";
+import { normalizeWhiteSpace } from "./isomorphic/stringUtils";
 
 export interface AriaSnapshotRequest {
 	depth?: number;
@@ -94,7 +95,17 @@ export function ariaSnapshot(root: Element | null, request: AriaSnapshotRequest 
 			masked.push([input, own]);
 		});
 		let text = renderAriaTree(generateAriaTree(target, options), options).text;
-		for (const value of pinned) text = text.replaceAll(value, "\\u2022".repeat(value.length));
+		// Names are whitespace-normalized and JSON-quoted, then a key with a quote is YAML
+		// single-quoted; child text escapes backslashes and quotes the same way JSON does.
+		for (const value of pinned) {
+			const bullets = "\\u2022".repeat(value.length);
+			for (const plain of new Set([value, normalizeWhiteSpace(value)])) {
+				const escaped = JSON.stringify(plain).slice(1, -1);
+				for (const form of [escaped.replaceAll("'", "''"), escaped, plain]) {
+					if (form) text = text.replaceAll(form, bullets);
+				}
+			}
+		}
 		return text;
 	} finally {
 		for (const [input, own] of masked) {
