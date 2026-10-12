@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Claude refusing requests (`reasoning_extraction`) after a switch from, or a resume of, a session whose snapcompact archive was rendered under Codex, Grok or another reasoning-replaying model: Claude turns, `/btw`, `/handoff` and compaction now read a copy of the archive without reasoning, while other models keep the original
+
 ## [18.10.0] - 2026-10-12
 
 ### Added

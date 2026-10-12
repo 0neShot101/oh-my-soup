@@ -18,6 +18,7 @@ import {
 	type CompactionDetails,
 	type CompactionPreparation,
 	type CompactionResult,
+	type CompactionSummaryMessage,
 	calculateContextTokens,
 	collectShakeRegions,
 	compact,
@@ -271,6 +272,16 @@ function payloadRejectionNotice(storedTokens: number, contextWindow: number): st
 	return `The provider rejected the request size or media budget (HTTP 413), but ~${headroom.toLocaleString("en-US")} tokens of headroom remain locally — this is NOT necessarily a token-context problem. ${remedies}`;
 }
 
+/**
+ * Whether a snapcompact archive read by `model` may carry assistant reasoning.
+ * The archive replays as text into every later request, and Claude refuses
+ * inputs that reproduce reasoning (`reasoning_extraction`, issue #6093), so
+ * Anthropic-dialect readers get `¶think:` sections and their legend left out.
+ */
+function snapcompactIncludesThinking(model: Model): boolean {
+	return preferredDialect(model.id) !== "anthropic";
+}
+
 /** Dead-end notice when provider-reported usage proves context overflow but no recovery exists (#9235). */
 function usageOverflowDeadEndNotice(reportedInputTokens: number, contextWindow: number): string {
 	const windowLabel = contextWindow > 0 ? contextWindow.toLocaleString("en-US") : "unknown";
@@ -461,11 +472,12 @@ export interface SessionMaintenanceHost {
 	drainStrandedQueuedMessages(): void;
 	buildDisplaySessionContext(): SessionContext;
 	convertToLlmForSideRequest(messages: AgentMessage[]): Message[];
-	/** The provider context a live turn sends for `summarized` + `retained`, cut to the `summarized` range. */
+	/** The provider context a live turn sends for `summarized` + `retained`, cut to the `summarized` range, as `model` reads it. */
 	buildLiveProviderContext(
 		summarized: AgentMessage[],
 		retained: AgentMessage[],
-		signal?: AbortSignal,
+		signal: AbortSignal | undefined,
+		model: Model,
 	): Promise<Context>;
 	obfuscateTextForProvider(text: string | undefined): string | undefined;
 	obfuscatePreparationForProvider(preparation: CompactionPreparation): CompactionPreparation;
@@ -561,6 +573,15 @@ export class SessionMaintenance {
 	#incompleteRecoveryAttempts = 0;
 	/** Latest rollover boundary that already received its pre-threshold notebook reminder. */
 	#experimentalNotesReminderBoundaryId: string | undefined;
+	/** Each archive's no-reasoning view, rendered (or failed closed) once per compaction entry. */
+	readonly #withoutThinkingViews = new WeakMap<CompactionEntry, Promise<snapcompact.ArchiveView>>();
+	/** Reader copies of archive summary messages keyed by the original message, so repeated swaps keep one identity. */
+	readonly #readerSummaries = new WeakMap<
+		AgentMessage,
+		{ view: snapcompact.ArchiveView; message: CompactionSummaryMessage }
+	>();
+	/** The original summary message behind each reader copy, restored for readers that keep reasoning. */
+	readonly #originalSummaries = new WeakMap<AgentMessage, AgentMessage>();
 	readonly #host: SessionMaintenanceHost;
 
 	get #model(): Model | undefined {
@@ -1292,11 +1313,7 @@ export class SessionMaintenance {
 			const snapcompactReady = wantsSnapcompact;
 			const snapcompactShapeSetting = cfgSnapcompactShape.get(this.#host.settings);
 			let snapcompactShape: snapcompact.Shape | undefined;
-			// Claude refuses inputs that reproduce its own reasoning as text
-			// ("reasoning_extraction"), and the snapcompact archive is replayed as
-			// text into every later request; drop `¶think:` sections for
-			// Anthropic-dialect targets (issue #6093).
-			const snapcompactIncludeThinking = preferredDialect(this.#model.id) !== "anthropic";
+			const snapcompactIncludeThinking = snapcompactIncludesThinking(this.#model);
 			if (wantsSnapcompact && !this.#model.input.includes("image")) {
 				this.#host.emitNotice(
 					"warning",
@@ -3500,8 +3517,8 @@ export class SessionMaintenance {
 						...options,
 						metadata: this.#host.agent.metadataForProvider(candidate.provider),
 						convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
-						buildProviderContext: (summarized, retained, signal) =>
-							this.#host.buildLiveProviderContext(summarized, retained, signal),
+						buildProviderContext: (summarized, retained, signal, model) =>
+							this.#host.buildLiveProviderContext(summarized, retained, signal, model),
 						isUserAuthored: isUserAuthoredMessage,
 						telemetry,
 						// Honor the user's /model thinking selection (incl. `off`) on
@@ -4231,7 +4248,8 @@ export class SessionMaintenance {
 		if (signal.aborted) return undefined;
 		// Re-rendering frames needs a vision-capable model, same gate as the
 		// snapcompact method.
-		if (!this.#model?.input.includes("image")) return undefined;
+		const model = this.#model;
+		if (!model?.input.includes("image")) return undefined;
 		const staleEntry = getLatestCompactionEntry(branchEntries);
 		if (!staleEntry) return undefined;
 		// Only rescue when the archive is the actual source of the overflow.
@@ -4266,31 +4284,9 @@ export class SessionMaintenance {
 		const maxFrames = this.#computeSnapcompactRescueMaxFrames(settings, keptTailTokens);
 		if (maxFrames < 1 || maxFrames >= archive.frames.length) return undefined;
 
-		const staleDetails = staleEntry.details as snapcompact.CompactionDetails | undefined;
-		const fileOps = snapcompact.createFileOps();
-		for (const file of staleDetails?.readFiles ?? []) fileOps.read.add(file);
-		for (const file of staleDetails?.modifiedFiles ?? []) fileOps.edited.add(file);
-		const shapeSetting = cfgSnapcompactShape.get(this.#host.settings);
-		const shape = snapcompact.resolveShapeForText(archiveText, this.#model, shapeSetting);
 		let result: snapcompact.CompactionResult;
 		try {
-			result = await snapcompact.compact(
-				{
-					firstKeptEntryId: staleEntry.firstKeptEntryId,
-					messagesToSummarize: [],
-					turnPrefixMessages: [],
-					tokensBefore: staleEntry.tokensBefore,
-					previousSummary: staleEntry.summary,
-					previousPreserveData: staleEntry.preserveData,
-					fileOps,
-				},
-				{
-					convertToLlm,
-					model: this.#model,
-					...(shapeSetting === "auto" ? {} : { shape }),
-					maxFrames,
-				},
-			);
+			result = await this.#rerenderSnapcompactArchive(staleEntry, archiveText, model, maxFrames);
 		} catch (error) {
 			logger.warn("Dead-end snapcompact frame rescue failed", {
 				error: error instanceof Error ? error.message : String(error),
@@ -4349,6 +4345,200 @@ export class SessionMaintenance {
 			"compaction",
 		);
 		return result;
+	}
+
+	/**
+	 * Re-render `entry`'s snapcompact archive from its kept source text for
+	 * `model`, at most `maxFrames` frames: the reader's frame shape and its
+	 * reasoning policy ({@link snapcompactIncludesThinking}). Local: no model call.
+	 */
+	async #rerenderSnapcompactArchive(
+		entry: CompactionEntry,
+		archiveText: string,
+		model: Model,
+		maxFrames: number,
+	): Promise<snapcompact.CompactionResult> {
+		const details = entry.details as snapcompact.CompactionDetails | undefined;
+		const fileOps = snapcompact.createFileOps();
+		for (const file of details?.readFiles ?? []) fileOps.read.add(file);
+		for (const file of details?.modifiedFiles ?? []) fileOps.edited.add(file);
+		const shapeSetting = cfgSnapcompactShape.get(this.#host.settings);
+		const shape = snapcompact.resolveShapeForText(archiveText, model, shapeSetting);
+		return await snapcompact.compact(
+			{
+				firstKeptEntryId: entry.firstKeptEntryId,
+				messagesToSummarize: [],
+				turnPrefixMessages: [],
+				tokensBefore: entry.tokensBefore,
+				previousSummary: entry.summary,
+				previousPreserveData: entry.preserveData,
+				fileOps,
+			},
+			{
+				convertToLlm,
+				model,
+				...(shapeSetting === "auto" ? {} : { shape }),
+				maxFrames,
+				includeThinking: snapcompactIncludesThinking(model),
+			},
+		);
+	}
+
+	/**
+	 * Show the active model the snapcompact archive it may read, in the agent
+	 * context and in `activeMessages` (a running loop's context).
+	 * `includeThinking` is fixed when an archive is rendered, so one built under
+	 * another model still carries `¶think:` sections and the reasoning legend
+	 * once the session moves to Claude; an Anthropic-dialect model gets the
+	 * archive's no-reasoning view instead, and any other model the original.
+	 *
+	 * Runs on every model change and before every model call; side requests
+	 * read through {@link messagesForModel}.
+	 */
+	async renderArchiveForModel(activeMessages?: AgentMessage[]): Promise<void> {
+		const model = this.#model;
+		if (!model) return;
+		const replacements = await this.#summaryReplacements(model, this.#host.agent.state.messages, activeMessages);
+		if (replacements.size === 0) return;
+		// Re-read after the awaits: the agent may have appended messages meanwhile.
+		const agentMessages = this.#host.agent.state.messages;
+		if (agentMessages.some(message => replacements.has(message))) {
+			this.#host.agent.replaceMessages(agentMessages.map(message => replacements.get(message) ?? message));
+		}
+		if (!activeMessages) return;
+		let changed = false;
+		for (let index = 0; index < activeMessages.length; index++) {
+			const replacement = replacements.get(activeMessages[index]!);
+			if (!replacement) continue;
+			activeMessages[index] = replacement;
+			changed = true;
+		}
+		if (changed) invalidateConvertToLlmArrayCache(activeMessages);
+	}
+
+	/**
+	 * `messages` as `model` reads them: a copy with each snapcompact summary
+	 * swapped for the archive view `model` may read (see
+	 * {@link renderArchiveForModel}), or `messages` itself when none changes.
+	 */
+	async messagesForModel(messages: AgentMessage[], model: Model): Promise<AgentMessage[]> {
+		const replacements = await this.#summaryReplacements(model, messages);
+		return replacements.size === 0 ? messages : messages.map(message => replacements.get(message) ?? message);
+	}
+
+	async #summaryReplacements(
+		model: Model,
+		...lists: (readonly AgentMessage[] | undefined)[]
+	): Promise<Map<AgentMessage, AgentMessage>> {
+		const replacements = new Map<AgentMessage, AgentMessage>();
+		const excludeThinking = !snapcompactIncludesThinking(model);
+		for (const messages of lists) {
+			for (const message of messages ?? []) {
+				if (message.role !== "compactionSummary" || replacements.has(message)) continue;
+				if (!excludeThinking) {
+					const original = this.#originalSummaries.get(message);
+					if (original) replacements.set(message, original);
+				} else if (snapcompact.summaryIncludesThinking(message.summary)) {
+					replacements.set(message, await this.#readerSummary(message, model));
+				}
+			}
+		}
+		return replacements;
+	}
+
+	/** `message` rebuilt from its archive's no-reasoning view, one copy per original and view. */
+	async #readerSummary(message: CompactionSummaryMessage, model: Model): Promise<CompactionSummaryMessage> {
+		const entry = this.#host.sessionManager
+			.getBranchView()
+			.findLast(
+				(entry): entry is CompactionEntry =>
+					entry.type === "compaction" &&
+					entry.summary === message.summary &&
+					new Date(entry.timestamp).getTime() === message.timestamp &&
+					snapcompact.getPreservedArchive(entry.preserveData) !== undefined,
+			);
+		// No archive behind it (e.g. archive text a summarizer folded into a plain
+		// summary): scrub the summary text itself and keep no blocks.
+		const view = entry
+			? await this.#viewWithoutThinking(entry, model)
+			: {
+					summary: snapcompact.textWithoutThinking(message.summary),
+					archive: { frames: [], totalChars: 0, truncatedChars: 0 },
+				};
+		const cached = this.#readerSummaries.get(message);
+		if (cached?.view === view) return cached.message;
+		const blocks = this.#host.sessionManager.snapcompactHistoryBlocks(view.archive);
+		const images = blocks.filter(block => block.type === "image");
+		const reader: CompactionSummaryMessage = {
+			...message,
+			summary: view.summary,
+			blocks: blocks.length > 0 ? blocks : undefined,
+			images: images.length > 0 ? images : undefined,
+		};
+		this.#readerSummaries.set(message, { view, message: reader });
+		this.#originalSummaries.set(reader, message);
+		return reader;
+	}
+
+	#viewWithoutThinking(entry: CompactionEntry, model: Model): Promise<snapcompact.ArchiveView> {
+		let view = this.#withoutThinkingViews.get(entry);
+		if (!view) {
+			view = this.#renderViewWithoutThinking(entry, model);
+			this.#withoutThinkingViews.set(entry, view);
+		}
+		return view;
+	}
+
+	/**
+	 * The no-reasoning view of `entry`'s archive. One the entry lacks is
+	 * re-rendered locally from the archive's source at its frame count and
+	 * stored next to the original (`Archive.withoutThinking`), which stays
+	 * intact for readers that keep reasoning and for other branches. When the
+	 * render fails, the text-only form without frames is read instead.
+	 */
+	async #renderViewWithoutThinking(entry: CompactionEntry, model: Model): Promise<snapcompact.ArchiveView> {
+		const archive = snapcompact.getPreservedArchive(entry.preserveData)!;
+		const details = entry.details as Partial<snapcompact.CompactionDetails> | undefined;
+		// The stored variant, the original when it carries no reasoning, else the
+		// text-only form without frames.
+		const readableView = () =>
+			snapcompact.viewWithoutThinking(
+				entry.summary,
+				archive,
+				Array.isArray(details?.readFiles) && Array.isArray(details?.modifiedFiles)
+					? { readFiles: details.readFiles, modifiedFiles: details.modifiedFiles }
+					: undefined,
+			);
+		const archiveText = snapcompact.archiveSourceText(archive);
+		if (archive.withoutThinking || !snapcompact.summaryIncludesThinking(entry.summary) || !archiveText) {
+			return readableView();
+		}
+		let view: snapcompact.ArchiveView;
+		try {
+			const result = await this.#rerenderSnapcompactArchive(entry, archiveText, model, archive.frames.length);
+			const rendered = snapcompact.getPreservedArchive(result.preserveData);
+			if (!rendered) throw new Error("The re-render produced no archive");
+			view = { summary: result.summary, archive: rendered };
+		} catch (error) {
+			logger.warn("Snapcompact archive render without reasoning failed; reading its text without frames", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return readableView();
+		}
+		const preserveData = entry.preserveData;
+		entry.preserveData = {
+			...preserveData,
+			[snapcompact.PRESERVE_KEY]: { ...(preserveData?.[snapcompact.PRESERVE_KEY] as object), withoutThinking: view },
+		};
+		try {
+			await this.#host.sessionManager.rewriteEntries();
+		} catch (error) {
+			entry.preserveData = preserveData;
+			logger.warn("Persisting the snapcompact archive without reasoning failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+		return view;
 	}
 
 	/**
@@ -4836,10 +5026,7 @@ export class SessionMaintenance {
 			let snapcompactResult: snapcompact.CompactionResult | undefined;
 			let snapcompactBlocker: string | undefined;
 			if (action === "snapcompact" && compactionPrep.kind !== "fromHook") {
-				// Drop `¶think:` sections for Anthropic-dialect targets: the archive
-				// is replayed as text and Claude refuses reproduced reasoning
-				// ("reasoning_extraction", issue #6093).
-				const snapcompactIncludeThinking = preferredDialect(this.#model.id) !== "anthropic";
+				const snapcompactIncludeThinking = snapcompactIncludesThinking(this.#model);
 				const text = snapcompact.serializeConversation(
 					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
 					{ includeThinking: snapcompactIncludeThinking },
@@ -5071,8 +5258,8 @@ export class SessionMaintenance {
 									metadata: this.#host.agent.metadataForProvider(candidate.provider),
 									initiatorOverride: "agent",
 									convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
-									buildProviderContext: (summarized, retained, signal) =>
-										this.#host.buildLiveProviderContext(summarized, retained, signal),
+									buildProviderContext: (summarized, retained, signal, model) =>
+										this.#host.buildLiveProviderContext(summarized, retained, signal, model),
 									isUserAuthored: isUserAuthoredMessage,
 									telemetry,
 									// Honor the user's /model thinking selection on the

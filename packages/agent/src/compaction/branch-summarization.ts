@@ -8,6 +8,7 @@
 import type { Api, ApiKey, AssistantMessage, Context, Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { prompt } from "@oh-my-pi/pi-utils";
+import * as snapcompact from "@oh-my-pi/snapcompact";
 import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";
 import { Tokenizer } from "../tokenizer";
 import type { AgentMessage } from "../types";
@@ -317,16 +318,28 @@ export async function generateBranchSummary(
 	const tokenBudget = contextWindow - reserveTokens;
 	const tokenizer = new Tokenizer(model);
 
-	const { messages, fileOps } = prepareBranchEntries(entries, tokenizer, tokenBudget);
+	const { messages: branchMessages, fileOps } = prepareBranchEntries(entries, tokenizer, tokenBudget);
 
-	if (messages.length === 0) {
+	if (branchMessages.length === 0) {
 		return { summary: "No content to summarize" };
 	}
+
+	// A snapcompact summary rendered for another model may carry reasoning
+	// sections and their legend, which Claude refuses (issue #6093).
+	const dialect = preferredDialect(model.id);
+	const messages =
+		dialect === "anthropic"
+			? branchMessages.map(message =>
+					message.role === "compactionSummary"
+						? { ...message, summary: snapcompact.textWithoutThinking(message.summary) }
+						: message,
+				)
+			: branchMessages;
 
 	// Transform to LLM-compatible messages, then serialize to text
 	// Serialization prevents the model from treating it as a conversation to continue
 	const llmMessages = (options.convertToLlm ?? defaultConvertToLlm)(messages);
-	const conversationText = serializeConversationForSummary(llmMessages, preferredDialect(model.id));
+	const conversationText = serializeConversationForSummary(llmMessages, dialect);
 
 	// Build prompt
 	const instructions = customInstructions || BRANCH_SUMMARY_PROMPT;

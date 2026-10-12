@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `viewWithoutThinking()` and `textWithoutThinking()` and an optional `Archive.withoutThinking` variant, so an archive rendered with reasoning can be read by a model that must not see it; without a stored variant the view keeps only reasoning-free text and no frames
+
+### Fixed
+
+- Fixed re-rendering an archive without reasoning keeping every paragraph after the first of a multi-paragraph `¶think:` section
+
 ## [18.6.3] - 2026-10-06
 
 ### Breaking Changes

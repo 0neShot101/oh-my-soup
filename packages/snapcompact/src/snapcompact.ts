@@ -61,7 +61,7 @@ import {
 } from "@oh-my-pi/pi-catalog/compat/image-tokenization";
 import { classifyModel, compareRevision, parseRevision } from "@oh-my-pi/pi-catalog/identity";
 import { renderSnapcompactPng, snapcompactSupportedChars } from "@oh-my-pi/pi-natives";
-import { formatGroupedPaths, prompt } from "@oh-my-pi/pi-utils";
+import { formatGroupedPaths, isRecord, prompt } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import fileOperationsTemplate from "./prompts/file-operations.md" with { type: "text" };
 import snapcompactSummaryPrompt from "./prompts/snapcompact-summary.md" with { type: "text" };
@@ -612,6 +612,16 @@ export interface Archive {
 	textHead?: string;
 	/** Newest text region kept verbatim around the imaged middle. */
 	textTail?: string;
+	/** The same history re-rendered for a reader that excludes assistant
+	 *  reasoning ({@link SerializeOptions.includeThinking} `false`), when this
+	 *  archive carries it. Read through {@link viewWithoutThinking}. */
+	withoutThinking?: ArchiveView;
+}
+
+/** What a reader gets for one compaction: the summary text and the archive it introduces. */
+export interface ArchiveView {
+	summary: string;
+	archive: Archive;
 }
 
 export interface Geometry {
@@ -1736,9 +1746,8 @@ export function frames(text: string, options?: Pick<RenderManyOptions, "shape" |
 // Archive helpers
 // ============================================================================
 
-/** Validate and extract a persisted frame archive from `preserveData`. */
-export function getPreservedArchive(preserveData: Record<string, unknown> | undefined): Archive | undefined {
-	const candidate = preserveData?.[PRESERVE_KEY];
+/** Validate one persisted archive object (frames, counters, text regions). */
+function validateArchive(candidate: unknown): Archive | undefined {
 	if (!candidate || typeof candidate !== "object") return undefined;
 	const archive = candidate as Archive;
 	const frames = Array.isArray(archive.frames)
@@ -1767,6 +1776,18 @@ export function getPreservedArchive(preserveData: Record<string, unknown> | unde
 		...(textHead !== undefined ? { textHead } : {}),
 		...(textTail !== undefined ? { textTail } : {}),
 	};
+}
+
+/** Validate and extract a persisted frame archive from `preserveData`, with its
+ *  {@link Archive.withoutThinking} variant when that is valid too. */
+export function getPreservedArchive(preserveData: Record<string, unknown> | undefined): Archive | undefined {
+	const slot = preserveData?.[PRESERVE_KEY];
+	const archive = validateArchive(slot);
+	if (!archive || !isRecord(slot) || !isRecord(slot.withoutThinking)) return archive;
+	const { summary, archive: variant } = slot.withoutThinking;
+	if (typeof summary !== "string" || !summary) return archive;
+	const variantArchive = validateArchive(variant);
+	return variantArchive ? { ...archive, withoutThinking: { summary, archive: variantArchive } } : archive;
 }
 
 /** Drop the persisted frame archive ({@link PRESERVE_KEY}) from `preserveData`,
@@ -2105,27 +2126,109 @@ function planArchive(text: string, high: Shape, low: Shape, maxFrames: number): 
 	};
 }
 
+const THINK_LABEL = "¶think:";
+
+/** A scope label opening a serialized section, at the start of a line in raw
+ *  (`\n`) or normalized ({@link NEWLINE_GLYPH}) archive text. */
+const SECTION_START = new RegExp(`(?<=^|[\\n${NEWLINE_GLYPH}])(?=¶(?:user|think|ai|call):)`);
+
+const TRAILING_LINE_BREAKS = new RegExp(`[\\n${NEWLINE_GLYPH}]+$`);
+
 /**
- * Drop `¶think:` sections from serialized archive source text.
+ * Drop every `¶think:` section from archive source text: its label line and
+ * every following line up to the next scope label.
  *
- * Archives written before {@link SerializeOptions.includeThinking} existed bake
- * reasoning into their kept source; replaying it to Claude trips the
- * `reasoning_extraction` classifier (issue #6093). Re-compaction re-renders the
- * whole unfolded source, so scrubbing the prior text heals a poisoned session
- * at its next compaction. Conservative by construction: only sections that
- * start with `¶think:` at a section boundary are dropped.
+ * Archives rendered with {@link SerializeOptions.includeThinking} (or before it
+ * existed) bake reasoning into their kept source; replaying it to Claude trips
+ * the `reasoning_extraction` classifier (issue #6093). Re-rendering for a reader
+ * that excludes thinking scrubs the prior text with this. Paragraph breaks
+ * inside a thought are line breaks like any other, so a section ends only at
+ * the next label; a label inside a dimmed tool-output body is output text.
  */
 function stripThinkingSections(text: string): string {
-	return text
-		.split(NEWLINE_GLYPH)
-		.map(segment =>
-			segment
-				.split(/\n\n(?=¶(?:user|think|ai|call):)/)
-				.filter(section => !section.startsWith("¶think:"))
-				.join("\n\n"),
-		)
-		.filter(segment => segment.length > 0)
-		.join(NEWLINE_GLYPH);
+	const sections: string[] = [];
+	let dimOpen = false;
+	for (const piece of text.split(SECTION_START)) {
+		if (dimOpen) sections[sections.length - 1] += piece;
+		else sections.push(piece);
+		const on = piece.lastIndexOf(DIM_ON);
+		const off = piece.lastIndexOf(DIM_OFF);
+		if (on !== off) dimOpen = on > off;
+	}
+	const kept = sections.filter(section => !section.startsWith(THINK_LABEL));
+	if (kept.length === sections.length) return text;
+	const stripped = kept.join("");
+	// A dropped final section leaves its predecessor's line break dangling.
+	return sections.at(-1)?.startsWith(THINK_LABEL) ? stripped.replace(TRAILING_LINE_BREAKS, "") : stripped;
+}
+
+/** Whether a snapcompact summary declares `¶think:` reasoning scopes: true for
+ *  archives rendered with {@link SerializeOptions.includeThinking}, and for
+ *  summaries written before that legend was gated on it. */
+export function summaryIncludesThinking(summary: string): boolean {
+	return summary.includes(THINK_LABEL);
+}
+
+/** The reasoning scope in a scope legend, current and earlier summary wordings
+ *  alike, wherever it sits: a summary, or one archived inside another archive. */
+const LEGEND_REASONING_SCOPE =
+	/`¶user:`, `¶think:`, (`¶ai:`, (?:and )?`¶call:`:? (?:open )?user, )assistant reasoning, /g;
+
+/** `text` (a summary or archive source, raw or normalized) without its
+ *  `¶think:` sections, and with the reasoning scope dropped from any legend. */
+export function textWithoutThinking(text: string): string {
+	return stripThinkingSections(text).replace(LEGEND_REASONING_SCOPE, "`¶user:`, $1");
+}
+
+const PREVIOUS_SUMMARY_HEAD = "[Summary of earlier history]";
+
+/**
+ * What a reader that excludes assistant reasoning reads for a compaction
+ * whose summary is `summary` and archive `archive`: the archive's
+ * {@link Archive.withoutThinking} variant when it carries one, the original
+ * when its summary declares no reasoning, else a fail-closed text-only form.
+ * That form keeps no frames (pixels cannot be scrubbed), takes its text edges
+ * from the source after every `¶think:` section is removed (so a section
+ * crossing an edge cannot leak), counts the dropped middle as truncated, and
+ * re-renders the summary without the reasoning legend; `details` restores its
+ * file list.
+ */
+export function viewWithoutThinking(summary: string, archive: Archive, details?: CompactionDetails): ArchiveView {
+	if (archive.withoutThinking) return archive.withoutThinking;
+	if (!summaryIncludesThinking(summary)) return { summary, archive };
+	const source =
+		archive.text ??
+		[archive.textHead, archive.textTail]
+			.filter((part): part is string => typeof part === "string" && part.length > 0)
+			.join(NEWLINE_GLYPH);
+	const text = textWithoutThinking(source);
+	const headChars = archive.textHead?.length ?? 0;
+	const tailChars = archive.textTail?.length ?? 0;
+	const fits = headChars + tailChars >= text.length;
+	const textHead = fits ? text : text.slice(0, headChars);
+	const textTail = fits || tailChars === 0 ? "" : text.slice(text.length - tailChars);
+	const truncatedChars = archive.truncatedChars + (fits ? 0 : text.length - headChars - tailChars);
+	const files = details ? formatFileList(details.readFiles, details.modifiedFiles) : "";
+	return {
+		summary:
+			textHead.length === 0 && files.length === 0
+				? "No prior history."
+				: prompt.render(snapcompactSummaryPrompt, {
+						frameCount: 0,
+						truncatedChars,
+						includedPreviousSummary: text.startsWith(PREVIOUS_SUMMARY_HEAD),
+						files: files.length > 0 ? files : undefined,
+						includeThinking: false,
+					}),
+		archive: {
+			frames: [],
+			totalChars: textHead.length + textTail.length,
+			truncatedChars,
+			...(text ? { text } : {}),
+			...(textHead ? { textHead } : {}),
+			...(textTail ? { textTail } : {}),
+		},
+	};
 }
 
 /**
@@ -2159,15 +2262,15 @@ export async function compact<TMessage = Message>(
 			.filter((part): part is string => typeof part === "string" && part.length > 0)
 			.join(NEWLINE_GLYPH);
 	// Legacy archives may carry `¶think:` sections from before includeThinking
-	// existed; scrub them when this compaction excludes thinking so the
-	// re-rendered archive stops replaying reasoning (issue #6093). They may
-	// also carry data URLs a pre-guard slice cut at any offset; heal those in
-	// archive context before the text is folded into the new source.
+	// existed, and any archive may carry an earlier summary's reasoning legend;
+	// scrub both when this compaction excludes thinking so the re-rendered
+	// archive stops replaying reasoning (issue #6093). They may also carry data
+	// URLs a pre-guard slice cut at any offset; heal those in archive context
+	// before the text is folded into the new source.
 	const previousTextHealed = elideDataUrls(previousTextRaw, "archive");
+	const excludeThinking = options?.includeThinking === false;
 	const previousText =
-		options?.includeThinking === false && previousTextHealed.length > 0
-			? stripThinkingSections(previousTextHealed)
-			: previousTextHealed;
+		excludeThinking && previousTextHealed.length > 0 ? textWithoutThinking(previousTextHealed) : previousTextHealed;
 	const hasPreviousText = previousText.length > 0;
 	const includedPreviousSummary = !hasPreviousText && !!previousSummary;
 	const shapeProbeText = renderabilityProbeText(serialized, previousPreserveData, previousSummary);
@@ -2183,7 +2286,8 @@ export async function compact<TMessage = Message>(
 	let archiveText = normalize(serialized, { shape: high });
 
 	if (includedPreviousSummary && previousSummary) {
-		const head = `[Summary of earlier history] ${normalize(previousSummary, { shape: high })}`;
+		const lead = excludeThinking ? textWithoutThinking(previousSummary) : previousSummary;
+		const head = `${PREVIOUS_SUMMARY_HEAD} ${normalize(lead, { shape: high })}`;
 		archiveText = archiveText.length > 0 ? `${head} [Recent conversation] ${archiveText}` : head;
 	}
 

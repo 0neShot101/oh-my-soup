@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Before-model-call hooks now receive the loop context as a second argument, and `buildProviderContext` receives the summarizer model
+
+### Fixed
+
+- Fixed a Claude compaction or branch summarizer receiving assistant reasoning from a snapcompact archive rendered under another model, which Claude refuses (`reasoning_extraction`)
+
 ## [18.9.2] - 2026-10-11
 
 ### Changed
