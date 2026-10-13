@@ -15,6 +15,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { $ } from "bun";
 import { dlopen, FFIType, ptr } from "bun:ffi";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 import { FileSessionStorage } from "../session/session-storage";
 import { errorMessage } from "../slash-commands/helpers/parse";
 import { sha256File } from "../utils/file-hash";
@@ -177,7 +178,7 @@ export async function sweepCompressScratch(roots: string[], apply: boolean, erro
 				dirs.push(path.join(root, name));
 			}
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") errors.push(`${root}: ${errorMessage(error)}`);
+			if (!isEnoent(error)) errors.push(`${root}: ${errorMessage(error)}`);
 			continue;
 		}
 		for (const dir of dirs) {
@@ -190,7 +191,7 @@ export async function sweepCompressScratch(roots: string[], apply: boolean, erro
 				if (owned) await fs.rm(dir, { recursive: true, force: true });
 				else await fs.rmdir(dir);
 			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+				if (isEnoent(error)) continue;
 				errors.push(`${dir}: ${errorMessage(error)}`);
 			}
 		}
@@ -236,8 +237,8 @@ export async function compressFilesInPlace(
 async function compactBatch(batch: CompressCandidate[], result: CompressBatchResult): Promise<void> {
 	for (const candidate of batch) result.allocatedAfter += candidate.allocated;
 	// LZNT1 rather than `/exe` (WOF) compression: WOF inflates the whole file on
-	// its next write, so a resumed session would lose all its savings. `compact`
-	// skips, and exits nonzero for, a file another process holds open.
+	// its next write, so a resumed session would lose all its savings. LZNT1
+	// compresses in place, so a concurrent appender cannot lose data.
 	const run = await $`compact /c /q ${batch.map(candidate => candidate.path)}`.quiet().nothrow();
 	if (run.exitCode !== 0) {
 		const output = `${run.stdout.toString()}${run.stderr.toString()}`.trim().split("\n").slice(-3).join(" ");

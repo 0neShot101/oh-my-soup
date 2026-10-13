@@ -1910,8 +1910,9 @@ async function tryAcquireNestedLeases(session: SessionInfo, files: string[]): Pr
  * transcript is `compressAfterDays` old and no running process holds its
  * ownership lease; files written more recently than that are left alone.
  * Unlike archiving, an interrupted last turn does not exclude a session:
- * paths, bytes, mtimes, and history and stats rows are untouched, so it stays
- * resumable. Leftover scratch directories from a killed run are removed first.
+ * paths, bytes, and mtimes are unchanged and no history or stats rows are
+ * deleted, so it stays resumable. Leftover scratch directories from a killed
+ * run are removed first. A session that fails is reported and skipped.
  */
 async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): Promise<CompressGcResult> {
 	const sessionsRoot = getSessionsDir(options.agentDir);
@@ -1944,10 +1945,15 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 	const sessions = await listActiveSessions(sessionsRoot);
 	result.scanned = sessions.length;
 	const cutoffMs = Date.now() - Math.max(options.compressAfterDays * DAY_MS, GC_WRITE_GRACE_MS);
-	const statsDb = statsDbPath(options);
 	for (const session of sessions) {
 		if (session.modified.getTime() > cutoffMs) continue;
-		const files = await collectSessionFiles(session);
+		let files: string[];
+		try {
+			files = await collectSessionFiles(session);
+		} catch (error) {
+			result.errors.push(`${session.path}: ${errorMessage(error)}`);
+			continue;
+		}
 		const candidates: CompressCandidate[] = [];
 		for (const file of files) {
 			try {
@@ -1977,15 +1983,12 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 				result.allocatedBefore += candidate.allocated;
 			}
 			if (!options.apply) continue;
-			// The APFS scratch copies end in `.jsonl` like the originals; holding the
-			// stats sync lock keeps a concurrent sync from ingesting them.
-			const batch =
-				method === "apfs"
-					? await withStatsSyncLock(statsDb, () => compressFilesInPlace(candidates, method))
-					: await compressFilesInPlace(candidates, method);
+			const batch = await compressFilesInPlace(candidates, method);
 			result.compressed += batch.compressed;
 			result.allocatedAfter += batch.allocatedAfter;
 			result.errors.push(...batch.errors);
+		} catch (error) {
+			result.errors.push(`${session.path}: ${errorMessage(error)}`);
 		} finally {
 			// Held through the rewrite so no omp process resumes the session mid-swap.
 			for (const held of nested ?? []) held.release();

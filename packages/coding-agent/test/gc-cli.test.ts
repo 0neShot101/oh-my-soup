@@ -2622,6 +2622,20 @@ describe("runGcCommand session compression", () => {
 		expect(await snapshot(file)).toEqual(before);
 	});
 
+	test.skipIf(!supported)("a session whose artifact tree cannot be read does not stop the run", async () => {
+		const broken = await writeIdleSession(Bun.randomUUIDv7());
+		// A file where the artifact directory belongs makes the tree scan fail with ENOTDIR.
+		await fs.rm(path.dirname(broken.artifact), { recursive: true });
+		await Bun.write(path.dirname(broken.artifact), "not a directory");
+		await writeIdleSession(Bun.randomUUIDv7());
+
+		const result = await runGcCommand({ flags: { agentDir: root, compress: true, wal: true, apply: true } });
+
+		expect(result.compress).toMatchObject({ scanned: 2, sessions: 1, compressed: 2 });
+		expect(result.compress?.errors).toEqual([expect.stringContaining(broken.file)]);
+		expect(result.wal).toBeDefined();
+	});
+
 	test.skipIf(!onApfs)("--apply removes only the scratch dirs a killed run left behind", async () => {
 		const { file, artifact } = await writeIdleSession(Bun.randomUUIDv7());
 		const inSessions = path.join(path.dirname(file), ".omp-gc-compress-a1b2c3");
