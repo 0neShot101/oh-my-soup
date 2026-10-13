@@ -10,16 +10,16 @@
 import { resolveDiscoveryApi, resolveModelPolicy } from "./compat/resolve";
 import type { ModelIdentity } from "./compat/types";
 import { resolveModelTokenizer } from "./model-tokenizer";
-import { applyDueEffectiveRates, effectiveRateDates, materializeTimeBasedCost } from "./pricing";
 import {
-	type Api,
-	type EffectiveTokenCost,
-	MODEL_KINDS,
-	type Model,
-	type ModelCost,
-	type ModelSpec,
-	type TimeBasedCost,
-} from "./types";
+	applyDueDatedCostCard,
+	type DatedCostCard,
+	dueEffectiveRate,
+	EARLIEST_EFFECTIVE_FROM,
+	materializeTimeBasedCost,
+	NO_RECURRING_TARIFF,
+	parseDatedCostCards,
+} from "./pricing";
+import { type Api, type EffectiveTokenCost, MODEL_KINDS, type Model, type ModelCost, type ModelSpec } from "./types";
 import { cleanModelName } from "./utils";
 
 function numberField(source: object, key: string): number | undefined {
@@ -137,22 +137,37 @@ function applyCatalogAssignments<TApi extends Api>(model: Model<TApi>, catalog: 
 	}
 }
 
-/**
- * Earliest instant a rate card can name (the `Date` range minimum). A leading
- * card from here holds the price in force before the first dated change.
- */
-const EARLIEST_EFFECTIVE_FROM = -8_640_000_000_000_000;
-
-/** A schedule of dated rate cards alone: no peak windows, no off-peak discount. */
-const NO_RECURRING_TARIFF: TimeBasedCost = { offPeakMultiplier: 1, peakWindows: [] };
+/** The parsed dated cards of a row's `cost-patch` and `cost-fallback`. */
+interface DatedCostCards {
+	patch: readonly DatedCostCard[];
+	fallback: readonly DatedCostCard[];
+}
 
 /**
  * The row's corrected price card at `now`: `cost-patch`, then `cost-fallback`
- * (each with its dated `effective-rates` card due at `now`), then the
- * long-context tier and cache-rate derivations, all from the upstream card.
+ * (each with its dated card due at `now`), then the long-context tier and
+ * cache-rate derivations, all from the upstream card.
  */
-function correctedCost(upstream: ModelCost, catalog: Record<string, unknown>, now: number): ModelCost {
+function correctedCost(
+	upstream: ModelCost,
+	catalog: Record<string, unknown>,
+	cards: DatedCostCards,
+	now: number,
+): ModelCost {
 	let cost: ModelCost = { ...upstream };
+	const upstreamCard =
+		upstream.timeBased?.effectiveRates?.[0]?.effectiveFrom === EARLIEST_EFFECTIVE_FROM
+			? dueEffectiveRate(upstream.timeBased, now)
+			: undefined;
+	if (upstreamCard !== undefined) {
+		// A row rebuilt from an already built one (dynamic merges, overrides)
+		// carries the dated schedule compiled below. Its leading card covers all
+		// history, so the scalar legs only ever held the card due at the first
+		// build; start from the card due now instead.
+		const { effectiveFrom: _effectiveFrom, ...card } = upstreamCard;
+		const { longContext: _longContext, ...base } = cost;
+		cost = { ...base, ...card };
+	}
 	const patch = objectPayload(catalog.costPatch);
 	if (patch !== undefined) {
 		const input = numberField(patch, "input");
@@ -163,7 +178,7 @@ function correctedCost(upstream: ModelCost, catalog: Record<string, unknown>, no
 		if (cacheRead !== undefined) cost.cacheRead = cacheRead;
 		const cacheWrite = numberField(patch, "cacheWrite");
 		if (cacheWrite !== undefined) cost.cacheWrite = cacheWrite;
-		applyDueEffectiveRates(cost, Reflect.get(patch, "effectiveRates"), now);
+		applyDueDatedCostCard(cost, cards.patch, now);
 	}
 	const fallback = objectPayload(catalog.costFallback);
 	if (fallback !== undefined) {
@@ -180,7 +195,7 @@ function correctedCost(upstream: ModelCost, catalog: Record<string, unknown>, no
 			if (cacheRead !== undefined) cost.cacheRead = cacheRead;
 			const cacheWrite = numberField(fallback, "cacheWrite");
 			if (cacheWrite !== undefined) cost.cacheWrite = cacheWrite;
-			applyDueEffectiveRates(cost, Reflect.get(fallback, "effectiveRates"), now);
+			applyDueDatedCostCard(cost, cards.fallback, now);
 		}
 	}
 	const longContext = objectPayload(catalog.longContext);
@@ -244,16 +259,22 @@ function correctedCost(upstream: ModelCost, catalog: Record<string, unknown>, no
  * earlier requests at the old one on rows built after it. Undefined when no
  * card changes the price (no cards, or a fallback the upstream price outranks).
  */
-function scheduledRates(upstream: ModelCost, catalog: Record<string, unknown>): EffectiveTokenCost[] | undefined {
-	const dates = [
-		...effectiveRateDates(Reflect.get(objectPayload(catalog.costPatch) ?? {}, "effectiveRates")),
-		...effectiveRateDates(Reflect.get(objectPayload(catalog.costFallback) ?? {}, "effectiveRates")),
-	].sort((a, b) => a - b);
+function scheduledRates(
+	upstream: ModelCost,
+	catalog: Record<string, unknown>,
+	cards: DatedCostCards,
+): EffectiveTokenCost[] | undefined {
+	const dates = [...cards.patch, ...cards.fallback].map(card => card.effectiveFrom).sort((a, b) => a - b);
 	if (dates.length === 0) return undefined;
 	const periods: EffectiveTokenCost[] = [];
 	let previousPrice: string | undefined;
 	for (const effectiveFrom of [EARLIEST_EFFECTIVE_FROM, ...dates]) {
-		const { input, output, cacheRead, cacheWrite, longContext } = correctedCost(upstream, catalog, effectiveFrom);
+		const { input, output, cacheRead, cacheWrite, longContext } = correctedCost(
+			upstream,
+			catalog,
+			cards,
+			effectiveFrom,
+		);
 		const price = { input, output, cacheRead, cacheWrite, ...(longContext && { longContext }) };
 		const key = JSON.stringify(price);
 		if (key === previousPrice) continue;
@@ -277,12 +298,16 @@ export function applyCatalogCorrections(
 	catalog: Record<string, unknown>,
 ): void {
 	const upstream = model.cost;
+	const cards: DatedCostCards = {
+		patch: parseDatedCostCards(catalog.costPatch, "cost-patch"),
+		fallback: parseDatedCostCards(catalog.costFallback, "cost-fallback"),
+	};
 	// The card due now is the row's displayed price; the dated schedule rides
 	// along so rows reused past a change (bundles, caches, long sessions) still
 	// bill each request at the card in force when it was made.
-	model.cost = correctedCost(upstream, catalog, Date.now());
+	model.cost = correctedCost(upstream, catalog, cards, Date.now());
 	const recurring = catalog.timeBased === undefined ? undefined : materializeTimeBasedCost(catalog.timeBased);
-	const dated = scheduledRates(upstream, catalog);
+	const dated = scheduledRates(upstream, catalog, cards);
 	if (dated !== undefined) {
 		if (recurring?.effectiveRates !== undefined) {
 			throw new Error(

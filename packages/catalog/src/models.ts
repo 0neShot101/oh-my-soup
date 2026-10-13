@@ -1,5 +1,6 @@
 import { classifyModel } from "./compat/taxonomy";
 import MODELS from "./models.json" with { type: "json" };
+import { dueEffectiveRate } from "./pricing";
 import type {
 	Api,
 	EffectiveTokenCost,
@@ -82,16 +83,8 @@ export function getEffectiveTokenCost(cost: ModelCost, timestamp = Date.now()): 
 }
 
 function resolveTokenCost(cost: ModelCost, promptInputTokens: number, timestamp: number | undefined): TokenCost {
-	let rates: ModelCost | EffectiveTokenCost = cost;
-	let effectiveFrom = -Infinity;
-	if (timestamp !== undefined && cost.timeBased?.effectiveRates) {
-		for (const candidate of cost.timeBased.effectiveRates) {
-			if (candidate.effectiveFrom <= timestamp && candidate.effectiveFrom > effectiveFrom) {
-				rates = candidate;
-				effectiveFrom = candidate.effectiveFrom;
-			}
-		}
-	}
+	const rates: ModelCost | EffectiveTokenCost =
+		(timestamp === undefined ? undefined : dueEffectiveRate(cost.timeBased, timestamp)) ?? cost;
 	const longContext = rates.longContext;
 	if (!longContext) return rates;
 	const reachesThreshold =

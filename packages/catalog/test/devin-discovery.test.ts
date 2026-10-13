@@ -813,13 +813,16 @@ describe("devin catalog pricing", () => {
 		expect(inputRateAt(model, PROMO_ENDS)).toBeCloseTo(3, 10);
 	});
 
-	it("switches the SWE-2 fallback to list after the promo ends", () => {
+	it("switches the SWE-2 fallback to list after the promo ends, including on rows rebuilt from promo-era rows", () => {
+		const promoEra = buildModel(spec("swe-2"));
 		const clock = spyOn(Date, "now").mockReturnValue(PROMO_ENDS);
 		try {
-			const model = buildModel(spec("swe-2"));
-			expect(model.cost).toMatchObject({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 });
-			// Requests made during the promo keep the promo price.
-			expect(inputRateAt(model, PROMO_ENDS - 1)).toBeCloseTo(0.75, 10);
+			// A fresh row, and a promo-era row re-materialized (dynamic merge, override) after the promo.
+			for (const model of [buildModel(spec("swe-2")), buildModel(promoEra)]) {
+				expect(model.cost).toMatchObject({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 });
+				// Requests made during the promo keep the promo price.
+				expect(inputRateAt(model, PROMO_ENDS - 1)).toBeCloseTo(0.75, 10);
+			}
 		} finally {
 			clock.mockRestore();
 		}
