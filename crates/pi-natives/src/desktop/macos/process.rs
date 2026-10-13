@@ -9,6 +9,7 @@ use std::{
 	path::Path,
 };
 
+use objc2::rc::autoreleasepool;
 use objc2_app_kit::NSRunningApplication;
 use objc2_foundation::{NSBundle, ns_string};
 
@@ -206,16 +207,19 @@ pub(super) fn is_screen_sharing(pid: libc::pid_t) -> bool {
 }
 
 /// Whether `pid` is a `UIKit` app: Mac Catalyst, or an iPhone or iPad app.
-/// Their bundles declare `UIDeviceFamily`; `AppKit` apps' do not.
+/// Their bundles declare `UIDeviceFamily`; `AppKit` apps' do not. The session
+/// thread has no autorelease pool of its own, so the lookup brings one.
 pub(super) fn is_uikit(pid: libc::pid_t) -> bool {
-	NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
-		.and_then(|app| app.bundleURL())
-		.and_then(|url| NSBundle::bundleWithURL(&url))
-		.is_some_and(|bundle| {
-			bundle
-				.objectForInfoDictionaryKey(ns_string!("UIDeviceFamily"))
-				.is_some()
-		})
+	autoreleasepool(|_| {
+		NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+			.and_then(|app| app.bundleURL())
+			.and_then(|url| NSBundle::bundleWithURL(&url))
+			.is_some_and(|bundle| {
+				bundle
+					.objectForInfoDictionaryKey(ns_string!("UIDeviceFamily"))
+					.is_some()
+			})
+	})
 }
 
 /// Terminal AX text areas represent a rendered grid, not the pty input. Even a

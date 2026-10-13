@@ -24,6 +24,7 @@ use super::{
 	super::{
 		ax::{AxBounds, AxHandle, AxProps, WalkBounds, normalize_role_macos},
 		backend::AxBackend,
+		control,
 		error::{CoreResult, DesktopError},
 		types::DesktopWindow,
 	},
@@ -657,11 +658,7 @@ impl AxBackend for MacAx {
 		let pid = element_pid(element)?;
 		let scroll_first = scrolls_before_press(&native, &actions, || process::is_uikit(pid));
 		skylight::with_background_guard(pid, || {
-			if scroll_first {
-				// A failed scroll leaves the press to report its own outcome.
-				let _ = send_action(element, SCROLL_TO_VISIBLE);
-			}
-			element_action_result(&native, send_action(element, &native))
+			press_into_view(&native, scroll_first, |action| send_action(element, action))
 		})
 	}
 
@@ -1004,6 +1001,21 @@ fn replace_utf16_selection(
 /// land; for an element already in view the scroll changes nothing.
 fn scrolls_before_press(native: &str, actions: &[String], uikit: impl FnOnce() -> bool) -> bool {
 	native == "AXPress" && actions.iter().any(|action| action == SCROLL_TO_VISIBLE) && uikit()
+}
+
+/// Sends `native`, after [`SCROLL_TO_VISIBLE`] when `scroll_first`. A failed
+/// scroll leaves the action to report its own outcome; a run cancelled during
+/// the scroll sends nothing more.
+fn press_into_view(
+	native: &str,
+	scroll_first: bool,
+	mut send: impl FnMut(&str) -> AXError,
+) -> CoreResult<()> {
+	if scroll_first {
+		let _ = send(SCROLL_TO_VISIBLE);
+		control::check()?;
+	}
+	element_action_result(native, send(native))
 }
 
 fn perform_action(element: &AXUIElement, action: &str) -> CoreResult<()> {
@@ -1396,11 +1408,12 @@ mod tests {
 	use objc2_core_foundation::{CFArray, CFNumber, CFString, CFType, Type, kCFNull};
 
 	use super::{
-		AttachedCandidate, CHILDREN, DESCRIPTION, ENABLED, NodeRead, NodeValues, ROLE, TITLE, VALUE,
-		ax_result, element_action_result, replace_utf16_selection, required_string,
-		scrolls_before_press, select_attached, stringify_value,
+		AttachedCandidate, CHILDREN, DESCRIPTION, ENABLED, NodeRead, NodeValues, ROLE,
+		SCROLL_TO_VISIBLE, TITLE, VALUE, ax_result, element_action_result, press_into_view,
+		replace_utf16_selection, required_string, scrolls_before_press, select_attached,
+		stringify_value,
 	};
-	use crate::desktop::error::ErrorCode;
+	use crate::desktop::{control, error::ErrorCode};
 
 	#[test]
 	fn batched_values_read_like_lone_reads() {
@@ -1556,5 +1569,37 @@ mod tests {
 		assert!(!scrolls_before_press("AXPress", &actions(&["AXPress"]), || true));
 		// The app is only classified when the press could scroll.
 		assert!(!scrolls_before_press("AXShowMenu", &row, || unreachable!()));
+	}
+
+	#[test]
+	fn a_press_follows_its_scroll_unless_the_run_was_cancelled() {
+		let run = |scroll_first: bool, scroll_result: AXError, cancel: bool| {
+			let source = control::CancellationSource::default();
+			let token = source.token();
+			let mut sent = Vec::new();
+			let result = control::with_token_for_test(&token, || {
+				press_into_view("AXPress", scroll_first, |action| {
+					sent.push(action.to_owned());
+					if action != SCROLL_TO_VISIBLE {
+						return AXError::Success;
+					}
+					if cancel {
+						source.cancel();
+					}
+					scroll_result
+				})
+			});
+			(result.map_err(|error| error.code), sent)
+		};
+		let both = vec![SCROLL_TO_VISIBLE.to_owned(), "AXPress".to_owned()];
+		assert_eq!(run(true, AXError::Success, false), (Ok(()), both.clone()));
+		// A failed scroll still presses.
+		assert_eq!(run(true, AXError::Failure, false), (Ok(()), both));
+		assert_eq!(run(false, AXError::Success, false), (Ok(()), vec!["AXPress".to_owned()]));
+		// Cancelled while scrolling: the press is never sent.
+		assert_eq!(
+			run(true, AXError::Success, true),
+			(Err(ErrorCode::Cancelled), vec![SCROLL_TO_VISIBLE.to_owned()])
+		);
 	}
 }

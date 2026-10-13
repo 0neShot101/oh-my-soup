@@ -6,7 +6,7 @@
 
 ### Fixed
 
-- Fixed macOS `press()` on a Mac Catalyst or iPad app's row scrolled out of view reporting success while nothing happened: the element is scrolled into view first
+- Fixed macOS `press()` on a scrolled-out row in a Mac Catalyst, iPhone or iPad app reporting success while nothing happened: the element is asked to scroll into view first
 - Fixed `pwsh` code blocks rendering without PowerShell syntax colors ([#15008](https://github.com/can1357/oh-my-pi/issues/15008)).
 
 ## [18.10.2] - 2026-10-12
