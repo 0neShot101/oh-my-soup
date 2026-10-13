@@ -8,6 +8,7 @@
  */
 import type { AgentTool, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
 import type { Settings } from "../config/settings";
+import type { ExtensionUIContext } from "../extensibility/extensions/types";
 
 import { cfgToolsApproval, cfgToolsApprovalMode } from "./settings";
 
@@ -361,9 +362,16 @@ export function truncateForPrompt(value: string, maxChars = DEFAULT_PROMPT_TRUNC
 }
 
 /**
- * Format the approval prompt body shown to the user.
+ * Format the approval prompt body shown to the user. `compact` keeps one row per detail: a
+ * multi-line value (file content, code, a long command) keeps its first line and counts the
+ * rest, for surfaces that show the tool call itself in the transcript beside the prompt.
  */
-export function formatApprovalPrompt(tool: ApprovalSubject, args: unknown, reason?: string): string {
+export function formatApprovalPrompt(
+	tool: ApprovalSubject,
+	args: unknown,
+	reason?: string,
+	options?: { compact?: boolean },
+): string {
 	const lines = [`Allow tool: ${tool.name}`];
 
 	if (tool.name.startsWith("mcp__") && tool.approval === undefined) {
@@ -375,13 +383,41 @@ export function formatApprovalPrompt(tool: ApprovalSubject, args: unknown, reaso
 	}
 
 	const details = tool.formatApprovalDetails?.(args);
-	if (typeof details === "string") {
-		if (details.length > 0) lines.push(details);
-	} else if (Array.isArray(details)) {
-		for (const detail of details) {
-			if (detail.length > 0) lines.push(detail);
-		}
+	for (const detail of typeof details === "string" ? [details] : (details ?? [])) {
+		if (detail.length === 0) continue;
+		lines.push(options?.compact ? compactApprovalDetail(detail) : detail);
 	}
 
 	return lines.join("\n");
+}
+
+/** `Content:\n<40 lines>` → `Content: 40 lines in the tool call`; `Command: a\nb` → `Command: a … +1 line in the tool call`. */
+function compactApprovalDetail(detail: string): string {
+	const newline = detail.indexOf("\n");
+	if (newline < 0) return detail;
+	const head = detail.slice(0, newline).trimEnd();
+	const rest = detail.slice(newline + 1).split("\n").length;
+	const count = `${rest} line${rest === 1 ? "" : "s"} in the tool call`;
+	return head.endsWith(":") ? `${head} ${count}` : `${head} … +${count}`;
+}
+
+/**
+ * Ask the user to approve a call: the host's approval dialog when it has one (it gets both the
+ * full prompt and one with multi-line details compacted, and picks by whether the call shows
+ * beside it), else an Approve/Deny select with the full prompt (RPC, ACP, extension hosts).
+ * `appendix` lines follow the prompt on both. True only for an explicit approval.
+ */
+export async function requestApproval(
+	ui: Pick<ExtensionUIContext, "select" | "approve">,
+	tool: ApprovalSubject,
+	args: unknown,
+	reason?: string,
+	appendix: readonly string[] = [],
+): Promise<boolean> {
+	const full = [formatApprovalPrompt(tool, args, reason), ...appendix].join("\n");
+	if (ui.approve) {
+		const compact = [formatApprovalPrompt(tool, args, reason, { compact: true }), ...appendix].join("\n");
+		return (await ui.approve({ full, compact })) === true;
+	}
+	return (await ui.select(full, ["Approve", "Deny"])) === "Approve";
 }
