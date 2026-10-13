@@ -59,6 +59,19 @@ describe("stats sync serial mode", () => {
 		expect(workerSpy).not.toHaveBeenCalled();
 	});
 
+	it("skips transcript copies in hidden scratch directories", async () => {
+		await writeSessionFile();
+		const folder = path.join(getSessionsDir(), "--tmp--sync-serial");
+		const scratch = path.join(folder, ".omp-gc-compress-a1b2c3");
+		await fs.mkdir(scratch);
+		await fs.copyFile(path.join(folder, "session.jsonl"), path.join(scratch, "session.jsonl"));
+
+		const synced = await syncAllSessions({ workers: 1 });
+
+		expect(synced.files).toBe(1);
+		expect(getOverallStats().totalRequests).toBe(1);
+	});
+
 	it("syncs legacy session usage without a cost breakdown", async () => {
 		await writeSessionFile({ includeCost: false });
 

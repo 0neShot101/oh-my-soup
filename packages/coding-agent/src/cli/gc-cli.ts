@@ -31,9 +31,20 @@ import { parseTerminalBreadcrumb } from "../session/session-paths";
 import { readSessionHeaderId } from "../session/session-loader";
 import { FileSessionStorage, SESSION_STAGING_RE, tryAcquireSessionLease } from "../session/session-storage";
 import {
+	type CompressCandidate,
+	type CompressMethod,
+	COMPRESS_SCRATCH_PREFIX,
+	compressCandidate,
+	compressFilesInPlace,
+	compressMethod,
+	sweepCompressScratch,
+} from "./gc-compress";
+import {
 	cfgGcArchive,
 	cfgGcBlobs,
 	cfgGcColdArchiveAfterDays,
+	cfgGcCompress,
+	cfgGcCompressAfterDays,
 	cfgGcRetainNewestGlobal,
 	cfgGcRetainNewestPerCwd,
 	cfgGcStale,
@@ -48,6 +59,7 @@ const JSONL_GLOB = new Bun.Glob("**/*.jsonl");
 const JSONL_GZ_GLOB = new Bun.Glob("**/*.jsonl.gz");
 const JSONL_BACKUP_GLOB = new Bun.Glob("**/*.jsonl.*.bak");
 const SESSION_STAGING_GLOB = new Bun.Glob("**/.*.jsonl.*.tmp");
+const ANY_FILE_GLOB = new Bun.Glob("**/*");
 const ACTIVE_STATUSES: ReadonlySet<SessionStatus> = new Set(["pending", "interrupted", "unknown"]);
 const DAY_MS = 86_400_000;
 const GC_WRITE_GRACE_MS = 5 * 60_000;
@@ -70,11 +82,13 @@ export interface GcCommandFlags {
 	archive?: boolean;
 	wal?: boolean;
 	stale?: boolean;
+	compress?: boolean;
 	coldArchiveAfterDays?: number;
 	retainNewestGlobal?: number;
 	retainNewestPerCwd?: number;
 	staleRetainNewest?: number;
 	staleRetainDays?: number;
+	compressAfterDays?: number;
 }
 
 export interface GcCommandArgs {
@@ -139,12 +153,36 @@ export interface StaleGcResult {
 	errors: string[];
 }
 
+export interface CompressGcResult {
+	/** False when the sessions' filesystem has no supported transparent compression; nothing was scanned. */
+	supported: boolean;
+	/** The filesystem's compression method when supported. */
+	method?: CompressMethod;
+	scanned: number;
+	/** Idle sessions with files to compress that a running process still owns. */
+	skippedLive: number;
+	/** Sessions with at least one file still stored uncompressed. */
+	sessions: number;
+	wouldCompress: number;
+	compressed: number;
+	/** Logical bytes of the files selected for compression. */
+	bytes: number;
+	/** Bytes those files allocated on disk before compression. */
+	allocatedBefore: number;
+	/** Bytes the selected files allocate on disk afterwards (`--apply` only). */
+	allocatedAfter: number;
+	/** Scratch directories a killed run left behind; removed with `--apply`. */
+	leftoverScratchDirs: number;
+	errors: string[];
+}
+
 export interface GcResult {
 	agentDir: string;
 	apply: boolean;
 	stale?: StaleGcResult;
 	blobs?: BlobGcResult;
 	archive?: ArchiveGcResult;
+	compress?: CompressGcResult;
 	wal?: WalGcResult;
 	lockPath: string;
 }
@@ -181,11 +219,13 @@ interface ResolvedGcOptions {
 	runArchive: boolean;
 	runWal: boolean;
 	runStale: boolean;
+	runCompress: boolean;
 	coldArchiveAfterDays: number;
 	retainNewestGlobal: number;
 	retainNewestPerCwd: number;
 	staleRetainNewest: number;
 	staleRetainDays: number;
+	compressAfterDays: number;
 }
 
 interface SqliteRunResult {
@@ -219,9 +259,15 @@ function numberSetting(value: number | undefined, fallback: unknown, defaultValu
 
 async function resolveOptions(flags: GcCommandFlags): Promise<ResolvedGcOptions> {
 	const agentDir = path.resolve(flags.agentDir ?? getAgentDir());
-	const selected = flags.blobs === true || flags.archive === true || flags.wal === true || flags.stale === true;
+	const selected =
+		flags.blobs === true ||
+		flags.archive === true ||
+		flags.wal === true ||
+		flags.stale === true ||
+		flags.compress === true;
 	const archiveSelected = selected && flags.archive === true;
 	const staleSelected = selected && flags.stale === true;
+	const compressSelected = selected && flags.compress === true;
 	const needsArchiveSettings =
 		archiveSelected &&
 		(flags.coldArchiveAfterDays === undefined ||
@@ -229,8 +275,9 @@ async function resolveOptions(flags: GcCommandFlags): Promise<ResolvedGcOptions>
 			flags.retainNewestPerCwd === undefined);
 	const needsStaleSettings =
 		staleSelected && (flags.staleRetainNewest === undefined || flags.staleRetainDays === undefined);
+	const needsCompressSettings = compressSelected && flags.compressAfterDays === undefined;
 	const settings =
-		!selected || needsArchiveSettings || needsStaleSettings
+		!selected || needsArchiveSettings || needsStaleSettings || needsCompressSettings
 			? flags.apply === true
 				? await Settings.loadIsolated({ agentDir })
 				: await Settings.loadReadOnly({ agentDir })
@@ -244,6 +291,7 @@ async function resolveOptions(flags: GcCommandFlags): Promise<ResolvedGcOptions>
 		runArchive: selected ? flags.archive === true : read(cfgGcArchive),
 		runWal: selected ? flags.wal === true : read(cfgGcWal),
 		runStale: selected ? flags.stale === true : read(cfgGcStale),
+		runCompress: selected ? flags.compress === true : read(cfgGcCompress),
 		coldArchiveAfterDays: numberSetting(
 			flags.coldArchiveAfterDays,
 			read(cfgGcColdArchiveAfterDays),
@@ -265,6 +313,11 @@ async function resolveOptions(flags: GcCommandFlags): Promise<ResolvedGcOptions>
 			cfgGcStaleRetainNewest.default,
 		),
 		staleRetainDays: numberSetting(flags.staleRetainDays, read(cfgGcStaleRetainDays), cfgGcStaleRetainDays.default),
+		compressAfterDays: numberSetting(
+			flags.compressAfterDays,
+			read(cfgGcCompressAfterDays),
+			cfgGcCompressAfterDays.default,
+		),
 	};
 }
 
@@ -273,6 +326,7 @@ export function collectGcErrors(result: GcResult): string[] {
 		...(result.stale?.errors ?? []).map(error => `stale: ${error}`),
 		...(result.blobs?.errors ?? []).map(error => `blobs: ${error}`),
 		...(result.archive?.errors ?? []).map(error => `archive: ${error}`),
+		...(result.compress?.errors ?? []).map(error => `compress: ${error}`),
 	];
 }
 
@@ -1605,16 +1659,19 @@ async function collectArchivedStatsSessions(
 	return sessions;
 }
 
+function statsDbPath(options: ResolvedGcOptions): string {
+	return path.resolve(options.agentDir) === path.resolve(getAgentDir())
+		? getStatsDbPath()
+		: path.join(options.agentDir, "stats.db");
+}
+
 async function cleanupStatsRowsForArchivedSessions(
 	options: ResolvedGcOptions,
 	archiveRoot: string,
 	newlyArchivedSessions: SessionInfo[],
 	result: ArchiveGcResult,
 ): Promise<void> {
-	const dbPath =
-		path.resolve(options.agentDir) === path.resolve(getAgentDir())
-			? getStatsDbPath()
-			: path.join(options.agentDir, "stats.db");
+	const dbPath = statsDbPath(options);
 	if (!(await pathExists(dbPath))) return;
 	const sessionsRoot = getSessionsDir(options.agentDir);
 
@@ -1811,6 +1868,133 @@ async function runArchiveGc(
 
 	await cleanupHistoryRowsForArchivedSessions(options, archiveRoot, archivedSessionIds, result);
 	await cleanupStatsRowsForArchivedSessions(options, archiveRoot, archivedSessions, result);
+	return result;
+}
+
+/** Every file of a session: its transcript plus its artifact tree (subagent transcripts, tool output). */
+async function collectSessionFiles(session: SessionInfo): Promise<string[]> {
+	const artifactsDir = sessionArtifactsPath(session.path);
+	const files = [session.path];
+	try {
+		for await (const name of ANY_FILE_GLOB.scan({ cwd: artifactsDir, dot: true, onlyFiles: true })) {
+			if (name.split(/[\\/]/).some(part => part.startsWith(COMPRESS_SCRATCH_PREFIX))) continue;
+			files.push(path.join(artifactsDir, name));
+		}
+	} catch (error) {
+		if (codeOf(error) !== "ENOENT") throw error;
+	}
+	return files;
+}
+
+/**
+ * Leases of the transcripts nested in a session's artifact tree (subagent
+ * sessions), which a process can open on their own. Null, with every lease
+ * taken so far released, when any of them is live.
+ */
+async function tryAcquireNestedLeases(session: SessionInfo, files: string[]): Promise<FileLockHandle[] | null> {
+	const leases: FileLockHandle[] = [];
+	for (const file of files) {
+		if (file === session.path || !file.endsWith(".jsonl")) continue;
+		const lease = await tryAcquireSessionFileLease(file);
+		if (lease === null) {
+			for (const held of leases) held.release();
+			return null;
+		}
+		if (lease) leases.push(lease);
+	}
+	return leases;
+}
+
+/**
+ * Store idle sessions compressed in place. A session qualifies once its
+ * transcript is `compressAfterDays` old and no running process holds its
+ * ownership lease; files written more recently than that are left alone.
+ * Unlike archiving, an interrupted last turn does not exclude a session:
+ * paths, bytes, and mtimes are unchanged and no history or stats rows are
+ * deleted, so it stays resumable. Leftover scratch directories from a killed
+ * run are removed first. A session that fails is reported and skipped.
+ */
+async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): Promise<CompressGcResult> {
+	const sessionsRoot = getSessionsDir(options.agentDir);
+	const method = await compressMethod(sessionsRoot);
+	const result: CompressGcResult = {
+		supported: method !== undefined,
+		method,
+		scanned: 0,
+		skippedLive: 0,
+		sessions: 0,
+		wouldCompress: 0,
+		compressed: 0,
+		bytes: 0,
+		allocatedBefore: 0,
+		allocatedAfter: 0,
+		leftoverScratchDirs: 0,
+		errors: [],
+	};
+	if (method === undefined) return result;
+
+	if (method === "apfs") {
+		// Only the APFS copy-and-swap uses scratch directories. Archiving can carry a
+		// leftover inside an artifact tree into the archive root.
+		result.leftoverScratchDirs = await sweepCompressScratch(
+			[sessionsRoot, archiveRoot],
+			options.apply,
+			result.errors,
+		);
+	}
+	const sessions = await listActiveSessions(sessionsRoot);
+	result.scanned = sessions.length;
+	const cutoffMs = Date.now() - Math.max(options.compressAfterDays * DAY_MS, GC_WRITE_GRACE_MS);
+	for (const session of sessions) {
+		if (session.modified.getTime() > cutoffMs) continue;
+		let files: string[];
+		try {
+			files = await collectSessionFiles(session);
+		} catch (error) {
+			result.errors.push(`${session.path}: ${errorMessage(error)}`);
+			continue;
+		}
+		const candidates: CompressCandidate[] = [];
+		for (const file of files) {
+			try {
+				const candidate = await compressCandidate(file);
+				if (candidate && candidate.mtimeMs <= cutoffMs) candidates.push(candidate);
+			} catch (error) {
+				if (codeOf(error) !== "ENOENT") result.errors.push(`${file}: ${errorMessage(error)}`);
+			}
+		}
+		if (candidates.length === 0) continue;
+		const lease = await tryAcquireSessionFileLease(session.path);
+		if (lease === null) {
+			result.skippedLive += 1;
+			continue;
+		}
+		let nested: FileLockHandle[] | null = [];
+		try {
+			nested = await tryAcquireNestedLeases(session, files);
+			if (nested === null) {
+				result.skippedLive += 1;
+				continue;
+			}
+			result.sessions += 1;
+			result.wouldCompress += candidates.length;
+			for (const candidate of candidates) {
+				result.bytes += candidate.bytes;
+				result.allocatedBefore += candidate.allocated;
+			}
+			if (!options.apply) continue;
+			const batch = await compressFilesInPlace(candidates, method);
+			result.compressed += batch.compressed;
+			result.allocatedAfter += batch.allocatedAfter;
+			result.errors.push(...batch.errors);
+		} catch (error) {
+			result.errors.push(`${session.path}: ${errorMessage(error)}`);
+		} finally {
+			// Held through the rewrite so no omp process resumes the session mid-swap.
+			for (const held of nested ?? []) held.release();
+			lease?.release();
+		}
+	}
 	return result;
 }
 
@@ -2077,6 +2261,23 @@ function renderText(result: GcResult): string {
 		}
 		if (result.archive.errors.length > 0) lines.push(`session errors: ${result.archive.errors.length}`);
 	}
+	if (result.compress) {
+		const compress = result.compress;
+		if (!compress.supported) {
+			lines.push("compress: unsupported on this filesystem (APFS or NTFS only)");
+		} else {
+			const after = result.apply ? `, ${formatBytes(compress.allocatedAfter)} after` : "";
+			lines.push(
+				`compress: ${compress.compressed}/${compress.wouldCompress} files in ${compress.sessions} sessions, ${formatBytes(compress.allocatedBefore)} on disk before${after}`,
+			);
+			if (compress.skippedLive > 0) lines.push(`compress skipped live: ${compress.skippedLive}`);
+			if (compress.leftoverScratchDirs > 0) {
+				const verb = result.apply ? "removed" : "found";
+				lines.push(`compress leftover scratch dirs ${verb}: ${compress.leftoverScratchDirs}`);
+			}
+			if (compress.errors.length > 0) lines.push(`compress errors: ${compress.errors.length}`);
+		}
+	}
 	if (result.wal) {
 		const state = result.wal.checkpointed ? "checkpointed" : "checkpoint dry-run";
 		lines.push(`wal: ${state}, ${formatBytes(result.wal.walBytes)} across ${result.wal.databases.length} dbs`);
@@ -2097,6 +2298,7 @@ export async function runGcCommand(args: GcCommandArgs): Promise<GcResult> {
 		if (options.runStale) next.stale = await runStaleGc(options);
 		if (options.runBlobs) next.blobs = await runBlobGc(options, archiveRoot);
 		if (options.runArchive) next.archive = await runArchiveGc(options, archiveRoot, registeredSessionPaths);
+		if (options.runCompress) next.compress = await runCompressGc(options, archiveRoot);
 		if (options.runWal) next.wal = await runWalGc(options);
 		return next;
 	});
