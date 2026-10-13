@@ -35,7 +35,7 @@ import writeDeviceOnlyDescription from "../prompts/tools/write-device-only.md" w
 import type { ToolSession } from "../sdk";
 
 import { routeWriteThroughBridge, shouldRouteWriteThroughBridge } from "./acp-bridge";
-import { truncateForPrompt } from "./approval";
+import { type ApprovalDetailsOptions, truncateApprovalDetail, truncateForPrompt } from "./approval";
 import { assertEditableFile } from "./auto-generated-guard";
 
 import { isReadTruncationNotice } from "@oh-my-pi/pi-tui/tools/hashline-format";
@@ -470,11 +470,11 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			this.session,
 		);
 	};
-	readonly formatApprovalDetails = (args: unknown): string[] => {
+	readonly formatApprovalDetails = (args: unknown, options?: ApprovalDetailsOptions): string[] => {
 		const params = args as Partial<WriteParams>;
 		const targetPath = typeof params.path === "string" ? params.path : "(missing)";
 		const content = typeof params.content === "string" ? params.content : "";
-		return [`Path: ${truncateForPrompt(targetPath)}`, `Content:\n${truncateForPrompt(content)}`];
+		return [`Path: ${truncateForPrompt(targetPath)}`, `Content:\n${truncateApprovalDetail(content, options)}`];
 	};
 	readonly label = "Write";
 	get description(): string {
@@ -790,21 +790,17 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		const coordination =
 			policy?.scope === "coordination" || (target !== undefined && policy?.cancels?.(target.url) === true);
 		// A device-only session grants `write` purely as the device transport (see
-		// createTools): device dispatches and coordination writes proceed, every
-		// other target is rejected before any handler, guard, conflict resolver, or
-		// bridge sees it. Active plan mode additionally permits its sandbox, but does
-		// not relax the restriction for working-tree or other internal URLs.
+		// createTools): device dispatches, coordination writes, and the session's
+		// local:// sandbox proceed; every other target is rejected before any
+		// handler, guard, conflict resolver, or bridge sees it.
 		if (
 			this.session.deviceOnlyWrite === true &&
 			policy?.scope !== "device" &&
 			!coordination &&
-			!(
-				this.session.getPlanModeState?.()?.enabled === true &&
-				(await targetsLocalSandbox(this.session, path, signal))
-			)
+			!(await targetsLocalSandbox(this.session, path, signal))
 		) {
 			throw new ToolError(
-				"This `write` tool is limited to the xd:// device transport: call it with path `xd://<tool>` and the device's JSON arguments in `content` (`read xd://` lists mounted devices). Active plan mode additionally permits local:// sandbox drafts. Filesystem writes are not available elsewhere.",
+				"This `write` tool is limited to the xd:// device transport and local:// session scratch: call it with path `xd://<tool>` and the device's JSON arguments in `content` (`read xd://` lists mounted devices), or write a `local://<name>` file. Filesystem writes are not available elsewhere.",
 			);
 		}
 		return untilAborted(signal, async () => {
