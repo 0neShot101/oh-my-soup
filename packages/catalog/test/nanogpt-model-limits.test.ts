@@ -9,7 +9,7 @@ async function discoverNanoGptModels(
 ) {
 	const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 		const url = typeof input === "string" ? input : input.toString();
-		expect(url).toBe(`${expectedBaseUrl}/models`);
+		expect(url).toBe(`${expectedBaseUrl}/models?detailed=true`);
 		expect(init?.method).toBe("GET");
 		expect(init?.headers).toEqual({
 			Accept: "application/json",
@@ -53,5 +53,41 @@ describe("nanogpt model limits mapping", () => {
 			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 		});
 		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("prices rows from the detailed roster, cache legs per thousand tokens, over the bundled reference", async () => {
+		const { models } = await discoverNanoGptModels({
+			data: [
+				{
+					id: "google/gemini-4-argon",
+					pricing: {
+						prompt: 2,
+						completion: 10,
+						cacheReadInputPer1kTokens: 0.0001,
+						cacheWriteInputPer1kTokens: 0.0001875,
+						currency: "USD",
+						unit: "per_million_tokens",
+					},
+				},
+				{
+					// Bundled at $0.75/$4.50; the live card wins, and the cache-read
+					// leg it omits keeps the reference rate.
+					id: "gpt-5.4-mini",
+					pricing: { prompt: 0.8, completion: 4.8, currency: "USD", unit: "per_million_tokens" },
+				},
+			],
+		});
+
+		const argon = models.find(candidate => candidate.id === "google/gemini-4-argon");
+		expect(argon?.cost.input).toBe(2);
+		expect(argon?.cost.output).toBe(10);
+		expect(argon?.cost.cacheRead).toBeCloseTo(0.1, 10);
+		expect(argon?.cost.cacheWrite).toBeCloseTo(0.1875, 10);
+		expect(models.find(candidate => candidate.id === "gpt-5.4-mini")?.cost).toEqual({
+			input: 0.8,
+			output: 4.8,
+			cacheRead: 0.075,
+			cacheWrite: 0,
+		});
 	});
 });

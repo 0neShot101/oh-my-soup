@@ -39,6 +39,7 @@ import {
 	type OpenAICompat,
 	type Provider,
 	type ThinkingConfig,
+	type TokenCost,
 } from "../types";
 import { discoveryFetch, isAnthropicOAuthToken, isRecord, toBoolean, toNumber, toPositiveNumber } from "../utils";
 import { ALIBABA_TOKEN_PLAN_BASE_URL, parseAlibabaTokenPlanCredential } from "../wire/alibaba-token-plan";
@@ -547,6 +548,40 @@ function mapWithBundledReference<TApi extends Api>(
 		baseUrl: defaults.baseUrl,
 		contextWindow: toPositiveNumber(entry.context_length, reference.contextWindow),
 		maxTokens: toPositiveNumber(entry.max_completion_tokens, reference.maxTokens),
+	};
+}
+
+/**
+ * Rates from an OpenRouter-shaped `pricing` object (USD per token, as decimal
+ * strings). Missing, zero, or negative legs (`-1` marks router-priced rows)
+ * map to 0, which the model manager fills from its reference sources.
+ */
+function perTokenPricingCost(pricing: unknown): TokenCost {
+	const rates = isRecord(pricing) ? pricing : {};
+	return {
+		input: toPositiveNumber(rates.prompt, 0) * 1_000_000,
+		output: toPositiveNumber(rates.completion, 0) * 1_000_000,
+		cacheRead: toPositiveNumber(rates.input_cache_read, 0) * 1_000_000,
+		cacheWrite: toPositiveNumber(rates.input_cache_write, 0) * 1_000_000,
+	};
+}
+
+/**
+ * Rates from NanoGPT's detailed roster: prompt and completion are USD per
+ * million tokens, the cache legs per thousand. Legs the row does not price
+ * keep `fallback`.
+ */
+function nanoGptPricingCost(pricing: unknown, fallback: TokenCost): TokenCost {
+	if (!isRecord(pricing) || pricing.unit !== "per_million_tokens") return fallback;
+	const perThousand = (value: unknown, fallbackRate: number): number => {
+		const rate = toPositiveNumber(value, 0);
+		return rate > 0 ? rate * 1_000 : fallbackRate;
+	};
+	return {
+		input: toPositiveNumber(pricing.prompt, fallback.input),
+		output: toPositiveNumber(pricing.completion, fallback.output),
+		cacheRead: perThousand(pricing.cacheReadInputPer1kTokens, fallback.cacheRead),
+		cacheWrite: perThousand(pricing.cacheWriteInputPer1kTokens, fallback.cacheWrite),
 	};
 }
 
@@ -3892,6 +3927,7 @@ export function kiloModelManagerOptions(config?: KiloModelManagerConfig): ModelM
 				provider: "kilo",
 				baseUrl,
 				apiKey,
+				mapModel: (entry, defaults) => ({ ...defaults, cost: perTokenPricingCost(entry.pricing) }),
 				fetch: config?.fetch,
 			}),
 	};
@@ -6283,10 +6319,24 @@ export function nanoGptModelManagerOptions(
 					provider: "nanogpt",
 					baseUrl,
 					apiKey,
+					// Only the detailed roster carries per-model pricing.
+					query: { detailed: "true" },
 					mapModel: (entry, defaults) => {
 						const reference = resolveReference(defaults.id);
-						const mapped = mapWithBundledReference(entry, defaults, reference);
-						return { ...mapped, api: "openai-completions", provider: "nanogpt" };
+						// The detailed roster is requested for its pricing only: names and
+						// limits keep their plain-roster sources (the bundled reference,
+						// else the id), as before.
+						const mapped = mapWithBundledReference(
+							{ id: entry.id },
+							{ ...defaults, name: defaults.id },
+							reference,
+						);
+						return {
+							...mapped,
+							api: "openai-completions",
+							provider: "nanogpt",
+							cost: { ...mapped.cost, ...nanoGptPricingCost(entry.pricing, mapped.cost) },
+						};
 					},
 					filterModel: (_entry, model) => {
 						const match = NANO_GPT_THINKING_SUFFIX_RE.exec(model.id);
