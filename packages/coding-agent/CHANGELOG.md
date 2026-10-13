@@ -14,7 +14,7 @@
 
 - Fixed `read.renderMarkdown` having no effect on plain-file reads: inline read previews now render Markdown files as formatted Markdown instead of numbered source ([#15007](https://github.com/can1357/oh-my-pi/issues/15007)).
 - Fixed Claude refusing every turn (`reasoning_extraction`) in a session snapcompacted under Codex, Grok or another reasoning model, after a switch or resume; Claude turns, `/btw`, `/handoff` and compaction now read a reasoning-free copy of the archive ([#15436](https://github.com/can1357/oh-my-pi/pull/15436) by [@will-bogusz](https://github.com/will-bogusz))
-- Fixed the shared headless browser reopening every page its previous run left open whenever it relaunched (after a crash, an out-of-memory kill, or a normal stop); no session owned those pages, so they were never closed and piled up across restarts
+- Fixed the shared headless browser reopening every page its previous run left open whenever it relaunched (after a crash, an out-of-memory kill, or a normal stop); no session owned those pages, so they were never closed and piled up across restarts ([#15561](https://github.com/can1357/oh-my-pi/pull/15561) by [@eggpeat](https://github.com/eggpeat))
 
 ### Removed
 
