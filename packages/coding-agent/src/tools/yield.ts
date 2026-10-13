@@ -219,11 +219,19 @@ function isPlaceholderYieldError(value: string): boolean {
 	return PLACEHOLDER_YIELD_ERRORS.has(value.toLowerCase());
 }
 
-function renderDataErrorConflictMessage(errorMessage: string, yieldType: string | string[] | undefined): string {
+function renderDataErrorConflictMessage(
+	errorMessage: string,
+	yieldType: string | string[] | undefined,
+	workPoolKey?: number,
+): string {
 	return prompt.render(yieldDataErrorConflictMessage, {
 		errorJson: JSON.stringify(errorMessage),
-		failureJson: JSON.stringify({ error: errorMessage }),
+		failureJson: JSON.stringify(
+			workPoolKey === undefined ? { error: errorMessage } : { key: workPoolKey, error: errorMessage },
+		),
 		typeJson: yieldType === undefined ? undefined : JSON.stringify(yieldType),
+		isWorkPool: workPoolKey !== undefined,
+		workPoolKey,
 	});
 }
 
@@ -504,11 +512,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 				throw new Error(`workpool item ${item.index} was already submitted`);
 			}
 			if (data !== undefined && errorMessage !== undefined) {
-				throw new Error(
-					"workpool yield requires exactly one of data or error. " +
-						`For success, resend \`{"key":${item.index},"data":<your output>}\`. ` +
-						`For failure, resend only \`${JSON.stringify({ key: item.index, error: errorMessage })}\`.`,
-				);
+				throw new Error(renderDataErrorConflictMessage(errorMessage, undefined, item.index));
 			}
 			if ((data === undefined) === (errorMessage === undefined)) {
 				throw new Error("workpool yield requires exactly one of data or error");

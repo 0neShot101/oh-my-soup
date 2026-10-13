@@ -805,6 +805,15 @@ describe("YieldTool", () => {
 		expect(String(failure.message)).not.toContain('"type"');
 	});
 
+	it("keeps workpool key 0 in conflict resend guidance", async () => {
+		const tool = new YieldTool(createSession({ getWorkPoolYieldItems: () => [{ id: "review#0", index: 0 }] }));
+		const failure = await tool
+			.execute("pool-conflict-zero", { key: 0, data: { ok: true }, error: "boom" })
+			.catch(err => err);
+		expect(String(failure.message)).toContain('{"key":0,"data":<your output>}');
+		expect(String(failure.message)).toContain('{"key":0,"error":"boom"}');
+	});
+
 	it("aborts instead of throwing forever after repeated untyped empty results", async () => {
 		const tool = new YieldTool(createSession());
 		const expectedGuidance =
