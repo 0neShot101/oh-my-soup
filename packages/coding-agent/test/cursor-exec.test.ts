@@ -11,7 +11,7 @@ import {
 	type ToolResultWithAdditionalContext,
 } from "@oh-my-pi/pi-agent-core";
 import { type BlockState, handleServerMessage, type ToolCallState } from "@oh-my-pi/pi-ai/providers/cursor";
-import { piTruncation } from "@oh-my-pi/pi-ai/providers/cursor/exec-modern";
+import { buildPiReadResult, piTruncation } from "@oh-my-pi/pi-ai/providers/cursor/exec-modern";
 import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import {
@@ -2183,6 +2183,76 @@ describe("CursorExecHandlers Pi frame translation", () => {
 		const result = answer.message.value.message.value.result;
 		if (result.case !== "success" || result.value.output.case !== "content") throw new Error("expected read content");
 		expect(result.value.output.value.trimEnd()).toBe("line997\nline998\nline999\nline1000");
+	});
+
+	it("reads an image file as an image through both read frames instead of its bytes as text", async () => {
+		// Both frames compose `:raw`, which bypasses `read`'s image routing: the PNG
+		// reached Cursor as UTF-8 mojibake and every later request failed (#15630).
+		const seed = Buffer.from(
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+			"base64",
+		);
+		const target = path.join(cwd, "shot.png");
+		await Bun.write(target, await new Bun.Image(seed).resize(24, 24).png().bytes());
+		const handlers = new CursorExecHandlers({
+			cwd,
+			tools: new Map<string, Tool>([["read", new ReadTool(createTestSession(cwd))]]),
+		});
+		const results: ToolResultMessage[] = [];
+		const written: Buffer[] = [];
+		const h2Request = {
+			write(chunk: Buffer) {
+				written.push(chunk);
+				return true;
+			},
+		} as unknown as Parameters<typeof handleServerMessage>[5];
+		await handleServerMessage(
+			create(AgentServerMessageSchema, {
+				message: {
+					case: "execServerMessage",
+					value: create(ExecServerMessageSchema, {
+						id: 8,
+						execId: "image-read",
+						message: {
+							case: "readArgs",
+							value: create(ReadArgsSchema, { path: target, toolCallId: "image-read" }),
+						},
+					}),
+				},
+			}),
+			cursorAssistantMessage(),
+			new AssistantMessageEventStream(),
+			newBlockState(),
+			new Map(),
+			h2Request,
+			handlers,
+			result => {
+				results.push(result);
+			},
+			{ sawTokenDelta: false },
+			[],
+		);
+		const frame = written[0];
+		if (!frame) throw new Error("expected read response");
+		const answer = fromBinary(AgentClientMessageSchema, frame.subarray(5, 5 + frame.readUInt32BE(1)));
+		if (answer.message.case !== "execClientMessage" || answer.message.value.message.case !== "readResult") {
+			throw new Error("expected read result");
+		}
+		const legacy = answer.message.value.message.value.result;
+		if (legacy.case !== "success" || legacy.value.output.case !== "content") throw new Error("expected read content");
+
+		const modern = await handlers.piRead({ toolCallId: "pi-image-read", args: { path: "shot.png" } } as never);
+		const piFrame = buildPiReadResult(modern);
+		if (piFrame.result.case !== "success") throw new Error("expected pi_read success");
+
+		for (const output of [legacy.value.output.value, piFrame.result.value.output]) {
+			expect(output).not.toContain("IHDR");
+			expect(output).toMatch(/\[image\/\w+ image\]/);
+		}
+		for (const result of [results[0], modern]) {
+			expect(result?.isError).toBe(false);
+			expect(result?.content.some(part => part.type === "image")).toBe(true);
+		}
 	});
 
 	it("escapes pi_grep's pattern when the frame asks for a literal search", async () => {
