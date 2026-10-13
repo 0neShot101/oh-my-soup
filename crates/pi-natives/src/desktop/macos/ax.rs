@@ -234,8 +234,18 @@ impl MacAx {
 	}
 
 	pub(super) fn raise(&mut self, window: &DesktopWindow) -> CoreResult<()> {
-		let root = self.window_root(window)?;
+		let root = Self::window_element(window)?;
 		self.perform(&root, "AXRaise")
+	}
+
+	/// `window`'s element for an operation on the window itself, such as
+	/// raising it or reading its menus: unlike
+	/// [`AxBackend::window_root`], it never waits for web content, so the
+	/// session's first read of the app still does.
+	pub(super) fn window_element(window: &DesktopWindow) -> CoreResult<AxHandle> {
+		let (_, _, element) = window_parts(window)?;
+		set_timeout(&element)?;
+		Ok(AxHandle::Mac(element))
 	}
 }
 
@@ -539,19 +549,30 @@ fn attached_window(
 	})
 }
 
+/// `win`'s owning process, its application element (role queried, which
+/// switches on Chromium's web accessibility) and its window element.
+fn window_parts(
+	win: &DesktopWindow,
+) -> CoreResult<(libc::pid_t, CFRetained<AXUIElement>, CFRetained<AXUIElement>)> {
+	ensure_trusted()?;
+	let pid = win.pid.ok_or_else(|| {
+		DesktopError::ax_failed(format!("window {} has no owning process id", win.id))
+	})?;
+	let pid = i32::try_from(pid).map_err(|_| {
+		DesktopError::ax_failed(format!("window {} has an invalid process id", win.id))
+	})?;
+	let app = create_application(pid)?;
+	set_timeout(&app)?;
+	enablement::activate(&app);
+	let element = find_window(&app, win)?;
+	Ok((pid, app, element))
+}
+
 impl AxBackend for MacAx {
+	/// For a read of the window's content: the session's first read of a
+	/// Chromium-family app waits for its web content ([`enablement`]).
 	fn window_root(&mut self, win: &DesktopWindow) -> CoreResult<AxHandle> {
-		ensure_trusted()?;
-		let pid = win.pid.ok_or_else(|| {
-			DesktopError::ax_failed(format!("window {} has no owning process id", win.id))
-		})?;
-		let pid = i32::try_from(pid).map_err(|_| {
-			DesktopError::ax_failed(format!("window {} has an invalid process id", win.id))
-		})?;
-		let app = create_application(pid)?;
-		set_timeout(&app)?;
-		enablement::activate(&app);
-		let element = find_window(&app, win)?;
+		let (pid, app, element) = window_parts(win)?;
 		enablement::before_first_read(pid, &app, &element)?;
 		// The wait gives the window's requests shorter timeouts.
 		set_timeout(&element)?;

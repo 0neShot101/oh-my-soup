@@ -111,7 +111,8 @@ pub(super) fn before_first_read(
 
 /// Waits for web content where `family` builds it, through `wait` (whether it
 /// appeared in time). An Electron window that showed none is switched on
-/// through `enable` and waited for once more.
+/// through `enable` and waited for once more, unless the call was cancelled
+/// meanwhile: the flag outlives the call.
 fn await_web_content(
 	family: Family,
 	mut wait: impl FnMut() -> CoreResult<bool>,
@@ -121,6 +122,7 @@ fn await_web_content(
 		return Ok(());
 	}
 	if family == Family::Electron {
+		control::check()?;
 		enable();
 		wait()?;
 	}
@@ -158,17 +160,18 @@ fn has_web_content(window: &AXUIElement, deadline: Instant) -> CoreResult<bool> 
 	let mut queue = VecDeque::from([(window.retain(), 0)]);
 	let mut visited = 0;
 	while let Some((element, depth)) = queue.pop_front() {
-		control::check()?;
-		let left = deadline.saturating_duration_since(Instant::now());
 		visited += 1;
-		if left < MIN_REQUEST_TIMEOUT || visited > READY_SEARCH_NODES {
+		if visited > READY_SEARCH_NODES || !budget(&element, deadline)? {
 			return Ok(false);
 		}
-		// SAFETY: The retained element is valid for the timeout update.
-		let _ = unsafe { element.set_messaging_timeout(left.as_secs_f32()) };
 		let children = copy_elements_optional(&element, "AXChildren").unwrap_or_default();
-		if !children.is_empty() && copy_string(&element, "AXRole").as_deref() == Some("AXWebArea") {
-			return Ok(true);
+		if !children.is_empty() {
+			if !budget(&element, deadline)? {
+				return Ok(false);
+			}
+			if copy_string(&element, "AXRole").as_deref() == Some("AXWebArea") {
+				return Ok(true);
+			}
 		}
 		if depth < READY_SEARCH_DEPTH {
 			queue.extend(children.into_iter().map(|child| (child, depth + 1)));
@@ -177,12 +180,28 @@ fn has_web_content(window: &AXUIElement, deadline: Instant) -> CoreResult<bool> 
 	Ok(false)
 }
 
+/// Gives `element`'s next request the time left until `deadline`; `false`
+/// when too little is left to send one.
+fn budget(element: &AXUIElement, deadline: Instant) -> CoreResult<bool> {
+	control::check()?;
+	let left = deadline.saturating_duration_since(Instant::now());
+	if left < MIN_REQUEST_TIMEOUT {
+		return Ok(false);
+	}
+	// SAFETY: The retained element is valid for the timeout update.
+	let _ = unsafe { element.set_messaging_timeout(left.as_secs_f32()) };
+	Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
 	use std::cell::Cell;
 
 	use super::{Family, await_web_content};
-	use crate::desktop::error::{CoreResult, DesktopError, ErrorCode};
+	use crate::desktop::{
+		control::{self, CancellationSource},
+		error::{CoreResult, DesktopError, ErrorCode},
+	};
 
 	/// Runs [`await_web_content`] on a window whose content appears on the
 	/// `appears`-th wait (never when 0): its result, the waits and the flag
@@ -225,6 +244,26 @@ mod tests {
 			|| -> CoreResult<bool> { Err(DesktopError::cancelled("cancelled")) },
 			|| writes.set(writes.get() + 1),
 		);
+		assert_eq!(result.map_err(|error| error.code), Err(ErrorCode::Cancelled));
+		assert_eq!(writes.get(), 0);
+	}
+
+	#[test]
+	fn a_call_cancelled_as_its_wait_ran_out_writes_nothing() {
+		// The cancel lands during the wait's last request, which then ends
+		// empty rather than cancelled.
+		let source = CancellationSource::default();
+		let writes = Cell::new(0);
+		let result = control::with_token_for_test(&source.token(), || {
+			await_web_content(
+				Family::Electron,
+				|| {
+					source.cancel();
+					Ok(false)
+				},
+				|| writes.set(writes.get() + 1),
+			)
+		});
 		assert_eq!(result.map_err(|error| error.code), Err(ErrorCode::Cancelled));
 		assert_eq!(writes.get(), 0);
 	}
