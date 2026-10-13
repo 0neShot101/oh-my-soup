@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- Fixed Claude subagents with structured results failing to return them because `yield` arguments arrived as invalid JSON: on Anthropic the tool is now sent strict (when its output schema allows it, as on OpenAI) and with buffered input streaming, so the API validates its input. Claude Haiku 5.5 scouts often closed a large nested result with one brace too many, and after six such attempts the run was stopped ([#15605](https://github.com/can1357/oh-my-pi/pull/15605) by [@farnoy](https://github.com/farnoy))
+- Fixed Claude subagents failing to return structured results when `yield` arguments arrived as invalid JSON ([#15605](https://github.com/can1357/oh-my-pi/pull/15605) by [@farnoy](https://github.com/farnoy))
 
 ## [18.10.3] - 2026-10-12
 
