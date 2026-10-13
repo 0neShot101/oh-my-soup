@@ -7,6 +7,7 @@
 ### Fixed
 
 - Fixed `pwsh` code blocks rendering without PowerShell syntax colors ([#15008](https://github.com/can1357/oh-my-pi/issues/15008)).
+- Fixed the macOS `computer` tool's first read of a Chrome window sometimes returning an empty page: a session's first read of a Chromium-family window now waits up to 1 s for its web content instead of sleeping 500 ms after setting `AXManualAccessibility`. That flag, which keeps an Electron app in screen-reader mode until it quits, is now set only on an Electron window whose web content did not appear in that time ([#15604](https://github.com/can1357/oh-my-pi/pull/15604) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.10.2] - 2026-10-12
 
