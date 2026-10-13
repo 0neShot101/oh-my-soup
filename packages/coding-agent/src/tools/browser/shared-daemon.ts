@@ -11,8 +11,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { acquireFileLock, type FileLockHandle, logger, withTimeout } from "@oh-my-pi/pi-utils";
-import { type DaemonBrokerClient, DaemonBrokerRejectedError, daemonClientForProject } from "../../launch/client";
-import { describeQuietly, stopQuietly, waitReady } from "../../launch/ensure";
+import { type DaemonBrokerClient, daemonClientForProject } from "../../launch/client";
+import { describeDaemon, describeQuietly, stopQuietly, waitReady } from "../../launch/ensure";
 import { daemonRuntimeDir } from "../../launch/paths";
 import type { DaemonSnapshot } from "@oh-my-pi/pi-tui/tools/daemon";
 import { throwIfAborted } from "../tool-errors";
@@ -153,35 +153,11 @@ async function claimProfile(userDataDir: string, signal?: AbortSignal): Promise<
 }
 
 /**
- * Describe the shared browser for a start decision. `confirmed` is true only
- * when the broker answered — a snapshot, or a rejection, which is how it reports
- * an unknown name. A transport failure (timeout, dropped socket) leaves it false:
- * the daemon may still be running Chrome on the profile.
- */
-async function describeForStart(
-	client: DaemonBrokerClient,
-	name: string,
-	signal?: AbortSignal,
-): Promise<{ daemon: DaemonSnapshot | undefined; confirmed: boolean }> {
-	try {
-		const result = await client.request({ op: "describe", name }, signal);
-		return { daemon: result.op === "describe" ? result.daemon : undefined, confirmed: true };
-	} catch (error) {
-		throwIfAborted(signal);
-		logger.debug("Shared browser describe failed", {
-			name,
-			error: error instanceof Error ? error.message : String(error),
-		});
-		return { daemon: undefined, confirmed: error instanceof DaemonBrokerRejectedError };
-	}
-}
-
-/**
- * One describe→adopt-or-start round. Prepares the profile (seeds Preferences,
- * discards the previous Chrome's session-restore state) only when `claimed`
- * and the broker confirmed no live daemon owns it, immediately before asking
- * the broker to launch Chrome; adopting an existing browser, or failing to
- * reach the broker, never writes the profile.
+ * One describe→adopt-or-start round. Starts Chrome only once the broker
+ * established that no live daemon owns the profile, and when `claimed`
+ * prepares the profile first (seeds Preferences, discards the previous
+ * Chrome's session-restore state); adopting an existing browser never writes
+ * the profile.
  * Resolves undefined when the caller should run another round.
  */
 async function adoptOrStart(
@@ -192,7 +168,12 @@ async function adoptOrStart(
 	claimed: boolean,
 	signal?: AbortSignal,
 ): Promise<SharedBrowserEndpoint | undefined> {
-	const { daemon: existing, confirmed } = await describeForStart(client, name, signal);
+	const described = await describeDaemon(client, name, "Shared browser", signal);
+	// No settled answer: Chrome may be running on the profile, so it must not be
+	// prepared, and a start without preparing it restores the stale session.
+	// Describe again next round.
+	if (described.status === "unknown") return undefined;
+	const existing = described.status === "found" ? described.daemon : undefined;
 	if (existing && existing.state !== "exited" && existing.state !== "failed") {
 		const settled =
 			existing.readyAt !== undefined ? existing : await waitReady(client, name, "Shared browser", signal);
@@ -205,7 +186,7 @@ async function adoptOrStart(
 		await stopQuietly(client, name, "Shared browser", signal);
 		return undefined;
 	}
-	if (claimed && confirmed) {
+	if (claimed) {
 		await seedOwnedProfilePreferences(userDataDir);
 		await discardOwnedProfileSessions(userDataDir);
 	}

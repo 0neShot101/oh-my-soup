@@ -31,10 +31,11 @@ async function makeProfileDir(): Promise<string> {
 
 /**
  * Route `ensureSharedBrowser` to one fake daemon broker shared by every client
- * in a test. Like the real broker, `describe` answers from its state on receipt
- * and rejects an unknown name, and `start` is rejected once the daemon exists.
- * `onDescribe` runs after the reply is fixed (to delay it, or to lose it in
- * transit); `onStart` runs once the daemon is recorded, where Chrome launches.
+ * in a test. Like the real broker, `describe` and `list` answer from its state
+ * on receipt, `describe` rejects an unknown name, and `start` is rejected once
+ * the daemon exists. `onDescribe` runs after the reply is fixed (to delay it,
+ * or to fail it in transit or with a rejection); `onStart` runs once the daemon
+ * is recorded, where Chrome launches.
  */
 function fakeSharedBroker(
 	projectDir: string,
@@ -60,6 +61,7 @@ function fakeSharedBroker(
 				if (!snapshot) throw new DaemonBrokerRejectedError(`Unknown daemon ${operation.name}`);
 				return { op: "describe", daemon: snapshot } as DaemonRpcResult;
 			}
+			if (operation.op === "list") return { op: "list", daemons: daemon ? [daemon] : [] };
 			if (operation.op === "start") {
 				if (daemon) throw new DaemonBrokerRejectedError(`Daemon ${operation.spec.name} is already ${daemon.state}`);
 				broker.starts++;
@@ -245,12 +247,12 @@ describe("shared Chromium session-restore state", () => {
 		const sessionsDir = path.join(daemonRuntimeDir(projectDir), `${name}.profile`, "Default", "Sessions");
 		const wsEndpoint = "ws://127.0.0.1:9222/devtools/browser/sessions";
 		let sessionsAtLaunch: string[] | undefined;
-		let loseNextDescribe = false;
+		let failNextDescribe: Error | undefined;
 		const broker = fakeSharedBroker(projectDir, wsEndpoint, {
 			async onDescribe() {
-				if (!loseNextDescribe) return;
-				loseNextDescribe = false;
-				throw new Error("broker socket closed");
+				const failure = failNextDescribe;
+				failNextDescribe = undefined;
+				if (failure) throw failure;
 			},
 			async onStart() {
 				// Chromium reopens these pages when its first window opens.
@@ -258,9 +260,13 @@ describe("shared Chromium session-restore state", () => {
 			},
 		});
 		try {
-			// A predecessor Chrome that was killed (or stopped) with pages open.
+			// A predecessor Chrome that was killed (or stopped) with pages open. The
+			// first describe is lost in transit, which settles nothing: Chrome must
+			// not launch until a later describe confirms the profile is free and the
+			// stale session is gone.
 			await Bun.write(path.join(sessionsDir, "Session_13435785841408923"), "previous chrome");
 			await Bun.write(path.join(sessionsDir, "Tabs_13435784948833957"), "previous chrome");
+			failNextDescribe = new Error("broker socket closed");
 			expect((await ensureSharedBrowser({ projectDir, headless: true }))?.wsEndpoint).toBe(wsEndpoint);
 			expect(sessionsAtLaunch).toEqual([]);
 
@@ -269,10 +275,16 @@ describe("shared Chromium session-restore state", () => {
 			expect((await ensureSharedBrowser({ projectDir, headless: true }))?.wsEndpoint).toBe(wsEndpoint);
 			expect(await fs.promises.readdir(sessionsDir)).toEqual(["Session_13436291949708538"]);
 
-			// A describe lost in transit proves nothing about the live Chrome, so it must not discard either.
-			loseNextDescribe = true;
-			expect((await ensureSharedBrowser({ projectDir, headless: true }))?.wsEndpoint).toBe(wsEndpoint);
-			expect(await fs.promises.readdir(sessionsDir)).toEqual(["Session_13436291949708538"]);
+			// A describe lost in transit, or rejected for a reason other than an
+			// unknown name, proves nothing about the live Chrome, so neither may discard.
+			for (const failure of [
+				new Error("broker socket closed"),
+				new DaemonBrokerRejectedError("Daemon broker authentication failed"),
+			]) {
+				failNextDescribe = failure;
+				expect((await ensureSharedBrowser({ projectDir, headless: true }))?.wsEndpoint).toBe(wsEndpoint);
+				expect(await fs.promises.readdir(sessionsDir)).toEqual(["Session_13436291949708538"]);
+			}
 			expect(broker.starts).toBe(1);
 		} finally {
 			broker.restore();
