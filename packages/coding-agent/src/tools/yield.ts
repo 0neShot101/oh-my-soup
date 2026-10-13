@@ -20,6 +20,7 @@ import {
 } from "@oh-my-pi/pi-ai/utils/schema";
 import { prompt } from "@oh-my-pi/pi-utils";
 import yieldDescription from "../prompts/tools/yield.md" with { type: "text" };
+import yieldDataErrorConflictMessage from "../prompts/tools/yield-data-error-conflict.md" with { type: "text" };
 import { subprocessToolRegistry } from "../task/subprocess-tool-registry";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import type { ToolSession } from ".";
@@ -168,10 +169,13 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
  * fill the optional string with `""` next to a valid `data` payload. Both mean
  * "no error" — an empty string is never a usable failure reason.
  */
-function parseYieldError(value: unknown): string | undefined {
-	if (value === undefined || value === null || value === "") return undefined;
-	if (typeof value === "string") return value;
-	throw new Error("error must be a string");
+function parseYieldError(value: unknown, options: { hasData: boolean }): string | undefined {
+	if (value === undefined || value === null) return undefined;
+	if (typeof value !== "string") throw new Error("error must be a string");
+	const trimmed = value.trim();
+	if (trimmed.length === 0) return undefined;
+	if (options.hasData && isPlaceholderYieldError(trimmed)) return undefined;
+	return trimmed;
 }
 
 /**
@@ -182,6 +186,32 @@ function parseYieldError(value: unknown): string | undefined {
 function formatYieldLabels(labels: readonly string[]): string {
 	if (labels.length === 0) return '""';
 	return labels.map(label => `"${label}"`).join(", ");
+}
+
+const PLACEHOLDER_YIELD_ERRORS = new Set([
+	"ignore",
+	"ignored",
+	"n/a",
+	"na",
+	"none",
+	"not applicable",
+	"null",
+	"placeholder",
+	"undefined",
+	"unused",
+	"x",
+]);
+
+function isPlaceholderYieldError(value: string): boolean {
+	return PLACEHOLDER_YIELD_ERRORS.has(value.trim().toLowerCase());
+}
+
+function renderDataErrorConflictMessage(errorMessage: string, yieldType: string | string[] | undefined): string {
+	return prompt.render(yieldDataErrorConflictMessage, {
+		errorJson: JSON.stringify(errorMessage),
+		failureJson: JSON.stringify({ error: errorMessage }),
+		typeJson: yieldType === undefined ? undefined : JSON.stringify(yieldType),
+	});
 }
 
 /**
@@ -453,7 +483,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 		let yieldType: string | string[] | undefined;
 		// Strict-mode providers send omitted optionals as `null`; treat it as absent.
 		let data: unknown = raw.data === null ? undefined : raw.data;
-		const errorMessage = parseYieldError(raw.error);
+		const errorMessage = parseYieldError(raw.error, { hasData: data !== undefined });
 		if (workPoolItems.length > 0) {
 			const item = resolveWorkPoolYieldItem(workPoolItems, raw.key);
 			workPoolItemId = item.id;
@@ -474,7 +504,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 		const isIncremental = Array.isArray(yieldType) && yieldType.length > 0;
 
 		if (errorMessage !== undefined && data !== undefined) {
-			throw new Error("yield cannot contain both data and error");
+			throw new Error(renderDataErrorConflictMessage(errorMessage, yieldType));
 		}
 		if (errorMessage === undefined && data === undefined && yieldType === undefined) {
 			this.#emptyResultFailures++;
