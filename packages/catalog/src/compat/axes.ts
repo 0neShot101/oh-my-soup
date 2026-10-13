@@ -406,8 +406,10 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	},
 	/**
 	 * The host bills cache writes at this multiple of the row's live `input`
-	 * price (and the long-context tier's `input`), for hosts whose discovery
-	 * reports cache-write tokens but no cache-write rate.
+	 * price, for hosts whose discovery reports cache-write tokens but no
+	 * cache-write rate. It replaces any `cacheWrite` the row carries, including
+	 * a `cost-patch`/`cost-fallback` value and an absolute long-context tier's
+	 * `cacheWrite` (rebased on the tier's `input`).
 	 */
 	"cache-write-rate": { key: "cacheWriteRate", set: "catalog", shape: "scalar" },
 	/**

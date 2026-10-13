@@ -92,12 +92,14 @@ provider "devin" {
 	// usage reports cache-write tokens for Claude and GPT-5.6+ (Gemini
 	// reports none), and the card bills them at 1.25x input. Earlier GPT,
 	// Grok, Kimi, GLM, DeepSeek, and SWE rows publish no cache-write rate.
+	// The GPT selector stops at the next major generation, like the tiers
+	// below, so an unpublished generation records no cache-write price.
 	class "anthropic" {
 		cache-write-rate 1.25
 	}
 	class "openai" {
 		family "gpt" {
-			revision ">=5.6" {
+			revision ">=5.6 <7" {
 				cache-write-rate 1.25
 			}
 		}
@@ -114,8 +116,9 @@ provider "devin" {
 	// exceed the threshold. GPT and Gemini Pro tiers double input and cache
 	// rates and raise output 1.5x; Grok doubles every leg. Cache writes
 	// follow `cache-write-rate`. Each selector stops at the next major
-	// generation: the page lists GPT 5.4–6.1, Gemini 2.5 and 3.1 Pro, and
-	// Grok 4.5–4.7, so an unlisted generation carries no tier.
+	// generation, and Gemini Pro skips 3.0: the page lists GPT 5.4–6.1,
+	// Gemini 2.5 and 3.1 Pro, and Grok 4.5–4.7, so an unlisted generation
+	// carries no tier.
 	class "openai" {
 		family "gpt" {
 			// Every GPT-6 lane, Fast (`-priority`) lanes included.
@@ -124,6 +127,13 @@ provider "devin" {
 					input-threshold 272000
 					multiplier 2.0
 					output-multiplier 1.5
+				}
+				// mini and nano share the class rank but have no published tier.
+				models token="mini" {
+					long-context-cost {}
+				}
+				models token="nano" {
+					long-context-cost {}
 				}
 			}
 		}
@@ -146,7 +156,14 @@ provider "devin" {
 	}
 	class "gemini" {
 		family "pro" {
-			revision ">=2.5 <4" {
+			revision ">=2.5 <3" {
+				long-context-cost {
+					input-threshold 200000
+					multiplier 2.0
+					output-multiplier 1.5
+				}
+			}
+			revision ">=3.1 <4" {
 				long-context-cost {
 					input-threshold 200000
 					multiplier 2.0

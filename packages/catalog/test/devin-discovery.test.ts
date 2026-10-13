@@ -827,6 +827,14 @@ describe("devin catalog pricing", () => {
 		expect(terra.cost.cacheWrite).toBe(2.5);
 		const gpt55 = buildModel(spec("gpt-5-5", { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 }));
 		expect(gpt55.cost.cacheWrite).toBe(0);
+		// An unpublished generation records no cache-write price.
+		const gpt7 = buildModel(spec("gpt-7-sol", { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 }));
+		expect(gpt7.cost.cacheWrite).toBe(0);
+	});
+
+	it("bills Adaptive router cache writes at the input rate", () => {
+		const adaptive = buildModel(spec("adaptive", { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 0 }));
+		expect(adaptive.cost.cacheWrite).toBe(1);
 	});
 
 	it("derives a GPT-6 Fast lane's long-context tier from its own price", () => {
@@ -874,8 +882,21 @@ describe("devin catalog pricing", () => {
 		});
 	});
 
-	it("leaves generations Devin publishes no tier for untiered", () => {
-		for (const id of ["gpt-7-sol", "gemini-4-pro", "grok-5"]) {
+	it("tiers Gemini 2.5 Pro's legacy uid like the classified Pro rows", () => {
+		const legacy = buildModel(
+			spec("MODEL_GOOGLE_GEMINI_2_5_PRO", { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 }),
+		);
+		expect(legacy.cost.longContext).toEqual({
+			inputThreshold: 200_000,
+			input: 2.5,
+			output: 15,
+			cacheRead: 0.25,
+			cacheWrite: 0,
+		});
+	});
+
+	it("leaves models Devin publishes no tier for untiered", () => {
+		for (const id of ["gpt-7-sol", "gpt-6-mini", "gpt-6-nano", "gemini-3-pro", "gemini-4-pro", "grok-5"]) {
 			const model = buildModel(spec(id, { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 }));
 			expect(model.cost.longContext).toBeUndefined();
 		}
