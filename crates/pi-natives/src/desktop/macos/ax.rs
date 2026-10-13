@@ -998,10 +998,10 @@ fn replace_utf16_selection(
 	Some(result)
 }
 
-/// `UIKit` (Mac Catalyst, iPhone and iPad apps) answers `AXPress` by tapping the
-/// element where it is drawn, so pressing a row scrolled out of its view reports
-/// success and does nothing. Scrolling it into view first lets the tap land;
-/// for an element already in view the scroll changes nothing.
+/// `UIKit` (Mac Catalyst, iPhone and iPad apps) answers `AXPress` by tapping
+/// the element where it is drawn, so pressing a row scrolled out of its view
+/// reports success and does nothing. Scrolling it into view first lets the tap
+/// land; for an element already in view the scroll changes nothing.
 fn scrolls_before_press(native: &str, actions: &[String], uikit: impl FnOnce() -> bool) -> bool {
 	native == "AXPress" && actions.iter().any(|action| action == SCROLL_TO_VISIBLE) && uikit()
 }
@@ -1397,8 +1397,8 @@ mod tests {
 
 	use super::{
 		AttachedCandidate, CHILDREN, DESCRIPTION, ENABLED, NodeRead, NodeValues, ROLE, TITLE, VALUE,
-		ax_result, element_action_result, replace_utf16_selection, required_string, scrolls_before_press,
-		select_attached, stringify_value,
+		ax_result, element_action_result, replace_utf16_selection, required_string,
+		scrolls_before_press, select_attached, stringify_value,
 	};
 	use crate::desktop::error::ErrorCode;
 
@@ -1541,10 +1541,16 @@ mod tests {
 
 	#[test]
 	fn only_a_uikit_press_scrolls_its_element_into_view_first() {
-		let actions = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect::<Vec<_>>();
+		let actions = |names: &[&str]| {
+			names
+				.iter()
+				.map(|name| (*name).to_owned())
+				.collect::<Vec<_>>()
+		};
 		let row = actions(&["AXPress", "AXScrollToVisible", "AXShowMenu"]);
 		assert!(scrolls_before_press("AXPress", &row, || true));
-		// An AppKit app, another action, or an element that cannot scroll: press as is.
+		// An AppKit app, another action, or an element that cannot scroll: press
+		// as is.
 		assert!(!scrolls_before_press("AXPress", &row, || false));
 		assert!(!scrolls_before_press("AXShowMenu", &row, || true));
 		assert!(!scrolls_before_press("AXPress", &actions(&["AXPress"]), || true));
