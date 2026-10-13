@@ -266,17 +266,23 @@ describe("dialogs under a native surface", () => {
 		}
 	});
 
-	it("approval: any key restarts the timeout, so a scroll just before the deadline keeps it open", () => {
+	it("approval: any key restarts the timeout (reporting start and reset), so a scroll before the deadline keeps it open", () => {
 		vi.useFakeTimers();
 		const callbacks = { onApprove: vi.fn(), onDeny: vi.fn() };
 		const onTimeout = vi.fn();
+		const onTimeoutStart = vi.fn();
+		const onTimeoutReset = vi.fn();
 		const dialog = new ApprovalDialogComponent("Allow tool: bash\nCommand: ls", callbacks, {
 			timeout: 1_000,
 			onTimeout,
+			onTimeoutStart,
+			onTimeoutReset,
 		});
 		try {
+			expect(onTimeoutStart).toHaveBeenCalledTimes(1);
 			vi.advanceTimersByTime(900);
 			dialog.handleInput(DOWN);
+			expect(onTimeoutReset).toHaveBeenCalledTimes(1);
 			vi.advanceTimersByTime(200);
 			expect(onTimeout).not.toHaveBeenCalled();
 			expect(callbacks.onDeny).not.toHaveBeenCalled();

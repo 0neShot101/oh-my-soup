@@ -674,6 +674,8 @@ export class ExtensionUiController {
 						wrapDetails: callHidden,
 						timeout: dialogOptions?.timeout,
 						onTimeout: dialogOptions?.onTimeout,
+						onTimeoutStart: dialogOptions?.onTimeoutStart,
+						onTimeoutReset: dialogOptions?.onTimeoutReset,
 					},
 				);
 				this.ctx.editorContainer.clear();

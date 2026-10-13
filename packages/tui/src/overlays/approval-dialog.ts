@@ -46,6 +46,10 @@ interface ApprovalDialogOptions {
 	timeout?: number;
 	/** Called when {@link timeout} expires, before the dialog denies. */
 	onTimeout?: () => void;
+	/** Called when the countdown starts, as the dialog mounts. */
+	onTimeoutStart?: () => void;
+	/** Called each time a key restarts the countdown. */
+	onTimeoutReset?: () => void;
 }
 
 export class ApprovalDialogComponent implements Component {
@@ -77,6 +81,7 @@ export class ApprovalDialogComponent implements Component {
 		this.#panel.addChild(new PanelDivider());
 		this.#panel.addChild(this.#footer);
 		if (options.timeout && options.timeout > 0) {
+			options.onTimeoutStart?.();
 			this.#countdown = new CountdownTimer(
 				options.timeout,
 				options.tui,
@@ -106,6 +111,7 @@ export class ApprovalDialogComponent implements Component {
 		if (this.#closed) return;
 		if (this.#countdown) {
 			this.#countdown.reset();
+			this.options.onTimeoutReset?.();
 			// The described countdown restarts with it.
 			this.#native = undefined;
 		}

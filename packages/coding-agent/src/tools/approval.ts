@@ -10,6 +10,7 @@ import type { AgentTool, ApprovalDetailsOptions, ToolApprovalDecision, ToolTier 
 import type { Settings } from "../config/settings";
 import type { ExtensionUIContext } from "../extensibility/extensions/types";
 
+import { countNewlines } from "@oh-my-pi/pi-utils";
 import { cfgToolsApproval, cfgToolsApprovalMode } from "./settings";
 
 export type { ApprovalDetailsOptions, ToolApproval, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
@@ -405,7 +406,8 @@ function compactApprovalDetail(detail: string): string {
 	const newline = detail.indexOf("\n");
 	if (newline < 0) return truncateForPrompt(detail);
 	const head = truncateForPrompt(detail.slice(0, newline).trimEnd());
-	const rest = detail.slice(newline + 1).split("\n").length;
+	// Every newline starts one more line after the head; counted without splitting a body that may be megabytes.
+	const rest = countNewlines(detail);
 	const count = `${rest} line${rest === 1 ? "" : "s"} in the tool call`;
 	return head.endsWith(":") ? `${head} ${count}` : `${head} … +${count}`;
 }
