@@ -1397,8 +1397,8 @@ mod tests {
 
 	use super::{
 		AttachedCandidate, CHILDREN, DESCRIPTION, ENABLED, NodeRead, NodeValues, ROLE, TITLE, VALUE,
-		ax_result, element_action_result, replace_utf16_selection, required_string, select_attached,
-		stringify_value,
+		ax_result, element_action_result, replace_utf16_selection, required_string, scrolls_before_press,
+		select_attached, stringify_value,
 	};
 	use crate::desktop::error::ErrorCode;
 
