@@ -614,8 +614,8 @@ describe("model thinking derivation", () => {
 			}
 		}
 
-		// The Argon ladder must not leak onto other Gemini 4 lines: Pro keeps
-		// its own low/high ladder (and must not tie with it).
+		// The Argon ladder must not leak onto other Gemini 4 lines. No Gemini 4 Pro
+		// ships yet; a future one must keep the Pro low/high ladder (and must not tie with it).
 		const vertexPro4 = createModel({ id: "gemini-4-pro", api: "google-vertex", provider: "google-vertex" });
 		expect(vertexPro4.thinking?.mode).toBe("google-level");
 		expect(getSupportedEfforts(vertexPro4)).toEqual([Effort.Low, Effort.High]);
