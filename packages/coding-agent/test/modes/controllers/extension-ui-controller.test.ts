@@ -571,6 +571,27 @@ describe("ExtensionUiController tool approval", () => {
 		expect(onPasteImagePath).toHaveBeenCalledWith("/tmp/shot.png");
 	});
 
+	it("sends a steer whose Enter arrived in a separate read while its image was still landing", async () => {
+		const harness = makeHarness();
+		const clipboard = Promise.withResolvers<void>();
+		harness.editor.onPasteImage = async () => {
+			await clipboard.promise;
+			harness.editor.setText("[Image #1]");
+			return true;
+		};
+		const onSubmit = vi.fn();
+		harness.editor.onSubmit = onSubmit;
+		void harness.controller.showCollabAwareApproval(prompt);
+		harness.handleInput("\x1b[200~\x1b[201~");
+		// The composer is still empty, yet this Enter belongs to the paste, not to the empty-composer guard.
+		harness.handleInput("\r");
+		clipboard.resolve();
+		await clipboard.promise;
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(onSubmit).toHaveBeenCalledWith("[Image #1]");
+	});
+
 	it("drops the details only beside the gated call's transcript card", () => {
 		const harness = makeHarness();
 		harness.pendingTools.set("call-1", harness.editor);

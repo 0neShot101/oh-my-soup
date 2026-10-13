@@ -42,8 +42,8 @@ interface ApprovalDialogCallbacks {
 
 /** The composer mounted beneath the dialog: it receives every key the dialog does not own. */
 export interface ApprovalDialogDraft {
-	/** True while the composer holds a draft: arrows and Enter then edit and send it. */
-	hasText(): boolean;
+	/** True while the composer holds a draft — text, attachments, or a paste still landing: keys then edit and send it. */
+	hasDraft(): boolean;
 	handleInput(keyData: string): void;
 }
 
@@ -132,7 +132,7 @@ export class ApprovalDialogComponent implements Component {
 		}
 		const draft = this.options.draft;
 		// The composer's clear key (Ctrl+C, also a cancel key) clears a draft before it denies.
-		if (draft?.hasText() && getKeybindings().matches(keyData, "app.clear")) {
+		if (draft?.hasDraft() && getKeybindings().matches(keyData, "app.clear")) {
 			this.#editDraft(draft, keyData);
 			return;
 		}
@@ -140,7 +140,7 @@ export class ApprovalDialogComponent implements Component {
 			this.#finish(false);
 			return;
 		}
-		if (draft?.hasText()) {
+		if (draft?.hasDraft()) {
 			this.#editDraft(draft, keyData);
 			return;
 		}
@@ -241,7 +241,7 @@ export class ApprovalDialogComponent implements Component {
 		const approve = formatKeyHints(appApproveKeys());
 		const hint = `${approve} approve · ${editorKey("tui.select.cancel")} deny`;
 		const draft = this.options.draft;
-		if (draft?.hasText()) return `${hint} · ${editorKey("tui.input.submit")} deny and send`;
+		if (draft?.hasDraft()) return `${hint} · ${editorKey("tui.input.submit")} deny and send`;
 		const scroll = overflows ? ` · ${editorKeys("tui.select.up", "tui.select.down")} scroll` : "";
 		return `${hint}${scroll}${draft ? " · type to steer instead" : ""}`;
 	}

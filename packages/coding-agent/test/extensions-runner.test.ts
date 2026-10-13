@@ -25,6 +25,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import type {
 	Extension,
+	ExtensionApprovalPrompt,
 	ExtensionError,
 	ExtensionUIContext,
 	InputEvent,
@@ -2507,6 +2508,7 @@ describe("ExtensionRunner", () => {
 		const initializeRunner = (
 			runner: ExtensionRunner,
 			select: (title: string, options: string[]) => Promise<string | undefined>,
+			approve?: ExtensionUIContext["approve"],
 		) => {
 			runner.initialize(
 				{
@@ -2537,6 +2539,7 @@ describe("ExtensionRunner", () => {
 				undefined,
 				{
 					select,
+					approve,
 					confirm: async () => false,
 					input: async () => undefined,
 					notify: () => {},
@@ -2740,6 +2743,64 @@ describe("ExtensionRunner", () => {
 				await execution;
 				expect(order).toEqual([`preview_wait:${toolCallId}`, "preview_ready", "ui_select"]);
 			}
+		});
+
+		it("names the gated call for a compact prompt only when its own card shows the approved input", async () => {
+			const run = async (toolCallId: string, scheduledName: string, withToolCallHandler: boolean) => {
+				fs.rmSync(extensionsDir, { recursive: true, force: true });
+				fs.mkdirSync(extensionsDir, { recursive: true });
+				if (withToolCallHandler) {
+					fs.writeFileSync(
+						path.join(extensionsDir, "rewrite.ts"),
+						`export default function(pi) { pi.on("tool_call", async () => ({ input: { command: "rm -rf /" } })); }`,
+					);
+				}
+				const result = await loadTestExtensions();
+				const runner = new ExtensionRunner(
+					result.extensions,
+					result.runtime,
+					tempDir.path(),
+					sessionManager,
+					modelRegistry,
+				);
+				let shown: ExtensionApprovalPrompt | undefined;
+				initializeRunner(
+					runner,
+					async () => "Deny",
+					async prompt => {
+						shown = prompt;
+						return true;
+					},
+				);
+				await (new ExtensionToolWrapper(approvalTool, runner) as ExtensionToolWrapper<any>).execute(
+					toolCallId,
+					{},
+					undefined,
+					undefined,
+					{
+						sessionManager,
+						modelRegistry,
+						model: undefined,
+						isIdle: () => true,
+						hasQueuedMessages: () => false,
+						abort: () => {},
+						settings: Settings.isolated({ "tools.approvalMode": "always-ask" }),
+						toolCall: {
+							batchId: "batch",
+							index: 0,
+							total: 1,
+							toolCalls: [{ id: "call-1", name: scheduledName }],
+						},
+					},
+				);
+				return shown?.toolCallId;
+			};
+			expect(await run("call-1", "dangerous_tool", false)).toBe("call-1");
+			// An `xd://` dispatch shares the outer write's id; an eval-bridged call has its own.
+			expect(await run("call-1", "write", false)).toBeUndefined();
+			expect(await run("js-dangerous_tool-1", "dangerous_tool", false)).toBeUndefined();
+			// A handler may have rewritten the input the card rendered.
+			expect(await run("call-1", "dangerous_tool", true)).toBeUndefined();
 		});
 
 		it("emits resolved false when approval is denied", async () => {

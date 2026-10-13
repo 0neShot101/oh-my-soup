@@ -693,7 +693,8 @@ export class ExtensionUiController {
 						onTimeoutStart: dialogOptions?.onTimeoutStart,
 						onTimeoutReset: dialogOptions?.onTimeoutReset,
 						draft: {
-							hasText: () => editor.getText().length > 0,
+							hasDraft: () =>
+								editor.getText().length > 0 || editor.pendingImages.length > 0 || editor.pasteInFlight,
 							handleInput: keyData => editor.handleDraftEdit(keyData),
 						},
 					},

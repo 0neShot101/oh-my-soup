@@ -346,12 +346,18 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 
 		if (approvalCheck.required) {
 			const scheduledCall = context?.toolCall?.toolCalls[context.toolCall.index];
-			if (
+			// The transcript card for this exact call: an `xd://` dispatch reuses the outer call's id
+			// under another tool name, and an eval-bridged call has an id the transcript never saw.
+			const ownCard =
 				scheduledCall?.id === toolCallId &&
-				(scheduledCall.name === this.tool.name || scheduledCall.name === this.tool.customWireName)
-			) {
+				(scheduledCall.name === this.tool.name || scheduledCall.name === this.tool.customWireName);
+			if (ownCard) {
 				await untilAborted(signal, () => this.runner.waitForToolApprovalPreview(toolCallId));
 			}
+			// The card renders the tool-call block. A `tool_call` handler can make the approved input
+			// differ from it (a replacement here, or an in-place edit of the loop's validated copy),
+			// so with any registered the dialog shows the details itself.
+			const cardShowsArgs = ownCard && !this.runner.hasHandlers("tool_call");
 
 			const hasApprovalHandlers =
 				this.runner.hasHandlers("tool_approval_requested") || this.runner.hasHandlers("tool_approval_resolved");
@@ -407,7 +413,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				approved = await requestApproval(uiContext, this.tool, resolvedArgs, {
 					reason: approvalCheck.reason,
 					appendix: safetyAppendix,
-					toolCallId,
+					toolCallId: cardShowsArgs ? toolCallId : undefined,
 				});
 			} catch (err) {
 				await emitApprovalResolved(false, err instanceof Error ? err.message : "approval aborted");

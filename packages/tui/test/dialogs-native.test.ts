@@ -273,7 +273,7 @@ describe("dialogs under a native surface", () => {
 		const details = Array.from({ length: 20 }, (_, i) => `Line ${i}`).join("\n");
 		const dialog = new ApprovalDialogComponent(`Allow tool: bash\n${details}`, callbacks, {
 			draft: {
-				hasText: () => draft.length > 0,
+				hasDraft: () => draft.length > 0,
 				handleInput: key => {
 					routed.push(key);
 					if (key.length === 1 && key >= " ") draft += key;

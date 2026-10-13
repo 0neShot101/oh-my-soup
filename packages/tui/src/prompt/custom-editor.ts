@@ -1532,6 +1532,11 @@ export class CustomEditor extends Editor {
 		void promise.then(this.#onPasteSettled, this.#onPasteSettled);
 	}
 
+	/** True while a clipboard-image or image-path paste is still landing; later keys queue behind it. */
+	get pasteInFlight(): boolean {
+		return this.#pasteInFlight > 0;
+	}
+
 	capturesInput(data: string): boolean {
 		return this.spaceHold.shouldRoute(data);
 	}
