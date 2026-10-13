@@ -635,7 +635,7 @@ async function writeOwnedProfilePreferences(file: string): Promise<void> {
  */
 export async function discardOwnedProfileSessions(userDataDir: string): Promise<void> {
 	try {
-		await fs.promises.rm(path.join(userDataDir, "Default", "Sessions"), { recursive: true, force: true });
+		await removeWithRetries(path.join(userDataDir, "Default", "Sessions"));
 	} catch (error) {
 		logger.warn("Could not discard browser profile session state", {
 			userDataDir,
