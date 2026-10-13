@@ -331,6 +331,30 @@ describe("dialogs under a native surface", () => {
 		}
 	});
 
+	it("approval: expanding the details from the host's key or Details restarts the timeout too", () => {
+		vi.useFakeTimers();
+		const callbacks = { onApprove: vi.fn(), onDeny: vi.fn() };
+		const onTimeoutReset = vi.fn();
+		const dialog = new ApprovalDialogComponent("Allow tool: bash\nCommand: ls …", callbacks, {
+			fullPrompt: "Allow tool: bash\nCommand: ls\n-la",
+			timeout: 1_000,
+			onTimeoutReset,
+		});
+		try {
+			vi.advanceTimersByTime(900);
+			expect(dialog.toggleDetails()).toBe(true);
+			vi.advanceTimersByTime(900);
+			const expand = find(dialog.describe(), node => node.p?.role === "omp.btn" && node.key === "expand");
+			dialog.handleNativeEvent({ type: "action", key: expand!.path, act: "expand", mods: [] });
+			vi.advanceTimersByTime(900);
+			expect(onTimeoutReset).toHaveBeenCalledTimes(2);
+			expect(callbacks.onDeny).not.toHaveBeenCalled();
+		} finally {
+			dialog.dispose();
+			vi.useRealTimers();
+		}
+	});
+
 	it("approval: an expired timeout denies (never approves) and reports the timeout", async () => {
 		const denied = Promise.withResolvers<void>();
 		const callbacks = { onApprove: vi.fn(), onDeny: vi.fn(() => denied.resolve()) };

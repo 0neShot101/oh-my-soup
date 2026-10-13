@@ -91,6 +91,11 @@ function makeHarness() {
 			steering.push(text);
 			for (const listener of sessionListeners) listener({ type: "queue_update", steering: [...steering] });
 		},
+		/** Deliver the queued steering at the batch boundary: the queue empties. */
+		deliverSteering(): void {
+			steering.length = 0;
+			for (const listener of sessionListeners) listener({ type: "queue_update", steering: [] });
+		},
 		handleInput(data: string): void {
 			if (!focused?.handleInput) throw new Error("Expected a focused input component");
 			focused.handleInput(data);
@@ -556,6 +561,21 @@ describe("ExtensionUiController tool approval", () => {
 		expect(await first).toBe(false);
 		expect(await second).toBe(false);
 		expect(harness.editorContainer.children).toEqual([harness.editor]);
+	});
+
+	it("a steer also denies approvals its batch requests later, until it is delivered", async () => {
+		const harness = makeHarness();
+		harness.editor.onSubmit = text => harness.queueSteer(text);
+		const first = harness.controller.showCollabAwareApproval(prompt);
+		for (const key of "stop") harness.handleInput(key);
+		harness.handleInput("\r");
+		expect(await first).toBe(false);
+		// An exclusive call asks only after the denied one settled; the steer is still queued.
+		expect(await harness.controller.showCollabAwareApproval(prompt)).toBe(false);
+		// Delivered at the batch boundary: the next turn's approvals ask again.
+		harness.deliverSteering();
+		void harness.controller.showCollabAwareApproval(prompt);
+		expect(harness.editorContainer.children).toHaveLength(2);
 	});
 
 	it("attaches pasted images to the steer: clipboard and image-path pastes reach the composer, later keys wait", async () => {

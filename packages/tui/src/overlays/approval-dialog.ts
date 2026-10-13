@@ -135,17 +135,15 @@ export class ApprovalDialogComponent implements Component {
 
 	handleInput(keyData: string): void {
 		if (this.#closed) return;
-		if (this.#countdown) {
-			this.#countdown.reset();
-			this.options.onTimeoutReset?.();
-			// The described countdown restarts with it.
-			this.#native = undefined;
-		}
+		this.#restartCountdown();
 		if (matchesAppApprove(keyData)) {
 			if (performance.now() >= this.#armedAt) this.#finish(true);
 			return;
 		}
-		if (matchesAppToolsExpand(keyData) && this.toggleDetails()) return;
+		if (this.#full && matchesAppToolsExpand(keyData)) {
+			this.#toggleExpanded();
+			return;
+		}
 		const draft = this.options.draft;
 		// The composer's clear key (Ctrl+C, also a cancel key) clears a draft before it denies.
 		if (draft?.hasDraft() && getKeybindings().matches(keyData, "app.clear")) {
@@ -175,16 +173,30 @@ export class ApprovalDialogComponent implements Component {
 	}
 
 	/**
-	 * Swap the summarized prompt for every detail, wrapped, or back. False (nothing changes)
-	 * without a full prompt, so a host's own expand handling (tool previews) can take the key.
+	 * Swap the summarized prompt for every detail, wrapped, or back, as the expand key does here;
+	 * for hosts that intercept that key first. Restarts the countdown like any key. False (nothing
+	 * changes) without a full prompt, so the host's own expand handling (tool previews) can run.
 	 */
 	toggleDetails(): boolean {
 		if (this.#closed || !this.#full) return false;
+		this.#restartCountdown();
+		this.#toggleExpanded();
+		return true;
+	}
+
+	/** Any user input restarts the countdown (and its described form). */
+	#restartCountdown(): void {
+		if (!this.#countdown) return;
+		this.#countdown.reset();
+		this.options.onTimeoutReset?.();
+		this.#native = undefined;
+	}
+
+	#toggleExpanded(): void {
 		this.#expanded = !this.#expanded;
 		this.#scrollOffset = 0;
 		this.#native = undefined;
 		this.options.tui?.requestRender();
-		return true;
 	}
 
 	/** The rows on show: the summary, or every detail once expanded. */

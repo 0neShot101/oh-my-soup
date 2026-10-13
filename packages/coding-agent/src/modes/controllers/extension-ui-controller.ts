@@ -116,6 +116,12 @@ export class ExtensionUiController {
 	#dialogActive = false;
 	#dialogQueue: Array<() => void> = [];
 	/**
+	 * The queued steering (chip texts) when a steer last denied an approval. Steering waits for
+	 * the tool batch to end, so while the queue still starts with it, later approvals of that
+	 * batch (an exclusive call asks only after the denied one settles) are denied by it as well.
+	 */
+	#denyingSteering: readonly string[] | undefined;
+	/**
 	 * Built once in `initHooksAndCustomTools()`. Reused directly by `/tree`
 	 * `ask` re-answer (issue #5642) to drive a standalone `AskTool.execute()`
 	 * call with the same picker/dialog primitives a live tool call would get.
@@ -671,12 +677,18 @@ export class ExtensionUiController {
 			options: [APPROVE_OPTION, DENY_OPTION],
 		};
 		const session = this.ctx.session;
+		const queued = session.getQueuedMessages().steering;
+		const denying = this.#denyingSteering;
+		if (denying && denying.length <= queued.length && denying.every((text, i) => text === queued[i])) return false;
+		this.#denyingSteering = undefined;
 		const steered = new AbortController();
-		let steeringBaseline = session.getQueuedMessages().steering.length;
+		let steeringBaseline = queued.length;
 		const unsubscribe = session.subscribe(event => {
 			if (event.type !== "queue_update") return;
-			if (event.steering.length > steeringBaseline) steered.abort();
-			else steeringBaseline = event.steering.length;
+			if (event.steering.length > steeringBaseline) {
+				this.#denyingSteering = event.steering;
+				steered.abort();
+			} else steeringBaseline = event.steering.length;
 		});
 		const signal = dialogOptions?.signal ? AbortSignal.any([dialogOptions.signal, steered.signal]) : steered.signal;
 		try {
