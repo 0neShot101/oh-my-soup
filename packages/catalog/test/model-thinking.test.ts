@@ -598,6 +598,23 @@ describe("model thinking derivation", () => {
 		expect(getSupportedEfforts(resellerFlash37)).toContain(Effort.Minimal);
 	});
 
+	it("drives Gemini 4 with thinkingLevel low/medium/high on the direct Google transports", () => {
+		// Google documents LOW/MEDIUM/HIGH for Argon and Argon Cyber Permissive:
+		// `thinkingBudget` and THINKING_LEVEL_MINIMAL both return 400.
+		// https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-argon
+		for (const id of ["gemini-4-argon", "gemini-4-argon-cyber-permissive"]) {
+			for (const [provider, api] of [
+				["google-vertex", "google-vertex"],
+				["google", "google-generative-ai"],
+			] as const) {
+				const argon = createModel({ id, api, provider });
+				expect(argon.thinking?.mode).toBe("google-level");
+				expect(getSupportedEfforts(argon)).toEqual([Effort.Low, Effort.Medium, Effort.High]);
+				expect(mapEffortToGoogleThinkingLevel(Effort.Medium, argon)).toBe("MEDIUM");
+			}
+		}
+	});
+
 	it("bakes requiresEffort for Gemini 3.x on any provider and backfills explicit metadata", () => {
 		// Derivation: aggregator-hosted Gemini 3.5 gets the flag, 2.5 does not.
 		const openRouterFlash = createModel({
