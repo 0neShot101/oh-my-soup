@@ -6157,10 +6157,20 @@ const ANTHROPIC_TOOL_SCHEMA_STRING_FORMATS = new Set([
 // Not `bash`: strict decoding fixes property order, so an optional key declared
 // before one the model has already written can no longer be emitted, and bash's
 // `timeout` vanished from every `async`-first call.
-const ANTHROPIC_STRICT_TOOL_ALLOWLIST = new Set(["python", "edit", "find"]);
+// `yield` carries a subagent's whole structured result. Its properties (`type`,
+// `data`, `error`) are declared in the order callers write them; schema-less and
+// workpool yields report `strict: false`. Strict only holds together with buffered
+// input streaming (see ANTHROPIC_BUFFERED_INPUT_TOOLS).
+const ANTHROPIC_STRICT_TOOL_ALLOWLIST = new Set(["python", "edit", "find", "yield"]);
 const MAX_ANTHROPIC_STRICT_TOOLS = 20;
 const MAX_ANTHROPIC_STRICT_OPTIONAL_PARAMETERS = 24;
 const MAX_ANTHROPIC_STRICT_UNION_PARAMETERS = 16;
+// Tools sent with `eager_input_streaming: false`, so the API buffers and validates
+// their input. Eagerly streamed `yield` input from Claude Haiku arrived as invalid
+// JSON (a large nested result closed with one brace too many) even with `strict`
+// set; buffered, it did not. An explicit `false` keeps buffered streaming even
+// when the fine-grained beta header is sent.
+const ANTHROPIC_BUFFERED_INPUT_TOOLS = new Set(["yield"]);
 
 /** `minItems` / `maxItems` apply to arrays; Anthropic rejects them on `type: "object"` (including `minItems: 0`/`1`). */
 function isJsonSchemaArrayNode(schema: Record<string, unknown>): boolean {
@@ -6624,7 +6634,9 @@ function convertTools(
 		};
 		return {
 			...baseTool,
-			...(supportsEagerToolInputStreaming ? { eager_input_streaming: true } : {}),
+			...(supportsEagerToolInputStreaming
+				? { eager_input_streaming: !ANTHROPIC_BUFFERED_INPUT_TOOLS.has(tool.name) }
+				: {}),
 			...(plan.strict ? { strict: true } : {}),
 			...(tool.deferLoading ? { defer_loading: true } : {}),
 		};
