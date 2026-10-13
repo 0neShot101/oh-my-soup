@@ -2532,3 +2532,122 @@ describe("runGcCommand stale state", () => {
 		expect(enabled.stale?.wouldDelete).toBe(0);
 	});
 });
+
+describe("runGcCommand session compression", () => {
+	const onApfs = process.platform === "darwin";
+	const filler =
+		`${JSON.stringify({ type: "message", message: { role: "toolResult", content: "line ".repeat(40) } })}\n`.repeat(
+			400,
+		);
+
+	/** An idle session with a compressible transcript and one artifact; filler precedes its final turn. */
+	async function writeIdleSession(id: string, status: "complete" | "pending" = "complete", ageDays = 30) {
+		const file = await writeSession(root, "project", id, status);
+		const lines = (await Bun.file(file).text()).split("\n");
+		lines.splice(1, 0, filler.trimEnd());
+		await Bun.write(file, lines.join("\n"));
+		const artifact = path.join(file.slice(0, -".jsonl".length), "1.bash.log");
+		await fs.mkdir(path.dirname(artifact), { recursive: true });
+		await Bun.write(artifact, filler);
+		await agePath(artifact, ageDays);
+		await agePath(file, ageDays);
+		return { file, artifact };
+	}
+
+	async function snapshot(file: string) {
+		const stat = await fs.stat(file);
+		return {
+			bytes: await Bun.file(file).text(),
+			mtimeMs: stat.mtimeMs,
+			allocated: stat.blocks * 512,
+			size: stat.size,
+		};
+	}
+
+	test.skipIf(onApfs)("reports the phase unsupported off APFS without touching sessions", async () => {
+		const { file } = await writeIdleSession(Bun.randomUUIDv7());
+		const before = await snapshot(file);
+
+		const result = await runGcCommand({ flags: { agentDir: root, compress: true, apply: true } });
+
+		expect(result.compress).toMatchObject({ supported: false, scanned: 0, compressed: 0, errors: [] });
+		expect(await snapshot(file)).toEqual(before);
+	});
+
+	test.skipIf(!onApfs)("--apply stores an idle session compressed with identical bytes and mtimes", async () => {
+		const { file, artifact } = await writeIdleSession(Bun.randomUUIDv7());
+		const before = await Promise.all([snapshot(file), snapshot(artifact)]);
+
+		const result = await runGcCommand({ flags: { agentDir: root, compress: true, apply: true } });
+
+		expect(result.compress).toMatchObject({
+			supported: true,
+			sessions: 1,
+			wouldCompress: 2,
+			compressed: 2,
+			errors: [],
+		});
+		expect(result.compress?.allocatedAfter).toBeLessThan(result.compress?.allocatedBefore ?? 0);
+		for (const [index, target] of [file, artifact].entries()) {
+			const after = await snapshot(target);
+			expect(after.bytes).toBe(before[index].bytes);
+			expect(after.mtimeMs).toBe(before[index].mtimeMs);
+			expect(after.allocated).toBeLessThan(after.size);
+		}
+		expect(await fs.readdir(path.dirname(file))).not.toContain(".omp-gc-compress.tmp");
+
+		const rerun = await runGcCommand({ flags: { agentDir: root, compress: true, apply: true } });
+		expect(rerun.compress).toMatchObject({ wouldCompress: 0, compressed: 0 });
+	});
+
+	test.skipIf(!onApfs)("a dry run reports candidates without rewriting them", async () => {
+		const { file } = await writeIdleSession(Bun.randomUUIDv7());
+		const before = await snapshot(file);
+
+		const result = await runGcCommand({ flags: { agentDir: root, compress: true } });
+
+		expect(result.compress).toMatchObject({ sessions: 1, wouldCompress: 2, compressed: 0 });
+		expect(await snapshot(file)).toEqual(before);
+	});
+
+	test.skipIf(!onApfs)("leaves recent and leased sessions uncompressed", async () => {
+		const recent = await writeIdleSession(Bun.randomUUIDv7(), "complete", 1);
+		// Unique per run: the lease is machine-wide.
+		const heldId = Bun.randomUUIDv7();
+		const held = await writeIdleSession(heldId);
+		const release = new FileSessionStorage().claimSession(heldId, held.file);
+		if (!release) throw new Error("Expected to claim the session lease");
+		const targets = [recent.file, recent.artifact, held.file, held.artifact];
+		const before = await Promise.all(targets.map(snapshot));
+		let result: GcResult;
+		try {
+			result = await runGcCommand({ flags: { agentDir: root, compress: true, apply: true } });
+		} finally {
+			release();
+		}
+
+		expect(result.compress).toMatchObject({ scanned: 2, skippedLive: 1, wouldCompress: 0, compressed: 0 });
+		expect(await Promise.all(targets.map(snapshot))).toEqual(before);
+	});
+
+	test.skipIf(!onApfs)("compresses an idle session whose last turn was interrupted", async () => {
+		const interrupted = await writeIdleSession(Bun.randomUUIDv7(), "pending");
+		const bytes = await fs.readFile(interrupted.file);
+
+		const result = await runGcCommand({ flags: { agentDir: root, compress: true, apply: true } });
+
+		expect(result.compress).toMatchObject({ skippedLive: 0, compressed: 2 });
+		expect(await fs.readFile(interrupted.file)).toEqual(bytes);
+	});
+
+	test.skipIf(!onApfs)("--compress-after-days overrides gc.compressAfterDays", async () => {
+		await writeConfig(root, ["gc:", "  compressAfterDays: 60", ""].join("\n"));
+		await writeIdleSession(Bun.randomUUIDv7(), "complete", 30);
+
+		const configured = await runGcCommand({ flags: { agentDir: root, compress: true } });
+		const overridden = await runGcCommand({ flags: { agentDir: root, compress: true, compressAfterDays: 7 } });
+
+		expect(configured.compress?.wouldCompress).toBe(0);
+		expect(overridden.compress?.wouldCompress).toBe(2);
+	});
+});

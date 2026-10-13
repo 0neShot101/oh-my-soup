@@ -5,6 +5,7 @@
 ### Added
 
 - Extensions can observe and answer the interactive plan review, including refinement feedback and save-and-quit ([#14250](https://github.com/can1357/oh-my-pi/pull/14250) by [@rlfleming93](https://github.com/rlfleming93))
+- Added opt-in `omp gc --compress` (or `gc.compress`) for macOS: it stores sessions idle for `gc.compressAfterDays` (default 7) with APFS transparent compression in place, keeping every transcript and artifact at its path with identical bytes, so resume, history search, and stats are unaffected.
 
 ### Changed
 
