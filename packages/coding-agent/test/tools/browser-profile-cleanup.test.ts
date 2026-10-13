@@ -207,3 +207,69 @@ describe("owned Chromium profile preferences", () => {
 		}
 	});
 });
+
+describe("shared Chromium session-restore state", () => {
+	it("discards the previous Chrome's sessions before a cold start and never touches a live Chrome's", async () => {
+		const projectDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "omp-shared-profile-sessions-"));
+		const name = sharedBrowserDaemonName(true);
+		const sessionsDir = path.join(daemonRuntimeDir(projectDir), `${name}.profile`, "Default", "Sessions");
+		const wsEndpoint = "ws://127.0.0.1:9222/devtools/browser/sessions";
+		let daemon: DaemonSnapshot | undefined;
+		let sessionsAtLaunch: string[] | undefined;
+		const client = {
+			projectDir,
+			onCompletion: () => () => {},
+			close() {},
+			async request(operation: DaemonOperation): Promise<DaemonRpcResult> {
+				if (operation.op === "describe") {
+					if (!daemon) throw new Error(`Unknown daemon ${operation.name}`);
+					return { op: "describe", daemon } as DaemonRpcResult;
+				}
+				if (operation.op === "start") {
+					// Chromium reopens these pages when its first window opens.
+					sessionsAtLaunch = await fs.promises.readdir(sessionsDir).catch(() => []);
+					const now = Date.now();
+					daemon = {
+						name: operation.spec.name,
+						id: "sessions",
+						state: "ready",
+						createdAt: now,
+						startedAt: now,
+						readyAt: now,
+						readyMatch: `DevTools listening on ${wsEndpoint}`,
+						restartCount: 0,
+						outputBytes: 0,
+						persist: false,
+						detached: false,
+					};
+					return { op: "start", daemon, readyTimedOut: false };
+				}
+				throw new Error(`Unexpected broker op ${operation.op}`);
+			},
+		} as unknown as DaemonBrokerClient;
+		const spies = [
+			spyOn(daemonClient, "daemonClientForProject").mockResolvedValue(client),
+			spyOn(browserLaunch, "resolveSharedBrowserLaunchSpec").mockResolvedValue({
+				executablePath: "/fake/chrome",
+				args: [],
+			}),
+			spyOn(browserAttach, "probeCdpStatus").mockResolvedValue(200),
+		];
+		try {
+			// A predecessor Chrome that was killed (or stopped) with pages open.
+			await Bun.write(path.join(sessionsDir, "Session_13435785841408923"), "previous chrome");
+			await Bun.write(path.join(sessionsDir, "Tabs_13435784948833957"), "previous chrome");
+			expect((await ensureSharedBrowser({ projectDir, headless: true }))?.wsEndpoint).toBe(wsEndpoint);
+			expect(sessionsAtLaunch).toEqual([]);
+
+			// The running Chrome records its own session; attaching to it must leave that alone.
+			await Bun.write(path.join(sessionsDir, "Session_13436291949708538"), "live chrome");
+			expect((await ensureSharedBrowser({ projectDir, headless: true }))?.wsEndpoint).toBe(wsEndpoint);
+			expect(await fs.promises.readdir(sessionsDir)).toEqual(["Session_13436291949708538"]);
+		} finally {
+			for (const spy of spies) spy.mockRestore();
+			await fs.promises.rm(daemonRuntimeDir(projectDir), { recursive: true, force: true });
+			await fs.promises.rm(projectDir, { recursive: true, force: true });
+		}
+	});
+});

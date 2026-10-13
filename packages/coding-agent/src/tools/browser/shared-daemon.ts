@@ -17,7 +17,12 @@ import { daemonRuntimeDir } from "../../launch/paths";
 import type { DaemonSnapshot } from "@oh-my-pi/pi-tui/tools/daemon";
 import { throwIfAborted } from "../tool-errors";
 import { probeCdpStatus } from "./attach";
-import { resolveSharedBrowserLaunchSpec, type SharedBrowserLaunchSpec, seedOwnedProfilePreferences } from "./launch";
+import {
+	discardOwnedProfileSessions,
+	resolveSharedBrowserLaunchSpec,
+	type SharedBrowserLaunchSpec,
+	seedOwnedProfilePreferences,
+} from "./launch";
 import type { SharedTargetScope } from "./orphan-registry";
 
 /** Chrome prints this on stderr once the CDP listener is up; the broker's ready probe captures the line. */
@@ -148,9 +153,10 @@ async function claimProfile(userDataDir: string, signal?: AbortSignal): Promise<
 }
 
 /**
- * One describe→adopt-or-start round. Seeds Preferences only when `claimed`
- * and no live daemon owns the profile, immediately before asking the broker to
- * launch Chrome; adopting an existing browser never writes the profile.
+ * One describe→adopt-or-start round. Prepares the profile (seeds Preferences,
+ * discards the previous Chrome's session-restore state) only when `claimed`
+ * and no live daemon owns it, immediately before asking the broker to launch
+ * Chrome; adopting an existing browser never writes the profile.
  * Resolves undefined when the caller should run another round.
  */
 async function adoptOrStart(
@@ -174,7 +180,10 @@ async function adoptOrStart(
 		await stopQuietly(client, name, "Shared browser", signal);
 		return undefined;
 	}
-	if (claimed) await seedOwnedProfilePreferences(userDataDir);
+	if (claimed) {
+		await seedOwnedProfilePreferences(userDataDir);
+		await discardOwnedProfileSessions(userDataDir);
+	}
 	try {
 		const started = await client.request(
 			{
