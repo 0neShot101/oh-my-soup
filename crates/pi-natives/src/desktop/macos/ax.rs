@@ -1408,12 +1408,11 @@ mod tests {
 	use objc2_core_foundation::{CFArray, CFNumber, CFString, CFType, Type, kCFNull};
 
 	use super::{
-		AttachedCandidate, CHILDREN, DESCRIPTION, ENABLED, NodeRead, NodeValues, ROLE,
-		SCROLL_TO_VISIBLE, TITLE, VALUE, ax_result, element_action_result, press_into_view,
-		replace_utf16_selection, required_string, scrolls_before_press, select_attached,
+		AttachedCandidate, CHILDREN, DESCRIPTION, ENABLED, NodeRead, NodeValues, ROLE, TITLE, VALUE,
+		ax_result, element_action_result, replace_utf16_selection, required_string, select_attached,
 		stringify_value,
 	};
-	use crate::desktop::{control, error::ErrorCode};
+	use crate::desktop::error::ErrorCode;
 
 	#[test]
 	fn batched_values_read_like_lone_reads() {
@@ -1554,6 +1553,8 @@ mod tests {
 
 	#[test]
 	fn only_a_uikit_press_scrolls_its_element_into_view_first() {
+		use super::scrolls_before_press;
+
 		let actions = |names: &[&str]| {
 			names
 				.iter()
@@ -1573,6 +1574,9 @@ mod tests {
 
 	#[test]
 	fn a_press_follows_its_scroll_unless_the_run_was_cancelled() {
+		use super::{SCROLL_TO_VISIBLE, press_into_view};
+		use crate::desktop::control;
+
 		let run = |scroll_first: bool, scroll_result: AXError, cancel: bool| {
 			let source = control::CancellationSource::default();
 			let token = source.token();
