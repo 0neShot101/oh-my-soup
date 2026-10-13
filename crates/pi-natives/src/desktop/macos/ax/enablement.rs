@@ -13,7 +13,6 @@
 use std::{
 	cell::RefCell,
 	collections::{HashSet, VecDeque},
-	mem,
 	time::{Duration, Instant},
 };
 
@@ -46,16 +45,8 @@ struct Process {
 
 impl Process {
 	fn of(pid: libc::pid_t) -> Option<Self> {
-		// SAFETY: An all-zero bit pattern is valid for this plain C struct.
-		let mut info: libc::proc_bsdinfo = unsafe { mem::zeroed() };
-		let size = libc::c_int::try_from(mem::size_of::<libc::proc_bsdinfo>()).ok()?;
-		// SAFETY: The buffer is exactly the kernel structure size and outlives
-		// the synchronous call.
-		let written = unsafe {
-			libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size)
-		};
-		(written == size)
-			.then_some(Self { pid, started: (info.pbi_start_tvsec, info.pbi_start_tvusec) })
+		let info = pi_builtins::proc_sys::bsdinfo(pid)?;
+		Some(Self { pid, started: (info.pbi_start_tvsec, info.pbi_start_tvusec) })
 	}
 }
 
@@ -199,7 +190,7 @@ fn budget(element: &AXUIElement, deadline: Instant) -> CoreResult<bool> {
 mod tests {
 	use std::cell::Cell;
 
-	use super::{Family, await_web_content};
+	use super::{Family, Process, await_web_content};
 	use crate::desktop::{
 		control::{self, CancellationSource},
 		error::{CoreResult, DesktopError, ErrorCode},
@@ -236,6 +227,16 @@ mod tests {
 	#[test]
 	fn other_apps_are_neither_waited_for_nor_written_to() {
 		assert!(matches!(run(Family::Other, 1), (Ok(()), 0, 0)));
+	}
+
+	#[test]
+	fn a_live_process_is_known_by_its_pid_and_start_time() {
+		let pid = std::process::id().cast_signed();
+		let process = Process::of(pid).expect("own process");
+		assert_eq!(process.pid, pid);
+		assert_ne!(process.started, (0, 0));
+		assert_eq!(Process::of(pid), Some(process));
+		assert_eq!(Process::of(-1), None);
 	}
 
 	#[test]
