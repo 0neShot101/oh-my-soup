@@ -10,8 +10,16 @@
 import { resolveDiscoveryApi, resolveModelPolicy } from "./compat/resolve";
 import type { ModelIdentity } from "./compat/types";
 import { resolveModelTokenizer } from "./model-tokenizer";
-import { applyDueEffectiveRates, materializeTimeBasedCost } from "./pricing";
-import { type Api, MODEL_KINDS, type Model, type ModelSpec } from "./types";
+import { applyDueEffectiveRates, effectiveRateDates, materializeTimeBasedCost } from "./pricing";
+import {
+	type Api,
+	type EffectiveTokenCost,
+	MODEL_KINDS,
+	type Model,
+	type ModelCost,
+	type ModelSpec,
+	type TimeBasedCost,
+} from "./types";
 import { cleanModelName } from "./utils";
 
 function numberField(source: object, key: string): number | undefined {
@@ -130,6 +138,132 @@ function applyCatalogAssignments<TApi extends Api>(model: Model<TApi>, catalog: 
 }
 
 /**
+ * Earliest instant a rate card can name (the `Date` range minimum). A leading
+ * card from here holds the price in force before the first dated change.
+ */
+const EARLIEST_EFFECTIVE_FROM = -8_640_000_000_000_000;
+
+/** A schedule of dated rate cards alone: no peak windows, no off-peak discount. */
+const NO_RECURRING_TARIFF: TimeBasedCost = { offPeakMultiplier: 1, peakWindows: [] };
+
+/**
+ * The row's corrected price card at `now`: `cost-patch`, then `cost-fallback`
+ * (each with its dated `effective-rates` card due at `now`), then the
+ * long-context tier and cache-rate derivations, all from the upstream card.
+ */
+function correctedCost(upstream: ModelCost, catalog: Record<string, unknown>, now: number): ModelCost {
+	let cost: ModelCost = { ...upstream };
+	const patch = objectPayload(catalog.costPatch);
+	if (patch !== undefined) {
+		const input = numberField(patch, "input");
+		if (input !== undefined) cost.input = input;
+		const output = numberField(patch, "output");
+		if (output !== undefined) cost.output = output;
+		const cacheRead = numberField(patch, "cacheRead");
+		if (cacheRead !== undefined) cost.cacheRead = cacheRead;
+		const cacheWrite = numberField(patch, "cacheWrite");
+		if (cacheWrite !== undefined) cost.cacheWrite = cacheWrite;
+		applyDueEffectiveRates(cost, Reflect.get(patch, "effectiveRates"), now);
+	}
+	const fallback = objectPayload(catalog.costFallback);
+	if (fallback !== undefined) {
+		const hasTokenPrice = cost.input !== 0 || cost.output !== 0 || cost.cacheRead !== 0 || cost.cacheWrite !== 0;
+		if (!hasTokenPrice) {
+			// Upstream reported no token price (plan-included or promo-free
+			// rows): seed the reviewed list price instead of overwriting real
+			// discovery data the way `cost-patch` would.
+			const input = numberField(fallback, "input");
+			if (input !== undefined) cost.input = input;
+			const output = numberField(fallback, "output");
+			if (output !== undefined) cost.output = output;
+			const cacheRead = numberField(fallback, "cacheRead");
+			if (cacheRead !== undefined) cost.cacheRead = cacheRead;
+			const cacheWrite = numberField(fallback, "cacheWrite");
+			if (cacheWrite !== undefined) cost.cacheWrite = cacheWrite;
+			applyDueEffectiveRates(cost, Reflect.get(fallback, "effectiveRates"), now);
+		}
+	}
+	const longContext = objectPayload(catalog.longContext);
+	if (longContext !== undefined) {
+		const inputThreshold = numberField(longContext, "inputThreshold");
+		const inclusive = Reflect.get(longContext, "inputThresholdInclusive") === true;
+		const multiplier = numberField(longContext, "multiplier");
+		const input = numberField(longContext, "input");
+		const output = numberField(longContext, "output");
+		const cacheRead = numberField(longContext, "cacheRead");
+		const cacheWrite = numberField(longContext, "cacheWrite");
+		const hasTokenPrice = cost.input !== 0 || cost.output !== 0 || cost.cacheRead !== 0 || cost.cacheWrite !== 0;
+		if (inputThreshold !== undefined && multiplier !== undefined && hasTokenPrice) {
+			// Multiplier form: tier rates derive from the row's final base card,
+			// after `cost-patch`/`cost-fallback` corrected the live list price.
+			cost = {
+				...cost,
+				longContext: {
+					inputThreshold,
+					...(inclusive && { inputThresholdInclusive: true }),
+					input: cost.input * multiplier,
+					output: cost.output * (numberField(longContext, "outputMultiplier") ?? multiplier),
+					cacheRead: cost.cacheRead * multiplier,
+					cacheWrite: cost.cacheWrite * multiplier,
+				},
+			};
+		} else if (
+			inputThreshold !== undefined &&
+			input !== undefined &&
+			output !== undefined &&
+			cacheRead !== undefined &&
+			cacheWrite !== undefined
+		) {
+			cost = { ...cost, longContext: { inputThreshold, input, output, cacheRead, cacheWrite } };
+		}
+	}
+	if (catalog.cacheReadAtInputRate === true) {
+		const { longContext } = cost;
+		cost = {
+			...cost,
+			cacheRead: cost.input,
+			...(longContext && { longContext: { ...longContext, cacheRead: longContext.input } }),
+		};
+	}
+	const cacheWriteRate = catalog.cacheWriteRate;
+	if (typeof cacheWriteRate === "number") {
+		const { longContext } = cost;
+		cost = {
+			...cost,
+			cacheWrite: cost.input * cacheWriteRate,
+			...(longContext && { longContext: { ...longContext, cacheWrite: longContext.input * cacheWriteRate } }),
+		};
+	}
+	return cost;
+}
+
+/**
+ * Every price period the dated `cost-patch`/`cost-fallback` cards define, for
+ * request-time selection (`calculateUsageCost`): a row built before a change
+ * still bills requests after it at the new price, and a leading card keeps
+ * earlier requests at the old one on rows built after it. Undefined when no
+ * card changes the price (no cards, or a fallback the upstream price outranks).
+ */
+function scheduledRates(upstream: ModelCost, catalog: Record<string, unknown>): EffectiveTokenCost[] | undefined {
+	const dates = [
+		...effectiveRateDates(Reflect.get(objectPayload(catalog.costPatch) ?? {}, "effectiveRates")),
+		...effectiveRateDates(Reflect.get(objectPayload(catalog.costFallback) ?? {}, "effectiveRates")),
+	].sort((a, b) => a - b);
+	if (dates.length === 0) return undefined;
+	const periods: EffectiveTokenCost[] = [];
+	let previousPrice: string | undefined;
+	for (const effectiveFrom of [EARLIEST_EFFECTIVE_FROM, ...dates]) {
+		const { input, output, cacheRead, cacheWrite, longContext } = correctedCost(upstream, catalog, effectiveFrom);
+		const price = { input, output, cacheRead, cacheWrite, ...(longContext && { longContext }) };
+		const key = JSON.stringify(price);
+		if (key === previousPrice) continue;
+		previousPrice = key;
+		periods.push({ effectiveFrom, ...price });
+	}
+	return periods.length > 1 ? periods : undefined;
+}
+
+/**
  * Applies reviewed catalog-data value corrections (`cost-patch`,
  * `cache-read-at-input-rate`, `cache-write-rate`, `limits-patch`,
  * `long-context-cost`, `context-window-floor`, `input-modalities`) onto an
@@ -142,97 +276,22 @@ export function applyCatalogCorrections(
 	model: Pick<ModelSpec<Api>, "cost" | "contextWindow" | "maxTokens" | "input">,
 	catalog: Record<string, unknown>,
 ): void {
-	const patch = objectPayload(catalog.costPatch);
-	if (patch !== undefined) {
-		model.cost = { ...model.cost };
-		const input = numberField(patch, "input");
-		if (input !== undefined) model.cost.input = input;
-		const output = numberField(patch, "output");
-		if (output !== undefined) model.cost.output = output;
-		const cacheRead = numberField(patch, "cacheRead");
-		if (cacheRead !== undefined) model.cost.cacheRead = cacheRead;
-		const cacheWrite = numberField(patch, "cacheWrite");
-		if (cacheWrite !== undefined) model.cost.cacheWrite = cacheWrite;
-		// A dated card overwrites the patched (or upstream) legs once due, so
-		// rows built after a scheduled list-price change carry the new card.
-		applyDueEffectiveRates(model.cost, Reflect.get(patch, "effectiveRates"));
-	}
-	const fallback = objectPayload(catalog.costFallback);
-	if (fallback !== undefined) {
-		const base = model.cost;
-		const hasTokenPrice = base.input !== 0 || base.output !== 0 || base.cacheRead !== 0 || base.cacheWrite !== 0;
-		if (!hasTokenPrice) {
-			// Upstream reported no token price (plan-included or promo-free
-			// rows): seed the reviewed list price instead of overwriting real
-			// discovery data the way `cost-patch` would.
-			model.cost = { ...model.cost };
-			const input = numberField(fallback, "input");
-			if (input !== undefined) model.cost.input = input;
-			const output = numberField(fallback, "output");
-			if (output !== undefined) model.cost.output = output;
-			const cacheRead = numberField(fallback, "cacheRead");
-			if (cacheRead !== undefined) model.cost.cacheRead = cacheRead;
-			const cacheWrite = numberField(fallback, "cacheWrite");
-			if (cacheWrite !== undefined) model.cost.cacheWrite = cacheWrite;
-			// Dated fallback rates overwrite the seeded numbers when they have
-			// already taken effect.
-			applyDueEffectiveRates(model.cost, Reflect.get(fallback, "effectiveRates"));
+	const upstream = model.cost;
+	// The card due now is the row's displayed price; the dated schedule rides
+	// along so rows reused past a change (bundles, caches, long sessions) still
+	// bill each request at the card in force when it was made.
+	model.cost = correctedCost(upstream, catalog, Date.now());
+	const recurring = catalog.timeBased === undefined ? undefined : materializeTimeBasedCost(catalog.timeBased);
+	const dated = scheduledRates(upstream, catalog);
+	if (dated !== undefined) {
+		if (recurring?.effectiveRates !== undefined) {
+			throw new Error(
+				"Dated cost-patch/cost-fallback effective-rates cannot combine with time-based-cost effective-rates",
+			);
 		}
-	}
-	const longContext = objectPayload(catalog.longContext);
-	if (longContext !== undefined) {
-		const inputThreshold = numberField(longContext, "inputThreshold");
-		const inclusive = Reflect.get(longContext, "inputThresholdInclusive") === true;
-		const multiplier = numberField(longContext, "multiplier");
-		const input = numberField(longContext, "input");
-		const output = numberField(longContext, "output");
-		const cacheRead = numberField(longContext, "cacheRead");
-		const cacheWrite = numberField(longContext, "cacheWrite");
-		const base = model.cost;
-		const hasTokenPrice = base.input !== 0 || base.output !== 0 || base.cacheRead !== 0 || base.cacheWrite !== 0;
-		if (inputThreshold !== undefined && multiplier !== undefined && hasTokenPrice) {
-			// Multiplier form: tier rates derive from the row's final base card,
-			// after `cost-patch`/`cost-fallback` corrected the live list price.
-			model.cost = {
-				...base,
-				longContext: {
-					inputThreshold,
-					...(inclusive && { inputThresholdInclusive: true }),
-					input: base.input * multiplier,
-					output: base.output * (numberField(longContext, "outputMultiplier") ?? multiplier),
-					cacheRead: base.cacheRead * multiplier,
-					cacheWrite: base.cacheWrite * multiplier,
-				},
-			};
-		} else if (
-			inputThreshold !== undefined &&
-			input !== undefined &&
-			output !== undefined &&
-			cacheRead !== undefined &&
-			cacheWrite !== undefined
-		) {
-			model.cost = { ...model.cost, longContext: { inputThreshold, input, output, cacheRead, cacheWrite } };
-		}
-	}
-	if (catalog.cacheReadAtInputRate === true) {
-		const { longContext } = model.cost;
-		model.cost = {
-			...model.cost,
-			cacheRead: model.cost.input,
-			...(longContext && { longContext: { ...longContext, cacheRead: longContext.input } }),
-		};
-	}
-	const cacheWriteRate = catalog.cacheWriteRate;
-	if (typeof cacheWriteRate === "number") {
-		const { longContext } = model.cost;
-		model.cost = {
-			...model.cost,
-			cacheWrite: model.cost.input * cacheWriteRate,
-			...(longContext && { longContext: { ...longContext, cacheWrite: longContext.input * cacheWriteRate } }),
-		};
-	}
-	if (catalog.timeBased !== undefined) {
-		model.cost = { ...model.cost, timeBased: materializeTimeBasedCost(catalog.timeBased) };
+		model.cost = { ...model.cost, timeBased: { ...(recurring ?? NO_RECURRING_TARIFF), effectiveRates: dated } };
+	} else if (recurring !== undefined) {
+		model.cost = { ...model.cost, timeBased: recurring };
 	}
 	const limitsPatch = objectPayload(catalog.limitsPatch);
 	if (limitsPatch !== undefined) {

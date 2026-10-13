@@ -137,10 +137,8 @@ export function materializeTimeBasedCost(value: unknown): TimeBasedCost {
 
 /**
  * Overwrite `cost` legs with the latest compiled `effective-rates` card whose
- * `effectiveFrom` is already due, as `cost-patch` and `cost-fallback` declare
- * them. Selection happens when the row is built, so discovery refreshes and
- * regenerated bundles pick up a scheduled list-price change; it never attaches
- * a `timeBased` tariff. Leaves `cost` unchanged before the first card.
+ * `effectiveFrom` is due at `now`, as `cost-patch` and `cost-fallback` declare
+ * them. Leaves `cost` unchanged before the first card.
  */
 export function applyDueEffectiveRates(cost: TokenCost, effectiveRates: unknown, now = Date.now()): void {
 	if (!isRecord(effectiveRates)) return;
@@ -158,4 +156,16 @@ export function applyDueEffectiveRates(cost: TokenCost, effectiveRates: unknown,
 	if (typeof latest.output === "number") cost.output = latest.output;
 	if (typeof latest.cacheRead === "number") cost.cacheRead = latest.cacheRead;
 	if (typeof latest.cacheWrite === "number") cost.cacheWrite = latest.cacheWrite;
+}
+
+/** Unix-ms `effectiveFrom` instants of compiled `cost-patch`/`cost-fallback` `effective-rates` cards. */
+export function effectiveRateDates(effectiveRates: unknown): number[] {
+	if (!isRecord(effectiveRates)) return [];
+	const dates: number[] = [];
+	for (const entry of Object.values(effectiveRates)) {
+		if (!isRecord(entry) || typeof entry.effectiveFrom !== "string") continue;
+		const from = Date.parse(entry.effectiveFrom);
+		if (Number.isFinite(from)) dates.push(from);
+	}
+	return dates;
 }

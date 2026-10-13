@@ -105,10 +105,20 @@ function timeBasedMultiplier(schedule: TimeBasedCost | undefined, timestamp: num
 	return isPeakPricingPeriod(schedule, timestamp) ? 1 : schedule.offPeakMultiplier;
 }
 
+/**
+ * Whether a schedule carries a recurring peak/off-peak tariff. A schedule with
+ * no peak windows at a 1x off-peak multiplier only carries dated rate cards
+ * (`cost-patch`/`cost-fallback` `effective-rates`): its price changes on a
+ * date, never by time of day.
+ */
+export function hasRecurringTariff(schedule: TimeBasedCost): boolean {
+	return schedule.peakWindows.length > 0 || schedule.offPeakMultiplier !== 1;
+}
+
 /** Return the recurring UTC tariff period, independently of its monetary multiplier. */
 export function getTimeBasedPricingPeriod(cost: ModelCost, timestamp?: number): "peak" | "off-peak" | undefined {
 	const schedule = cost.timeBased;
-	if (!schedule) return undefined;
+	if (!schedule || !hasRecurringTariff(schedule)) return undefined;
 	return isPeakPricingPeriod(schedule, timestamp ?? Date.now()) ? "peak" : "off-peak";
 }
 
