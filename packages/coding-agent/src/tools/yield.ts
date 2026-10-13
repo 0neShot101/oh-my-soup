@@ -164,10 +164,17 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Read the optional `error` argument. Strict-mode providers (OpenAI/Codex) send
- * omitted optionals as `null`; non-strict OpenAI-compatible backends routinely
- * fill the optional string with `""` next to a valid `data` payload. Both mean
- * "no error" — an empty string is never a usable failure reason.
+ * Read the optional `error` argument, trimmed. Strict-mode providers (OpenAI/Codex) send
+ * omitted optionals as `null`; non-strict OpenAI-compatible backends routinely fill the
+ * optional string with `""` (or a filler such as `"unused"`) next to a valid `data`
+ * payload. `null`, `undefined` and blank strings mean "no error". When `hasData` is true,
+ * a known filler string (see {@link PLACEHOLDER_YIELD_ERRORS}) also means "no error"; any
+ * other error next to `data` is returned so the caller rejects the conflict.
+ *
+ * Trimming changes two error-only yields on purpose: `{error:"  boom\n"}` now records
+ * `"boom"`, and `{error:"   "}` without data is an empty result that counts toward the
+ * empty-result retry budget (`#emptyResultFailures`) instead of aborting with an
+ * all-whitespace reason.
  */
 function parseYieldError(value: unknown, options: { hasData: boolean }): string | undefined {
 	if (value === undefined || value === null) return undefined;
@@ -188,22 +195,28 @@ function formatYieldLabels(labels: readonly string[]): string {
 	return labels.map(label => `"${label}"`).join(", ");
 }
 
+/**
+ * Filler strings that non-strict OpenAI-compatible backends put into the optional `error`
+ * field when they have to fill every property next to a valid `data` payload. Consulted
+ * only when `data` is present (see {@link parseYieldError}); an error-only yield keeps its
+ * text as the failure reason. This is not a general error filter: do not grow it to hide
+ * genuine failure messages.
+ */
 const PLACEHOLDER_YIELD_ERRORS = new Set([
 	"ignore",
 	"ignored",
 	"n/a",
-	"na",
 	"none",
 	"not applicable",
 	"null",
 	"placeholder",
 	"undefined",
 	"unused",
-	"x",
 ]);
 
+/** Whether an already-trimmed `error` string is one of {@link PLACEHOLDER_YIELD_ERRORS}. Only meaningful next to `data`. */
 function isPlaceholderYieldError(value: string): boolean {
-	return PLACEHOLDER_YIELD_ERRORS.has(value.trim().toLowerCase());
+	return PLACEHOLDER_YIELD_ERRORS.has(value.toLowerCase());
 }
 
 function renderDataErrorConflictMessage(errorMessage: string, yieldType: string | string[] | undefined): string {
@@ -489,6 +502,13 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 			workPoolItemId = item.id;
 			if (this.#submittedWorkPoolItems.has(item.id)) {
 				throw new Error(`workpool item ${item.index} was already submitted`);
+			}
+			if (data !== undefined && errorMessage !== undefined) {
+				throw new Error(
+					"workpool yield requires exactly one of data or error. " +
+						`For success, resend \`{"key":${item.index},"data":<your output>}\`. ` +
+						`For failure, resend only \`${JSON.stringify({ key: item.index, error: errorMessage })}\`.`,
+				);
 			}
 			if ((data === undefined) === (errorMessage === undefined)) {
 				throw new Error("workpool yield requires exactly one of data or error");
