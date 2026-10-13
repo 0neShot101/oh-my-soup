@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { withStatsSyncLock } from "@oh-my-pi/omp-stats/aggregator";
 import { type GcResult, runGcCommand } from "@oh-my-pi/pi-coding-agent/cli/gc-cli";
+import { compressMethod } from "@oh-my-pi/pi-coding-agent/cli/gc-compress";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { BlobStore, blobStagingPath } from "@oh-my-pi/pi-coding-agent/session/blob-store";
@@ -2533,8 +2534,14 @@ describe("runGcCommand stale state", () => {
 	});
 });
 
+// Test roots live under the temp dir, so its filesystem decides which compression tests run.
+const method = await compressMethod(os.tmpdir());
+const supported = method !== undefined;
+const onApfs = method === "apfs";
+/** btrfs reports uncompressed blocks, so on-disk savings are measurable elsewhere only. */
+const measuresAllocation = method !== "btrfs";
+
 describe("runGcCommand session compression", () => {
-	const onApfs = process.platform === "darwin";
 	const filler =
 		`${JSON.stringify({ type: "message", message: { role: "toolResult", content: "line ".repeat(40) } })}\n`.repeat(
 			400,
@@ -2570,7 +2577,7 @@ describe("runGcCommand session compression", () => {
 		};
 	}
 
-	test.skipIf(onApfs)("reports the phase unsupported off APFS without touching sessions", async () => {
+	test.skipIf(supported)("reports the phase unsupported without touching sessions", async () => {
 		const { file } = await writeIdleSession(Bun.randomUUIDv7());
 		const before = await snapshot(file);
 
@@ -2580,7 +2587,7 @@ describe("runGcCommand session compression", () => {
 		expect(await snapshot(file)).toEqual(before);
 	});
 
-	test.skipIf(!onApfs)("--apply stores an idle session compressed with identical bytes and mtimes", async () => {
+	test.skipIf(!supported)("--apply stores an idle session compressed with identical bytes and mtimes", async () => {
 		const { file, artifact } = await writeIdleSession(Bun.randomUUIDv7());
 		const before = await Promise.all([snapshot(file), snapshot(artifact)]);
 
@@ -2588,17 +2595,20 @@ describe("runGcCommand session compression", () => {
 
 		expect(result.compress).toMatchObject({
 			supported: true,
+			method,
 			sessions: 1,
 			wouldCompress: 2,
 			compressed: 2,
 			errors: [],
 		});
-		expect(result.compress?.allocatedAfter).toBeLessThan(result.compress?.allocatedBefore ?? 0);
+		if (measuresAllocation) {
+			expect(result.compress?.allocatedAfter).toBeLessThan(result.compress?.allocatedBefore ?? 0);
+		}
 		for (const [index, target] of [file, artifact].entries()) {
 			const after = await snapshot(target);
 			expect(after.bytes).toBe(before[index].bytes);
 			expect(after.mtimeNs).toBe(before[index].mtimeNs);
-			expect(after.allocated).toBeLessThan(after.size);
+			if (measuresAllocation) expect(after.allocated).toBeLessThan(after.size);
 		}
 		expect(await fs.readdir(path.dirname(file))).not.toContain(".omp-gc-compress.tmp");
 
@@ -2606,7 +2616,7 @@ describe("runGcCommand session compression", () => {
 		expect(rerun.compress).toMatchObject({ wouldCompress: 0, compressed: 0 });
 	});
 
-	test.skipIf(!onApfs)("a dry run reports candidates without rewriting them", async () => {
+	test.skipIf(!supported)("a dry run reports candidates without rewriting them", async () => {
 		const { file } = await writeIdleSession(Bun.randomUUIDv7());
 		const before = await snapshot(file);
 
@@ -2653,7 +2663,7 @@ describe("runGcCommand session compression", () => {
 		expect(await snapshot(artifact)).toEqual(artifactBefore);
 	});
 
-	test.skipIf(!onApfs)("leaves recent and leased sessions uncompressed", async () => {
+	test.skipIf(!supported)("leaves recent and leased sessions uncompressed", async () => {
 		const recent = await writeIdleSession(Bun.randomUUIDv7(), "complete", 1);
 		// Unique per run: the lease is machine-wide.
 		const heldId = Bun.randomUUIDv7();
@@ -2673,7 +2683,7 @@ describe("runGcCommand session compression", () => {
 		expect(await Promise.all(targets.map(snapshot))).toEqual(before);
 	});
 
-	test.skipIf(!onApfs)("compresses an idle session whose last turn was interrupted", async () => {
+	test.skipIf(!supported)("compresses an idle session whose last turn was interrupted", async () => {
 		const interrupted = await writeIdleSession(Bun.randomUUIDv7(), "pending");
 		const bytes = await fs.readFile(interrupted.file);
 
@@ -2683,7 +2693,7 @@ describe("runGcCommand session compression", () => {
 		expect(await fs.readFile(interrupted.file)).toEqual(bytes);
 	});
 
-	test.skipIf(!onApfs)("--compress-after-days overrides gc.compressAfterDays", async () => {
+	test.skipIf(!supported)("--compress-after-days overrides gc.compressAfterDays", async () => {
 		await writeConfig(root, ["gc:", "  compressAfterDays: 60", ""].join("\n"));
 		await writeIdleSession(Bun.randomUUIDv7(), "complete", 30);
 

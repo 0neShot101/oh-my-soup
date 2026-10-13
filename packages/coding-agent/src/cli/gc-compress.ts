@@ -3,9 +3,16 @@
  *
  * Compressed files keep their path, bytes, and mtime; the filesystem inflates
  * them on read, so every session reader works unchanged. A later write stores
- * the file uncompressed again. Only APFS is supported: `ditto --hfsCompression`
- * ships with macOS and writes compressed copies that are verified and renamed
- * over the originals.
+ * the file uncompressed again. Supported filesystems:
+ *
+ * - APFS (macOS): `ditto --hfsCompression` writes compressed copies that are
+ *   verified and renamed over the originals.
+ * - NTFS (Windows): `compact /exe:lzx` compresses each file in place.
+ * - btrfs (Linux): `btrfs filesystem defragment -czstd` recompresses each file
+ *   in place; `filefrag` reports which files are stored compressed.
+ *
+ * The in-place tools run in the kernel, so the file keeps its inode and
+ * timestamps and no copy is ever swapped in.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -30,8 +37,14 @@ const INCOMPRESSIBLE_EXTENSIONS: Record<string, true> = {
 	".gif": true,
 };
 
-/** Bounded argv per `ditto` spawn. */
+/** Bounded argv per tool spawn; Windows caps a command line at 32K characters. */
 const DITTO_BATCH = 256;
+const IN_PLACE_BATCH = 64;
+
+const BTRFS_SUPER_MAGIC = 0x9123683e;
+
+/** How this machine compresses files in place: the filesystem the sessions live on. */
+export type CompressMethod = "apfs" | "ntfs" | "btrfs";
 
 export interface CompressCandidate {
 	path: string;
@@ -48,16 +61,33 @@ export interface CompressBatchResult {
 	errors: string[];
 }
 
-export function transparentCompressionSupported(platform: NodeJS.Platform = process.platform): boolean {
-	return platform === "darwin";
+/**
+ * The compression method for files under `dir`, or undefined when its
+ * filesystem has no transparent compression this phase drives. On Windows,
+ * `compact` reports a non-NTFS volume as a per-file error.
+ */
+export async function compressMethod(
+	dir: string,
+	platform: NodeJS.Platform = process.platform,
+): Promise<CompressMethod | undefined> {
+	if (platform === "darwin") return "apfs";
+	if (platform === "win32") return "ntfs";
+	if (platform !== "linux") return undefined;
+	try {
+		if ((await fs.statfs(dir)).type !== BTRFS_SUPER_MAGIC) return undefined;
+	} catch {
+		return undefined;
+	}
+	return Bun.which("btrfs") && Bun.which("filefrag") ? "btrfs" : undefined;
 }
 
 /**
  * Whether `file` should be compressed: a regular file larger than one
  * filesystem block, in a compressible format, and not already stored
- * compressed. A single-block file cannot shrink. A compressed APFS file
- * allocates fewer blocks than its logical size; session files are never
- * sparse, so that comparison identifies them.
+ * compressed. A single-block file cannot shrink. A compressed APFS or NTFS
+ * file allocates fewer blocks than its logical size; session files are never
+ * sparse, so that comparison identifies them. btrfs reports logical blocks,
+ * so `dropCompressed` filters its candidates.
  */
 export async function compressCandidate(file: string): Promise<CompressCandidate | undefined> {
 	if (INCOMPRESSIBLE_EXTENSIONS[path.extname(file).toLowerCase()]) return undefined;
@@ -97,15 +127,50 @@ export async function sweepCompressScratch(roots: string[], apply: boolean, erro
 	return found;
 }
 
+/** Paths among `files` that btrfs stores with at least one compressed extent. */
+async function btrfsCompressedPaths(files: string[]): Promise<Set<string>> {
+	const compressed = new Set<string>();
+	for (let start = 0; start < files.length; start += IN_PLACE_BATCH) {
+		const out = await $`filefrag -v ${files.slice(start, start + IN_PLACE_BATCH)}`.quiet().nothrow();
+		let current: string | undefined;
+		for (const line of out.stdout.toString().split("\n")) {
+			if (line.startsWith("File size of ")) current = line.slice("File size of ".length, line.lastIndexOf(" is "));
+			else if (current !== undefined && line.includes("encoded")) compressed.add(current);
+		}
+	}
+	return compressed;
+}
+
+/** `candidates` minus files already stored compressed that block counts cannot reveal (btrfs). */
+export async function dropCompressed(
+	candidates: CompressCandidate[],
+	method: CompressMethod,
+): Promise<CompressCandidate[]> {
+	if (method !== "btrfs" || candidates.length === 0) return candidates;
+	const compressed = await btrfsCompressedPaths(candidates.map(candidate => candidate.path));
+	return candidates.filter(candidate => !compressed.has(candidate.path));
+}
+
 /**
- * Compress `candidates` in place. Each directory's files are copied with
- * compression into a scratch directory beside them, and a copy replaces its
- * original only when its size and SHA-256 match and the original is unchanged
- * since it was selected. The caller must hold whatever lease keeps writers off
- * these files.
+ * Compress `candidates` in place. The caller must hold whatever lease keeps
+ * writers off these files.
+ *
+ * APFS: each directory's files are copied with compression into a scratch
+ * directory beside them, and a copy replaces its original only when its size
+ * and SHA-256 match and the original is unchanged since it was selected.
+ * NTFS and btrfs: the kernel compresses each file in place.
  */
-export async function compressFilesInPlace(candidates: CompressCandidate[]): Promise<CompressBatchResult> {
+export async function compressFilesInPlace(
+	candidates: CompressCandidate[],
+	method: CompressMethod,
+): Promise<CompressBatchResult> {
 	const result: CompressBatchResult = { compressed: 0, allocatedAfter: 0, errors: [] };
+	if (method !== "apfs") {
+		for (let start = 0; start < candidates.length; start += IN_PLACE_BATCH) {
+			await compressInPlaceBatch(candidates.slice(start, start + IN_PLACE_BATCH), method, result);
+		}
+		return result;
+	}
 	const byDir = new Map<string, CompressCandidate[]>();
 	for (const candidate of candidates) {
 		const dir = path.dirname(candidate.path);
@@ -119,6 +184,58 @@ export async function compressFilesInPlace(candidates: CompressCandidate[]): Pro
 		}
 	}
 	return result;
+}
+
+async function compressInPlaceBatch(
+	batch: CompressCandidate[],
+	method: Exclude<CompressMethod, "apfs">,
+	result: CompressBatchResult,
+): Promise<void> {
+	for (const candidate of batch) result.allocatedAfter += candidate.allocated;
+	const files = batch.map(candidate => candidate.path);
+	// btrfs defragment skips pages still awaiting writeback, so flush them first.
+	if (method === "btrfs") {
+		await Promise.all(
+			files.map(file =>
+				flushFile(file).catch(error => {
+					result.errors.push(`${file}: ${error instanceof Error ? error.message : String(error)}`);
+				}),
+			),
+		);
+	}
+	// Both tools keep the inode and timestamps. `compact` skips, and exits
+	// nonzero for, a file another process holds open.
+	const run =
+		method === "ntfs"
+			? await $`compact /c /exe:lzx /q ${files}`.quiet().nothrow()
+			: await $`btrfs filesystem defragment -czstd ${files}`.quiet().nothrow();
+	if (run.exitCode !== 0) {
+		const output = `${run.stdout.toString()}${run.stderr.toString()}`.trim().split("\n").slice(-3).join(" ");
+		result.errors.push(`${method === "ntfs" ? "compact" : "btrfs defragment"} exited ${run.exitCode}: ${output}`);
+	}
+	const btrfsCompressed = method === "btrfs" ? await btrfsCompressedPaths(files) : undefined;
+	for (const candidate of batch) {
+		try {
+			const stat = await fs.lstat(candidate.path);
+			if (btrfsCompressed) {
+				if (btrfsCompressed.has(candidate.path)) result.compressed += 1;
+			} else if (stat.blocks * 512 < candidate.allocated) {
+				result.compressed += 1;
+				result.allocatedAfter += stat.blocks * 512 - candidate.allocated;
+			}
+		} catch (error) {
+			result.errors.push(`${candidate.path}: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+}
+
+async function flushFile(file: string): Promise<void> {
+	const handle = await fs.open(file, "r");
+	try {
+		await handle.sync();
+	} finally {
+		await handle.close();
+	}
 }
 
 async function compressBatch(dir: string, batch: CompressCandidate[], result: CompressBatchResult): Promise<void> {

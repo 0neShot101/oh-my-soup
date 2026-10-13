@@ -32,11 +32,13 @@ import { readSessionHeaderId } from "../session/session-loader";
 import { FileSessionStorage, SESSION_STAGING_RE, tryAcquireSessionLease } from "../session/session-storage";
 import {
 	type CompressCandidate,
+	type CompressMethod,
 	COMPRESS_SCRATCH_DIR,
 	compressCandidate,
 	compressFilesInPlace,
+	compressMethod,
+	dropCompressed,
 	sweepCompressScratch,
-	transparentCompressionSupported,
 } from "./gc-compress";
 import {
 	cfgGcArchive,
@@ -153,8 +155,10 @@ export interface StaleGcResult {
 }
 
 export interface CompressGcResult {
-	/** False when the platform has no supported transparent compression; nothing was scanned. */
+	/** False when the sessions' filesystem has no supported transparent compression; nothing was scanned. */
 	supported: boolean;
+	/** The filesystem's compression method when supported. */
+	method?: CompressMethod;
 	scanned: number;
 	/** Idle sessions a running process still owns. */
 	skippedLive: number;
@@ -164,9 +168,9 @@ export interface CompressGcResult {
 	compressed: number;
 	/** Logical bytes of the files selected for compression. */
 	bytes: number;
-	/** Bytes those files allocated on disk before compression. */
+	/** Bytes those files allocated on disk before compression. btrfs reports uncompressed blocks. */
 	allocatedBefore: number;
-	/** Bytes the selected files allocate on disk afterwards (`--apply` only). */
+	/** Bytes the selected files allocate on disk afterwards (`--apply` only); not measurable on btrfs. */
 	allocatedAfter: number;
 	/** Scratch directories a killed run left behind; removed with `--apply`. */
 	leftoverScratchDirs: number;
@@ -1889,8 +1893,11 @@ async function collectSessionFiles(session: SessionInfo): Promise<string[]> {
  * resumable. Leftover scratch directories from a killed run are removed first.
  */
 async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): Promise<CompressGcResult> {
+	const sessionsRoot = getSessionsDir(options.agentDir);
+	const method = await compressMethod(sessionsRoot);
 	const result: CompressGcResult = {
-		supported: transparentCompressionSupported(),
+		supported: method !== undefined,
+		method,
 		scanned: 0,
 		skippedLive: 0,
 		sessions: 0,
@@ -1902,11 +1909,17 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 		leftoverScratchDirs: 0,
 		errors: [],
 	};
-	if (!result.supported) return result;
+	if (method === undefined) return result;
 
-	const sessionsRoot = getSessionsDir(options.agentDir);
-	// Archiving can carry a leftover inside an artifact tree into the archive root.
-	result.leftoverScratchDirs = await sweepCompressScratch([sessionsRoot, archiveRoot], options.apply, result.errors);
+	if (method === "apfs") {
+		// Only the APFS copy-and-swap uses scratch directories. Archiving can carry a
+		// leftover inside an artifact tree into the archive root.
+		result.leftoverScratchDirs = await sweepCompressScratch(
+			[sessionsRoot, archiveRoot],
+			options.apply,
+			result.errors,
+		);
+	}
 	const sessions = await listActiveSessions(sessionsRoot);
 	result.scanned = sessions.length;
 	const cutoffMs = Date.now() - Math.max(options.compressAfterDays * DAY_MS, GC_WRITE_GRACE_MS);
@@ -1918,7 +1931,7 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 			continue;
 		}
 		try {
-			const candidates: CompressCandidate[] = [];
+			let candidates: CompressCandidate[] = [];
 			for (const file of await collectSessionFiles(session)) {
 				try {
 					const candidate = await compressCandidate(file);
@@ -1927,6 +1940,7 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 					if (codeOf(error) !== "ENOENT") result.errors.push(`${file}: ${errorMessage(error)}`);
 				}
 			}
+			candidates = await dropCompressed(candidates, method);
 			if (candidates.length === 0) continue;
 			result.sessions += 1;
 			result.wouldCompress += candidates.length;
@@ -1935,7 +1949,7 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 				result.allocatedBefore += candidate.allocated;
 			}
 			if (!options.apply) continue;
-			const batch = await compressFilesInPlace(candidates);
+			const batch = await compressFilesInPlace(candidates, method);
 			result.compressed += batch.compressed;
 			result.allocatedAfter += batch.allocatedAfter;
 			result.errors.push(...batch.errors);
@@ -2213,11 +2227,16 @@ function renderText(result: GcResult): string {
 	if (result.compress) {
 		const compress = result.compress;
 		if (!compress.supported) {
-			lines.push("compress: unsupported on this platform (APFS only)");
+			lines.push("compress: unsupported on this filesystem (APFS, NTFS, or btrfs only)");
 		} else {
+			// btrfs reports uncompressed blocks, so only the logical size is meaningful there.
 			const after = result.apply ? `, ${formatBytes(compress.allocatedAfter)} after` : "";
+			const size =
+				compress.method === "btrfs"
+					? formatBytes(compress.bytes)
+					: `${formatBytes(compress.allocatedBefore)} on disk before${after}`;
 			lines.push(
-				`compress: ${compress.compressed}/${compress.wouldCompress} files in ${compress.sessions} sessions, ${formatBytes(compress.allocatedBefore)} on disk before${after}`,
+				`compress: ${compress.compressed}/${compress.wouldCompress} files in ${compress.sessions} sessions, ${size}`,
 			);
 			if (compress.skippedLive > 0) lines.push(`compress skipped live: ${compress.skippedLive}`);
 			if (compress.leftoverScratchDirs > 0) {
