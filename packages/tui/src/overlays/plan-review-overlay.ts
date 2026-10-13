@@ -612,13 +612,14 @@ export class PlanReviewOverlay implements Component {
 		this.#moveSlider(index - this.#sliderIndex);
 	}
 
-	/** Commit an external answer through the same input-locking path as Enter. */
-	selectOption(label: string): void {
-		if (this.#committed) return;
+	/** Commit an external answer through the same input-locking path as Enter; false when nothing was committed. */
+	selectOption(label: string): boolean {
+		if (this.#committed) return false;
 		const index = this.#options.indexOf(label);
-		if (index < 0 || this.#disabled.has(index)) return;
+		if (index < 0 || this.#disabled.has(index)) return false;
 		this.#selectedIndex = index;
 		this.#confirmSelection();
+		return this.#committed;
 	}
 
 	#confirmSelection(): void {

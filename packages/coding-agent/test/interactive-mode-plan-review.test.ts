@@ -488,8 +488,8 @@ describe("InteractiveMode plan review rendering", () => {
 		);
 		expect(answered).toBe(true);
 		expect(requested?.tiers).toEqual([
-			{ role: "default", model: def.id },
-			{ role: "slow", model: slow.id },
+			{ role: "default", provider: "anthropic", model: def.id },
+			{ role: "slow", provider: "anthropic", model: slow.id },
 		]);
 		expect(resolved).toMatchObject({ reviewId: requested?.reviewId, choice: "keep", by: "extension" });
 		expect(session.model?.id).toBe(slow.id);
@@ -517,6 +517,8 @@ describe("InteractiveMode plan review rendering", () => {
 			refused.push(
 				ctx.resolvePlanReview(event.reviewId, "execute", { role: "ultra" }),
 				ctx.resolvePlanReview(event.reviewId, "keep", { role: "ultra" }),
+				// A tier only means something for an approval; refine must not silently drop it.
+				ctx.resolvePlanReview(event.reviewId, "refine", { feedback: "tighten it", role: "slow" }),
 			);
 			stayedOpen = mode.ui.hasOverlay();
 			accepted = ctx.resolvePlanReview(event.reviewId, "execute");
@@ -526,7 +528,7 @@ describe("InteractiveMode plan review rendering", () => {
 		await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
 		await recorder.resolved;
 
-		expect(refused).toEqual([false, false]);
+		expect(refused).toEqual([false, false, false]);
 		expect(stayedOpen).toBe(true);
 		expect(accepted).toBe(true);
 	});
@@ -2769,6 +2771,7 @@ describe("InteractiveMode plan review rendering", () => {
 			const ctx = runner.createContext();
 			expect(await ctx.openPlanReview()).toBe(true);
 			const review = ctx.getPendingPlanReview();
+			expect(review?.title).toBe("Auth-refactor");
 			expect(review?.planContent).toContain("fresh body");
 			expect(review?.planContent).not.toContain("stale body");
 			expect(ctx.resolvePlanReview(review!.reviewId, "refine", { feedback: "revise" })).toBe(true);
@@ -2795,6 +2798,46 @@ describe("InteractiveMode plan review rendering", () => {
 
 			expect(approval).not.toHaveBeenCalled();
 			expect(warn).toHaveBeenCalledWith(expect.stringContaining("No plan to review"));
+		});
+
+		it("refuses an extension open while the agent is busy, without aborting or warning", async () => {
+			await Bun.write(localPath("local://auth-plan.md"), "# Auth\n\nbody");
+			mode.planModeEnabled = true;
+			const recorder = planReviewRecorder("observer");
+			const runner = await loadExtensions(recorder.extension);
+			const abort = vi.spyOn(session, "abort");
+			const warn = vi.spyOn(mode, "showWarning");
+			let streaming = true;
+			let compacting = false;
+			Object.defineProperty(session, "isStreaming", { configurable: true, get: () => streaming });
+			Object.defineProperty(session, "isCompacting", { configurable: true, get: () => compacting });
+
+			expect(await runner.createContext().openPlanReview()).toBe(false);
+			streaming = false;
+			compacting = true;
+			expect(await runner.createContext().openPlanReview()).toBe(false);
+
+			expect(abort).not.toHaveBeenCalled();
+			expect(warn).not.toHaveBeenCalled();
+			expect(mode.ui.hasOverlay()).toBe(false);
+			expect(recorder.events).toEqual([]);
+		});
+
+		it("keeps an open review when an extension asks to open one", async () => {
+			await Bun.write(localPath("local://auth-plan.md"), "# Auth\n\nbody");
+			mode.planModeEnabled = true;
+			vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+			const recorder = planReviewRecorder("observer");
+			const runner = await loadExtensions(recorder.extension);
+			const ctx = runner.createContext();
+
+			expect(await mode.openPlanReview()).toBe(true);
+			const first = ctx.getPendingPlanReview();
+			expect(await ctx.openPlanReview()).toBe(true);
+
+			expect(ctx.getPendingPlanReview()?.reviewId).toBe(first?.reviewId);
+			expect(recorder.events.filter(event => event.type === "plan_review_resolved")).toEqual([]);
+			expect(ctx.resolvePlanReview(first!.reviewId, "refine", { feedback: "revise" })).toBe(true);
 		});
 	});
 });

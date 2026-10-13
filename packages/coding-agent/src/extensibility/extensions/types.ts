@@ -37,6 +37,7 @@ import type {
 } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { ContextUsage } from "@oh-my-pi/pi-tui/status-line/types";
+import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type {
 	Api,
 	AssistantMessage,
@@ -672,11 +673,12 @@ export interface ExtensionContext {
 	 * `save` writes the plan under its default file name without the path prompt.
 	 * Approvals execute the plan as it is when picked (in-overlay edits, else the plan
 	 * file), which may differ from the `planContent` that `plan_review_requested` reported.
-	 * `input.role` selects the execution tier, matched against `plan_review_requested`'s
+	 * `input.role` selects an approval's execution tier, matched against `plan_review_requested`'s
 	 * `tiers` by role name; without it the approval runs on the tier selected in the
-	 * overlay's model slider.
+	 * overlay's model slider. `role` applies only to approvals (`execute`, `compact`, `keep`).
 	 * False when that review is not open, the choice is disabled or missing its feedback,
-	 * `input.role` names no selectable tier, or the mode has no plan review.
+	 * `input.role` names no selectable tier or accompanies a non-approval choice, or the
+	 * mode has no plan review.
 	 */
 	resolvePlanReview(reviewId: string, choice: PlanReviewChoice, input?: { feedback?: string; role?: string }): boolean;
 	/**
@@ -685,8 +687,11 @@ export interface ExtensionContext {
 	 */
 	getPendingPlanReview(): PlanReviewRequestedEvent | undefined;
 	/**
-	 * (Re-)open the interactive plan review, like `/plan-review`. True once the overlay
-	 * and request exist, without waiting for a choice; false if no review can be opened.
+	 * Open the interactive plan review on the newest plan file, like `/plan-review`, while the
+	 * session is idle. True once a review is awaiting an answer (an already-open review is kept,
+	 * not replaced), without waiting for a choice. False, without aborting anything or showing
+	 * warnings, when plan mode is inactive, the agent is streaming or compacting, or no non-empty
+	 * plan file exists.
 	 */
 	openPlanReview(): Promise<boolean>;
 	/** Identity of the agent this session runs: the top-level session or a subagent. */
@@ -1250,7 +1255,10 @@ export interface PlanReviewOption {
 /** An execution tier selectable in the plan review's model slider; pass `role` back as `input.role` to `ctx.resolvePlanReview`. */
 export interface PlanReviewTier {
 	role: string;
+	provider: string;
 	model: string;
+	/** Thinking level the role's configured model pins (a `provider/model:high` suffix); absent when it inherits. */
+	thinkingLevel?: ConfiguredThinkingLevel;
 }
 
 /**

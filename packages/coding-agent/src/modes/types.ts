@@ -601,7 +601,7 @@ export interface InteractiveModeContext {
 	handlePlanApproval(details: PlanApprovalDetails): Promise<void>;
 	resolvePlanReview(reviewId: string, choice: PlanReviewChoice, input?: { feedback?: string; role?: string }): boolean;
 	getPendingPlanReview(): PlanReviewRequestedEvent | undefined;
-	openPlanReview(): Promise<boolean>;
+	openPlanReview(options?: { fromExtension?: boolean }): Promise<boolean>;
 
 	// Hook UI methods
 	initHooksAndCustomTools(): Promise<void>;

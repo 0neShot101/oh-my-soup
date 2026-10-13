@@ -1560,7 +1560,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#jobsSheetTimer: NodeJS.Timeout | undefined;
 	#planReviewOwner: object | undefined;
 	#planReviewCancel: (() => void) | undefined;
-	#planReviewPick: ((choice: string) => void) | undefined;
+	#planReviewPick: ((choice: string) => boolean) | undefined;
 	/** Runs once when the open review's overlay is hidden; set by `showPlanReview`'s `onClose`. */
 	#planReviewOnHide: (() => void) | undefined;
 	/** The open review awaiting an answer; cleared as soon as a local or remote pick settles it. */
@@ -5396,7 +5396,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	/**
 	 * Answers the open plan review as if the operator picked `choice`: backs `ctx.resolvePlanReview`.
 	 * Refine feedback is sent verbatim; it only has to be non-blank. `input.role` moves an
-	 * approval's execution-tier selection before the pick and is refused when it names no tier.
+	 * approval's execution-tier selection before the pick; it is refused when it names no tier
+	 * or accompanies a non-approval choice.
 	 */
 	resolvePlanReview(
 		reviewId: string,
@@ -5410,11 +5411,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!option || option.disabled) return false;
 		const feedback = input?.feedback;
 		if (choice === "refine" && !feedback?.trim()) return false;
-		const approves = choice === "execute" || choice === "compact" || choice === "keep";
-		if (approves && input?.role !== undefined && !pending.selectTier?.(input.role)) return false;
+		if (input?.role !== undefined) {
+			const approves = choice === "execute" || choice === "compact" || choice === "keep";
+			if (!approves || !pending.selectTier?.(input.role)) return false;
+		}
 		pending.remote = { choice, feedback };
-		pick(option.label);
-		return true;
+		if (pick(option.label)) return true;
+		pending.remote = undefined;
+		return false;
 	}
 
 	#getPlanApprovalContextUsage(): ContextUsage | undefined {
@@ -6518,53 +6522,98 @@ export class InteractiveMode implements InteractiveModeContext {
 	 *  `getPlanReferencePath()` is empty until a plan is actually approved (and does
 	 *  not survive a restart), so this drives off the newest `local://<slug>-plan.md`
 	 *  the agent wrote — the files persist in the session artifacts dir, so the scan
-	 *  works before any review and across restarts. */
-	async openPlanReview(): Promise<boolean> {
+	 *  works before any review and across restarts.
+	 *
+	 *  `fromExtension` backs `ctx.openPlanReview`: an extension never interrupts work
+	 *  it did not start, so a busy session refuses instead of aborting the turn (an
+	 *  extension tool awaiting this would otherwise wait on its own abort), an open
+	 *  review is kept rather than replaced, and refusals are silent. Resolves once a
+	 *  review is awaiting an answer, not when it is answered. */
+	async openPlanReview(options?: { fromExtension?: boolean }): Promise<boolean> {
+		const fromExtension = options?.fromExtension === true;
+		const warn = (message: string): void => {
+			if (!fromExtension) this.showWarning(message);
+		};
 		if (!this.planModeEnabled) {
-			this.showWarning("Plan mode is not active.");
+			warn("Plan mode is not active.");
 			return false;
+		}
+		if (fromExtension) {
+			if (this.#hasAnswerablePlanReview()) return true;
+			if (this.session.isStreaming || this.session.isCompacting) return false;
 		}
 		const noPlan = "No plan to review yet — write one to a local://<slug>-plan.md file first.";
 		const [planFilePath] = await this.#listLocalPlanFiles();
 		if (!planFilePath) {
-			this.showWarning(noPlan);
+			warn(noPlan);
 			return false;
 		}
 		const planContent = await this.#readPlanFile(planFilePath);
 		if (!planContent) {
-			this.showWarning(noPlan);
+			warn(noPlan);
 			return false;
 		}
 		const { title } = resolvePlanTitle({ planContent, planFilePath });
 		const opened = Promise.withResolvers<boolean>();
-		void this.handlePlanApproval({ planFilePath, title, planExists: true }, () => opened.resolve(true)).then(
-			() => opened.resolve(false),
+		let isOpen = false;
+		void this.handlePlanApproval(
+			{ planFilePath, title, planExists: true },
+			{
+				abortTurn: !fromExtension,
+				onOpened: () => {
+					isOpen = true;
+					opened.resolve(true);
+				},
+			},
+		).then(
+			// Returned without opening: still true when a concurrent open won the race.
+			() => opened.resolve(fromExtension && this.#hasAnswerablePlanReview()),
 			error => {
 				opened.resolve(false);
-				this.showError(`Failed to open plan review: ${error instanceof Error ? error.message : String(error)}`);
+				const message = error instanceof Error ? error.message : String(error);
+				this.showError(isOpen ? `Plan review failed: ${message}` : `Failed to open plan review: ${message}`);
 			},
 		);
 		return opened.promise;
 	}
 
-	async handlePlanApproval(details: PlanApprovalDetails, onOpened?: () => void): Promise<void> {
+	/** A plan review is open and can still take a remote answer. */
+	#hasAnswerablePlanReview(): boolean {
+		return this.#pendingPlanReview !== undefined && this.#planReviewPick !== undefined;
+	}
+
+	/**
+	 * `abortTurn: false` skips the turn abort for callers that checked the session is
+	 * idle; the review is then refused if a turn started while the plan was read.
+	 * `onOpened` runs once the overlay and pending request exist.
+	 */
+	async handlePlanApproval(
+		details: PlanApprovalDetails,
+		options?: { abortTurn?: boolean; onOpened?: () => void },
+	): Promise<void> {
 		if (!this.planModeEnabled) {
 			this.showWarning("Plan mode is not active.");
 			return;
 		}
+		const abortTurn = options?.abortTurn !== false;
 
 		// Abort the agent to prevent it from continuing (e.g., re-submitting the
 		// plan) while the popup is showing. The event listener fires asynchronously
 		// (agent's #emit is fire-and-forget), so without this the model sees
 		// "Plan ready for approval." and immediately re-dispatches approval in a loop.
 		// This abort is an internal UI transition, not operator cancellation.
-		await this.#abortPlanApprovalTurnSilently();
+		if (abortTurn) await this.#abortPlanApprovalTurnSilently();
 
 		const planFilePath = details.planFilePath || this.planModePlanFilePath || (await this.#getPlanFilePath());
 		this.planModePlanFilePath = planFilePath;
 		const planContent = await this.#readPlanFile(planFilePath);
 		if (!planContent) {
 			this.showError(`Plan file not found at ${planFilePath}`);
+			return;
+		}
+		// Without the abort barrier, a turn or another review may have started while the
+		// plan was read; everything from here to the overlay is synchronous.
+		if (!abortTurn && (this.session.isStreaming || this.session.isCompacting || this.#hasAnswerablePlanReview())) {
 			return;
 		}
 
@@ -6633,7 +6682,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			planFilePath,
 			planContent,
 			options: reviewOptions,
-			tiers: slider ? cycle!.models.map(entry => ({ role: entry.role, model: entry.model.id })) : undefined,
+			tiers: slider
+				? cycle!.models.map(entry => ({
+						role: entry.role,
+						provider: entry.model.provider,
+						model: entry.model.id,
+						...(entry.explicitThinkingLevel && entry.thinkingLevel ? { thinkingLevel: entry.thinkingLevel } : {}),
+					}))
+				: undefined,
 		};
 		const reviewId = request.reviewId;
 		this.#pendingPlanReview = {
@@ -6691,7 +6747,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			},
 			{ slider },
 		);
-		onOpened?.();
+		options?.onOpened?.();
 		// Handlers get their own copy so mutating the event cannot re-enable a refused choice.
 		const requestedDelivery = extensionRunner?.emit(structuredClone(request));
 		void requestedDelivery?.then(
