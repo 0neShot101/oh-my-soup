@@ -53,10 +53,10 @@ export interface BrowserFrameApi {
 	type(selector: string, text: string): Promise<void>;
 	/** Press a keyboard key, optionally after focusing an element. */
 	press(key: string, options?: FramePressOptions): Promise<void>;
-	/** Return a matching element's text content. */
-	text(selector: string): Promise<string>;
-	/** Return a matching element's inner HTML. */
-	html(selector: string): Promise<string>;
+	/** Return a matching element's text content; without a selector, the frame's `<body>`. */
+	text(selector?: string): Promise<string>;
+	/** Return a matching element's inner HTML; without a selector, the frame's `<body>`. */
+	html(selector?: string): Promise<string>;
 	/** Return a matching form control's value. */
 	value(selector: string): Promise<string>;
 	/** Return a matching element attribute. */
@@ -279,7 +279,7 @@ export function createFrameApi(frame: Frame, hooks: FrameApiHooks): BrowserFrame
 					await untilAborted(signal, () => frame.focus(hooks.normalizeSelector(options.selector!)));
 				await untilAborted(signal, () => pressKey(frame.page(), key));
 			}),
-		text: selector =>
+		text: (selector = "body") =>
 			hooks.op(
 				`frame.text(${JSON.stringify(selector)})`,
 				hooks.quickOpMs,
@@ -289,7 +289,7 @@ export function createFrameApi(frame: Frame, hooks: FrameApiHooks): BrowserFrame
 					),
 				selectorOptions(selector),
 			),
-		html: selector =>
+		html: (selector = "body") =>
 			hooks.op(
 				`frame.html(${JSON.stringify(selector)})`,
 				hooks.quickOpMs,

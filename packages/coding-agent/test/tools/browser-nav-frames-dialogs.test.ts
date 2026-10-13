@@ -402,6 +402,9 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser navigation, frames, dialogs, and t
 				}),
 			),
 		).toBe("run");
+		expect(
+			valueOf(await invoke({ action: "run", name: "frames", code: 'return await (await tab.frame("#f")).text();' })),
+		).toContain("run");
 		await invoke({
 			action: "call",
 			name: "frames",
