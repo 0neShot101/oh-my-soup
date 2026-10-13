@@ -65,9 +65,20 @@ export function getBundledModels(provider: GeneratedProvider): Model<Api>[] {
 }
 /** Resolve display semantics without mistaking an absent rate card for a free model. */
 export function getModelPricingStatus(model: Pick<Model<Api>, "cost" | "pricingStatus">): ModelPricingStatus {
-	const cost = model.cost;
+	const cost = getEffectiveTokenCost(model.cost);
 	if (cost.input !== 0 || cost.output !== 0 || cost.cacheRead !== 0 || cost.cacheWrite !== 0) return "fixed";
 	return model.pricingStatus ?? "unknown";
+}
+
+/**
+ * The base token card in force at `timestamp` (Unix ms, default now): the
+ * latest due `timeBased` effective rate, else the row's own legs. Price
+ * displays read this rather than the scalar legs, which keep the card current
+ * when the row was built while bundles, caches, and long sessions outlive it.
+ * Applies no long-context tier or peak/off-peak multiplier.
+ */
+export function getEffectiveTokenCost(cost: ModelCost, timestamp = Date.now()): TokenCost {
+	return resolveTokenCost(cost, 0, timestamp);
 }
 
 function resolveTokenCost(cost: ModelCost, promptInputTokens: number, timestamp: number | undefined): TokenCost {

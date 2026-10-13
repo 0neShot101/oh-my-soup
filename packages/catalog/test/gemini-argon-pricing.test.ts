@@ -1,6 +1,6 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import { buildModel } from "../src/build";
-import { calculateUsageCost, getTimeBasedPricingPeriod } from "../src/models";
+import { calculateUsageCost, getEffectiveTokenCost, getTimeBasedPricingPeriod } from "../src/models";
 import type { Api, Model, ModelSpec, Provider, TokenCost } from "../src/types";
 
 const INTRO = { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 };
@@ -53,30 +53,32 @@ function billedAt(model: Model<Api>, timestamp: number): TokenCost {
 }
 
 describe("Gemini 4 Argon list-price schedule", () => {
-	it("moves Google-billed hosts to the $4/$20 list price at the switch, over any upstream price", () => {
-		const hosts: [ModelSpec<Api>, TokenCost][] = [
-			// stencil.so's introductory price stays until the switch, then is overridden.
-			[argon("google", "google-generative-ai", INTRO), INTRO],
-			[argon("google-vertex", "google-vertex", INTRO), INTRO],
-			// Antigravity discovery is unpriced; the bundled pricing peer covers it until the switch.
-			[argon("google-antigravity", "google-gemini-cli", UNPRICED), UNPRICED],
+	it("pins Google's introductory and list cards on Google-billed hosts, whatever upstream reports", () => {
+		const hosts: ModelSpec<Api>[] = [
+			// stencil.so's introductory price, or a list price it already caught up to.
+			argon("google", "google-generative-ai", INTRO),
+			argon("google-vertex", "google-vertex", LIST),
+			// Antigravity discovery reports no price.
+			argon("google-antigravity", "google-gemini-cli", UNPRICED),
 			// Cursor bills Other Models at the model's API price.
-			[argon("cursor", "cursor-agent", UNPRICED), INTRO],
+			argon("cursor", "cursor-agent", UNPRICED),
 		];
-		for (const [spec, before] of hosts) {
-			expect(costAt(SWITCH - 1, spec), `${spec.provider} before`).toEqual(before);
+		for (const spec of hosts) {
+			expect(costAt(SWITCH - 1, spec), `${spec.provider} before`).toEqual(INTRO);
 			expect(costAt(SWITCH, spec), `${spec.provider} after`).toEqual(LIST);
 		}
 	});
 
-	it("bills each request at the card in force when it was made, whenever the row was built", () => {
-		const spec = argon("google", "google-generative-ai", INTRO);
-		// A row built before the switch (bundled, cached, or held by a long session) bills later requests at list.
-		const early = buildAt(SWITCH - 1, spec);
+	it("bills and shows each request at the card in force when it was made, whenever the row was built", () => {
+		// A row built before the switch (bundled, cached, or held by a long session) bills later requests at list,
+		// and price displays show list once it is due.
+		const early = buildAt(SWITCH - 1, argon("google", "google-generative-ai", INTRO));
 		expect(billedAt(early, SWITCH - 1)).toEqual(INTRO);
 		expect(billedAt(early, SWITCH)).toEqual(LIST);
-		// A row built after it still bills earlier requests at the introductory price.
-		const late = buildAt(SWITCH, spec);
+		const { input, output, cacheRead, cacheWrite } = getEffectiveTokenCost(early.cost, SWITCH);
+		expect({ input, output, cacheRead, cacheWrite }).toEqual(LIST);
+		// A row built after the switch, from an upstream already at list, still bills earlier requests at the intro price.
+		const late = buildAt(SWITCH, argon("google", "google-generative-ai", LIST));
 		expect(billedAt(late, SWITCH - 1)).toEqual(INTRO);
 		expect(billedAt(late, SWITCH)).toEqual(LIST);
 		// A dated change is not a peak/off-peak tariff.
