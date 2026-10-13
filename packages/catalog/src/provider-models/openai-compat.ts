@@ -41,7 +41,15 @@ import {
 	type ThinkingConfig,
 	type TokenCost,
 } from "../types";
-import { discoveryFetch, isAnthropicOAuthToken, isRecord, toBoolean, toNumber, toPositiveNumber } from "../utils";
+import {
+	discoveryFetch,
+	isAnthropicOAuthToken,
+	isRecord,
+	toBoolean,
+	toNumber,
+	toPositiveNumber,
+	toPositiveNumberOrNull,
+} from "../utils";
 import { ALIBABA_TOKEN_PLAN_BASE_URL, parseAlibabaTokenPlanCredential } from "../wire/alibaba-token-plan";
 import { normalizeCharmHyperBaseUrl } from "../wire/charm-hyper";
 import { CLINEPASS_API_BASE_URL, clinePassClientHeaders } from "../wire/cline-pass";
@@ -6319,16 +6327,21 @@ export function nanoGptModelManagerOptions(
 					provider: "nanogpt",
 					baseUrl,
 					apiKey,
-					// Only the detailed roster carries per-model pricing.
+					// Only the detailed roster carries per-model pricing, names, and limits.
 					query: { detailed: "true" },
 					mapModel: (entry, defaults) => {
 						const reference = resolveReference(defaults.id);
-						// The detailed roster is requested for its pricing only: names and
-						// limits keep their plain-roster sources (the bundled reference,
-						// else the id), as before.
+						// The detailed roster names its output cap `max_output_tokens`.
+						const maxOutputTokens = entry.max_output_tokens ?? entry.max_completion_tokens;
 						const mapped = mapWithBundledReference(
-							{ id: entry.id },
-							{ ...defaults, name: defaults.id },
+							{ ...entry, max_completion_tokens: maxOutputTokens },
+							reference
+								? defaults
+								: {
+										...defaults,
+										contextWindow: toPositiveNumberOrNull(entry.context_length),
+										maxTokens: toPositiveNumberOrNull(maxOutputTokens),
+									},
 							reference,
 						);
 						return {

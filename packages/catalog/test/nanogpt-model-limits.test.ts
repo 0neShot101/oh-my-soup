@@ -90,4 +90,31 @@ describe("nanogpt model limits mapping", () => {
 			cacheWrite: 0,
 		});
 	});
+
+	it("takes names and limits from the detailed roster, over the bundled reference", async () => {
+		const { models } = await discoverNanoGptModels({
+			data: [
+				// Not bundled: the live name and limits are all there is.
+				{
+					id: "nimbz/gemma-4-giftige-blume-31b-v2",
+					name: "Gemma 4 Giftige-Blume V2 31B",
+					context_length: 65_536,
+					max_output_tokens: 8_192,
+				},
+				// Bundled: live limits replace the reference's.
+				{ id: "gpt-5.4-mini", name: "GPT-5.4 mini", context_length: 300_000, max_output_tokens: 64_000 },
+			],
+		});
+
+		const unbundled = models.find(candidate => candidate.id === "nimbz/gemma-4-giftige-blume-31b-v2");
+		expect(unbundled).toMatchObject({
+			name: "Gemma 4 Giftige-Blume V2 31B",
+			contextWindow: 65_536,
+			maxTokens: 8_192,
+		});
+		expect(models.find(candidate => candidate.id === "gpt-5.4-mini")).toMatchObject({
+			contextWindow: 300_000,
+			maxTokens: 64_000,
+		});
+	});
 });
