@@ -145,10 +145,7 @@ export class ApprovalDialogComponent implements Component {
 			if (performance.now() >= this.#armedAt) this.#finish(true);
 			return;
 		}
-		if (this.#full && matchesAppToolsExpand(keyData)) {
-			this.#toggleExpanded();
-			return;
-		}
+		if (matchesAppToolsExpand(keyData) && this.toggleDetails()) return;
 		const draft = this.options.draft;
 		// The composer's clear key (Ctrl+C, also a cancel key) clears a draft before it denies.
 		if (draft?.hasDraft() && getKeybindings().matches(keyData, "app.clear")) {
@@ -177,11 +174,17 @@ export class ApprovalDialogComponent implements Component {
 		this.options.tui?.requestRender();
 	}
 
-	#toggleExpanded(): void {
+	/**
+	 * Swap the summarized prompt for every detail, wrapped, or back. False (nothing changes)
+	 * without a full prompt, so a host's own expand handling (tool previews) can take the key.
+	 */
+	toggleDetails(): boolean {
+		if (this.#closed || !this.#full) return false;
 		this.#expanded = !this.#expanded;
 		this.#scrollOffset = 0;
 		this.#native = undefined;
 		this.options.tui?.requestRender();
+		return true;
 	}
 
 	/** The rows on show: the summary, or every detail once expanded. */
@@ -268,7 +271,7 @@ export class ApprovalDialogComponent implements Component {
 		if (this.#closed || event.type !== "action") return;
 		if (event.act === "approve") this.#finish(true);
 		else if (event.act === "deny") this.#finish(false);
-		else if (event.act === "expand" && this.#full) this.#toggleExpanded();
+		else if (event.act === "expand") this.toggleDetails();
 	}
 
 	/** Detail rows at `width`: one clipped row per detail, or wrapped rows once expanded. */
