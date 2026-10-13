@@ -869,7 +869,9 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 			if (session) Bun.env.TMUX = "/tmp/tmux-1000/default,1234,0";
 			else Bun.env.TERM = "tmux-256color";
 			const { terminal, writes, reports } = setup();
-			while (!reports.some(report => report.mode === 2004)) process.stdin.emit("data", "\x1b[?1;2c");
+			// Answer exactly the DA1 sentinels startup sent; DECRQM 2004 stays unanswered.
+			const sentinels = writes.join("").split("\x1b[c").length - 1;
+			for (let i = 0; i < sentinels; i++) process.stdin.emit("data", "\x1b[?1;2c");
 			expect(reports).toContainEqual({ mode: 2004, supported: false });
 			writes.length = 0;
 			terminal.write("frame");
