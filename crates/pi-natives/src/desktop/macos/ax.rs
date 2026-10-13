@@ -36,6 +36,8 @@ const AX_TIMEOUT_SECONDS: f32 = 2.0;
 const PROBE_TIMEOUT_SECONDS: f32 = 0.5;
 /// Bounded `AXParent` ascent when an element does not expose `AXWindow`.
 const MAX_ANCESTRY_DEPTH: usize = 40;
+/// The action that scrolls an element into its view.
+const SCROLL_TO_VISIBLE: &str = "AXScrollToVisible";
 /// Bounds the search for a sheet, popover, or open menu that `AXWindows` does
 /// not list, matching the snapshot walk's own node and depth budget.
 const MAX_ATTACHED_SEARCH_NODES: usize = 5_000;
@@ -647,14 +649,20 @@ impl AxBackend for MacAx {
 				actions.join(", "),
 			)));
 		}
-		let perform = || element_action_result(&native, send_action(element, &native));
 		// AXRaise is an explicit request to change stacking, including the
 		// takeover preparation path. Other semantic actions must stay background.
 		if native == "AXRaise" {
-			perform()
-		} else {
-			skylight::with_background_guard(element_pid(element)?, perform)
+			return element_action_result(&native, send_action(element, &native));
 		}
+		let pid = element_pid(element)?;
+		let scroll_first = scrolls_before_press(&native, &actions, || process::is_uikit(pid));
+		skylight::with_background_guard(pid, || {
+			if scroll_first {
+				// A failed scroll leaves the press to report its own outcome.
+				let _ = send_action(element, SCROLL_TO_VISIBLE);
+			}
+			element_action_result(&native, send_action(element, &native))
+		})
 	}
 
 	fn set_value(&mut self, h: &AxHandle, value: &str) -> CoreResult<()> {
@@ -988,6 +996,14 @@ fn replace_utf16_selection(
 	result.push_str(text);
 	result.push_str(&before[end_byte..]);
 	Some(result)
+}
+
+/// `UIKit` (Mac Catalyst, iPhone and iPad apps) answers `AXPress` by tapping the
+/// element where it is drawn, so pressing a row scrolled out of its view reports
+/// success and does nothing. Scrolling it into view first lets the tap land;
+/// for an element already in view the scroll changes nothing.
+fn scrolls_before_press(native: &str, actions: &[String], uikit: impl FnOnce() -> bool) -> bool {
+	native == "AXPress" && actions.iter().any(|action| action == SCROLL_TO_VISIBLE) && uikit()
 }
 
 fn perform_action(element: &AXUIElement, action: &str) -> CoreResult<()> {
@@ -1521,5 +1537,18 @@ mod tests {
 			frame_matches: true,
 		}];
 		assert!(select_attached(&candidates, 57).is_err());
+	}
+
+	#[test]
+	fn only_a_uikit_press_scrolls_its_element_into_view_first() {
+		let actions = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect::<Vec<_>>();
+		let row = actions(&["AXPress", "AXScrollToVisible", "AXShowMenu"]);
+		assert!(scrolls_before_press("AXPress", &row, || true));
+		// An AppKit app, another action, or an element that cannot scroll: press as is.
+		assert!(!scrolls_before_press("AXPress", &row, || false));
+		assert!(!scrolls_before_press("AXShowMenu", &row, || true));
+		assert!(!scrolls_before_press("AXPress", &actions(&["AXPress"]), || true));
+		// The app is only classified when the press could scroll.
+		assert!(!scrolls_before_press("AXShowMenu", &row, || unreachable!()));
 	}
 }
