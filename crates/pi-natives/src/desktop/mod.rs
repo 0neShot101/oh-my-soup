@@ -62,8 +62,8 @@ struct DisplayAwake(Mutex<Option<DisplayAwakeHold>>);
 
 impl DisplayAwake {
 	/// Takes the assertion for a request unless its caller has given up. The
-	/// token is checked under the lock, so a caller that cancels and then
-	/// releases is never followed by a hold for its request.
+	/// token is checked under the lock, so a request cancelled by
+	/// [`Self::cancel_and_release`] never takes the hold afterwards.
 	fn hold(
 		&self,
 		token: &OperationToken,
@@ -81,6 +81,18 @@ impl DisplayAwake {
 
 	fn release(&self) {
 		let released = self.0.lock().take();
+		drop(released);
+	}
+
+	/// Cancels every outstanding request and drops the hold under one lock, so
+	/// a request with a token from after the cancel takes a fresh hold rather
+	/// than reusing the one dropped here.
+	fn cancel_and_release(&self, cancellation: &CancellationSource) {
+		let released = {
+			let mut held = self.0.lock();
+			cancellation.cancel();
+			held.take()
+		};
 		drop(released);
 	}
 }
@@ -1203,8 +1215,7 @@ impl SessionCore {
 			.map_err(|_| DesktopError::internal("native desktop worker stopped unexpectedly"))
 			.and_then(|()| {
 				rxr.recv_timeout(OPERATION_TIMEOUT).map_err(|e| {
-					self.cancellation.cancel();
-					self.display_awake.release();
+					self.display_awake.cancel_and_release(&self.cancellation);
 					DesktopError::timeout(format!("native desktop operation did not complete: {e}"))
 				})
 			});
@@ -1217,8 +1228,7 @@ impl SessionCore {
 		// cancel and starts behind it, holding the display past this release.
 		let mut lifecycle = self.lifecycle.lock();
 		lifecycle.closed = true;
-		self.cancellation.cancel();
-		self.display_awake.release();
+		self.display_awake.cancel_and_release(&self.cancellation);
 		let Some(tx) = lifecycle.tx.take() else {
 			return Ok(());
 		};
@@ -1246,8 +1256,7 @@ impl SessionCore {
 }
 impl Drop for SessionCore {
 	fn drop(&mut self) {
-		self.cancellation.cancel();
-		self.display_awake.release();
+		self.display_awake.cancel_and_release(&self.cancellation);
 		let lifecycle = self.lifecycle.get_mut();
 		if let Some(tx) = lifecycle.tx.take() {
 			let (reply, _) = flume::bounded(1);
@@ -2367,6 +2376,30 @@ mod capture_tests {
 	}
 
 	#[test]
+	fn a_timeout_cancels_and_releases_the_display_in_one_step() {
+		let (backend, entered, unblock) = hanging_backend();
+		let awake = Arc::clone(&backend.awake);
+		let core = session_serving(backend);
+		let before = core.cancellation.token();
+		let caller = thread::spawn({
+			let core = Arc::clone(&core);
+			move || core.call(core.cancellation.token(), |reply| Request::ListWindows { reply })
+		});
+		entered.recv_timeout(Duration::from_secs(5)).unwrap();
+		// The hung request already holds the display; holding the hold's lock
+		// parks the caller's timeout at it.
+		let held = core.display_awake.0.lock();
+		thread::sleep(OPERATION_TIMEOUT + Duration::from_millis(500));
+		assert!(before.check().is_ok(), "the timeout cancelled outside the hold's lock");
+		drop(held);
+		assert_eq!(caller.join().unwrap().err().unwrap().code, ErrorCode::Timeout);
+		assert!(before.check().is_err());
+		assert_eq!(*awake.lock(), [true, false]);
+		drop(unblock);
+		core.close().unwrap();
+	}
+
+	#[test]
 	fn close_releases_the_display_while_a_request_hangs() {
 		let (backend, entered, unblock) = hanging_backend();
 		let awake = Arc::clone(&backend.awake);
@@ -2386,16 +2419,20 @@ mod capture_tests {
 		let backend = FakeWaylandBackend::new();
 		let awake = Arc::clone(&backend.awake);
 		let core = session_serving(backend);
-		let before = core.cancellation.token();
-		// Holding the display lock parks close() at its release, past its cancel.
+		// Holding the display lock parks close() at its cancel; it must
+		// already hold the lifecycle with the session marked closed.
 		let held = core.display_awake.0.lock();
 		let closing = thread::spawn({
 			let core = Arc::clone(&core);
 			move || core.close()
 		});
 		let deadline = Instant::now() + Duration::from_secs(5);
-		while before.check().is_ok() {
-			assert!(Instant::now() < deadline, "close never cancelled");
+		while core
+			.lifecycle
+			.try_lock()
+			.is_some_and(|lifecycle| !lifecycle.closed)
+		{
+			assert!(Instant::now() < deadline, "close reached its cancel before closing the session");
 			thread::yield_now();
 		}
 		let caller = thread::spawn({
