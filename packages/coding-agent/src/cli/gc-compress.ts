@@ -14,17 +14,26 @@
  * The in-place tools run in the kernel, so the file keeps its inode and
  * timestamps and no copy is ever swapped in.
  */
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { $ } from "bun";
+import { FileSessionStorage } from "../session/session-storage";
 import { sha256File } from "../utils/file-hash";
 
 /**
- * Scratch directory created beside the files of one batch. A crashed run can
- * leave one behind; the next `omp gc --compress` removes it.
+ * Name prefix of the scratch directory `mkdtemp` creates beside the files of
+ * one APFS batch. A crashed run can leave one behind; the next
+ * `omp gc --compress --apply` removes it.
  */
-export const COMPRESS_SCRATCH_DIR = ".omp-gc-compress.tmp";
-const SCRATCH_GLOB = new Bun.Glob(`**/${COMPRESS_SCRATCH_DIR}`);
+export const COMPRESS_SCRATCH_PREFIX = ".omp-gc-compress-";
+const SCRATCH_GLOB = new Bun.Glob(`**/${COMPRESS_SCRATCH_PREFIX}*`);
+/**
+ * Written into each scratch directory before anything else, so the sweep
+ * recursively removes only directories gc created; a session artifact can
+ * carry any name.
+ */
+const SCRATCH_OWNER_MARKER = ".omp-gc-compress-owner";
 
 /** Formats whose bytes are already compressed; APFS would store them as-is. */
 const INCOMPRESSIBLE_EXTENSIONS: Record<string, true> = {
@@ -52,6 +61,9 @@ export interface CompressCandidate {
 	/** Bytes allocated on disk before compression. */
 	allocated: number;
 	mtimeMs: number;
+	/** Identity at selection; a file that no longer matches is left alone. */
+	mtimeNs: bigint;
+	ino: bigint;
 }
 
 export interface CompressBatchResult {
@@ -91,16 +103,25 @@ export async function compressMethod(
  */
 export async function compressCandidate(file: string): Promise<CompressCandidate | undefined> {
 	if (INCOMPRESSIBLE_EXTENSIONS[path.extname(file).toLowerCase()]) return undefined;
-	const stat = await fs.lstat(file);
+	const stat = await fs.lstat(file, { bigint: true });
 	if (!stat.isFile() || stat.size <= stat.blksize) return undefined;
-	const allocated = stat.blocks * 512;
+	const allocated = Number(stat.blocks) * 512;
 	if (allocated < stat.size) return undefined;
-	return { path: file, bytes: stat.size, allocated, mtimeMs: stat.mtimeMs };
+	return {
+		path: file,
+		bytes: Number(stat.size),
+		allocated,
+		mtimeMs: Number(stat.mtimeMs),
+		mtimeNs: stat.mtimeNs,
+		ino: stat.ino,
+	};
 }
 
 /**
- * Count, and with `apply` remove, scratch directories under `roots`. Only a
- * killed run leaves one behind; the caller's gc lock rules out a live one.
+ * Count, and with `apply` remove, scratch directories under `roots` that a
+ * killed run left behind; the caller's gc lock rules out a live one. Only a
+ * directory holding the owner marker is removed recursively. An unmarked one
+ * is gc's only while empty (a run killed before writing the marker).
  */
 export async function sweepCompressScratch(roots: string[], apply: boolean, errors: string[]): Promise<number> {
 	let found = 0;
@@ -115,11 +136,16 @@ export async function sweepCompressScratch(roots: string[], apply: boolean, erro
 			continue;
 		}
 		for (const dir of dirs) {
-			found += 1;
-			if (!apply) continue;
 			try {
-				await fs.rm(dir, { recursive: true, force: true });
+				if (!(await fs.lstat(dir)).isDirectory()) continue;
+				const owned = await fs.exists(path.join(dir, SCRATCH_OWNER_MARKER));
+				if (!owned && (await fs.readdir(dir)).length > 0) continue;
+				found += 1;
+				if (!apply) continue;
+				if (owned) await fs.rm(dir, { recursive: true, force: true });
+				else await fs.rmdir(dir);
 			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
 				errors.push(`${dir}: ${error instanceof Error ? error.message : String(error)}`);
 			}
 		}
@@ -238,14 +264,37 @@ async function flushFile(file: string): Promise<void> {
 	}
 }
 
+/** The file at `candidate.path` is still the one selected: same inode, size, and mtime. */
+function unchangedSinceSelection(candidate: CompressCandidate): boolean {
+	const current = fsSync.lstatSync(candidate.path, { bigint: true });
+	return (
+		current.ino === candidate.ino && current.size === BigInt(candidate.bytes) && current.mtimeNs === candidate.mtimeNs
+	);
+}
+
+/**
+ * Rename `copyPath` over `candidate.path` if the original is unchanged, checked
+ * immediately before the rename. Transcripts (`.jsonl`) swap under the session
+ * publish lock, which serializes them against appends from any omp binary.
+ */
+function swapIfUnchanged(storage: FileSessionStorage, candidate: CompressCandidate, copyPath: string): boolean {
+	if (candidate.path.endsWith(".jsonl")) {
+		return storage.replaceSessionFileSync(candidate.path, copyPath, () => unchangedSinceSelection(candidate));
+	}
+	if (!unchangedSinceSelection(candidate)) return false;
+	fsSync.renameSync(copyPath, candidate.path);
+	return true;
+}
+
 async function compressBatch(dir: string, batch: CompressCandidate[], result: CompressBatchResult): Promise<void> {
 	// Every candidate counts at its current allocation until its compressed copy replaces it,
 	// so failed and skipped files are still reported as occupying disk.
 	for (const candidate of batch) result.allocatedAfter += candidate.allocated;
-	const scratch = path.join(dir, COMPRESS_SCRATCH_DIR);
+	let scratch: string | undefined;
 	try {
-		await fs.rm(scratch, { recursive: true, force: true });
-		await fs.mkdir(scratch);
+		// A fresh directory: a pre-existing one with this name is never gc's to remove.
+		scratch = await fs.mkdtemp(path.join(dir, COMPRESS_SCRATCH_PREFIX));
+		await Bun.write(path.join(scratch, SCRATCH_OWNER_MARKER), "");
 		const digests = await Promise.all(batch.map(candidate => sha256File(candidate.path)));
 		const copy = await $`ditto --hfsCompression ${batch.map(candidate => candidate.path)} ${scratch}`
 			.quiet()
@@ -254,11 +303,10 @@ async function compressBatch(dir: string, batch: CompressCandidate[], result: Co
 			result.errors.push(`${dir}: ditto exited ${copy.exitCode}: ${copy.stderr.toString().trim()}`);
 			return;
 		}
+		const storage = new FileSessionStorage();
 		for (const [index, candidate] of batch.entries()) {
 			const copyPath = path.join(scratch, path.basename(candidate.path));
 			try {
-				const current = await fs.lstat(candidate.path);
-				if (current.size !== candidate.bytes || current.mtimeMs !== candidate.mtimeMs) continue;
 				const copied = await fs.lstat(copyPath);
 				if (copied.size !== candidate.bytes || (await sha256File(copyPath)) !== digests[index]) {
 					result.errors.push(`${candidate.path}: compressed copy does not match the original`);
@@ -266,8 +314,8 @@ async function compressBatch(dir: string, batch: CompressCandidate[], result: Co
 				}
 				// Incompressible: APFS stored the copy uncompressed, so the original stays.
 				if (copied.blocks * 512 >= candidate.allocated) continue;
-				// ditto already copied the nanosecond atime and mtime; the rename keeps them.
-				await fs.rename(copyPath, candidate.path);
+				// ditto copied the nanosecond mtime; the rename keeps it.
+				if (!swapIfUnchanged(storage, candidate, copyPath)) continue;
 				result.compressed += 1;
 				result.allocatedAfter += copied.blocks * 512 - candidate.allocated;
 			} catch (error) {
@@ -277,6 +325,6 @@ async function compressBatch(dir: string, batch: CompressCandidate[], result: Co
 	} catch (error) {
 		result.errors.push(`${dir}: ${error instanceof Error ? error.message : String(error)}`);
 	} finally {
-		await fs.rm(scratch, { recursive: true, force: true });
+		if (scratch !== undefined) await fs.rm(scratch, { recursive: true, force: true });
 	}
 }

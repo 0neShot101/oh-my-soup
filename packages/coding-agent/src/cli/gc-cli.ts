@@ -33,7 +33,7 @@ import { FileSessionStorage, SESSION_STAGING_RE, tryAcquireSessionLease } from "
 import {
 	type CompressCandidate,
 	type CompressMethod,
-	COMPRESS_SCRATCH_DIR,
+	COMPRESS_SCRATCH_PREFIX,
 	compressCandidate,
 	compressFilesInPlace,
 	compressMethod,
@@ -1875,13 +1875,32 @@ async function collectSessionFiles(session: SessionInfo): Promise<string[]> {
 	const files = [session.path];
 	try {
 		for await (const name of ANY_FILE_GLOB.scan({ cwd: artifactsDir, dot: true, onlyFiles: true })) {
-			if (name.split(/[\\/]/).includes(COMPRESS_SCRATCH_DIR)) continue;
+			if (name.split(/[\\/]/).some(part => part.startsWith(COMPRESS_SCRATCH_PREFIX))) continue;
 			files.push(path.join(artifactsDir, name));
 		}
 	} catch (error) {
 		if (codeOf(error) !== "ENOENT") throw error;
 	}
 	return files;
+}
+
+/**
+ * Leases of the transcripts nested in a session's artifact tree (subagent
+ * sessions), which a process can open on their own. Null, with every lease
+ * taken so far released, when any of them is live.
+ */
+async function tryAcquireNestedLeases(session: SessionInfo, files: string[]): Promise<FileLockHandle[] | null> {
+	const leases: FileLockHandle[] = [];
+	for (const file of files) {
+		if (file === session.path || !file.endsWith(".jsonl")) continue;
+		const lease = await tryAcquireSessionFileLease(file);
+		if (lease === null) {
+			for (const held of leases) held.release();
+			return null;
+		}
+		if (lease) leases.push(lease);
+	}
+	return leases;
 }
 
 /**
@@ -1930,9 +1949,16 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 			result.skippedLive += 1;
 			continue;
 		}
+		let nested: FileLockHandle[] | null = [];
 		try {
+			const files = await collectSessionFiles(session);
+			nested = await tryAcquireNestedLeases(session, files);
+			if (nested === null) {
+				result.skippedLive += 1;
+				continue;
+			}
 			let candidates: CompressCandidate[] = [];
-			for (const file of await collectSessionFiles(session)) {
+			for (const file of files) {
 				try {
 					const candidate = await compressCandidate(file);
 					if (candidate && candidate.mtimeMs <= cutoffMs) candidates.push(candidate);
@@ -1955,6 +1981,7 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 			result.errors.push(...batch.errors);
 		} finally {
 			// Held through the rewrite so no omp process resumes the session mid-swap.
+			for (const held of nested ?? []) held.release();
 			lease?.release();
 		}
 	}

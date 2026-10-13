@@ -2610,7 +2610,7 @@ describe("runGcCommand session compression", () => {
 			expect(after.mtimeNs).toBe(before[index].mtimeNs);
 			if (measuresAllocation) expect(after.allocated).toBeLessThan(after.size);
 		}
-		expect(await fs.readdir(path.dirname(file))).not.toContain(".omp-gc-compress.tmp");
+		expect((await fs.readdir(path.dirname(file))).filter(name => name.startsWith(".omp-gc-compress-"))).toEqual([]);
 
 		const rerun = await runGcCommand({ flags: { agentDir: root, compress: true, apply: true } });
 		expect(rerun.compress).toMatchObject({ wouldCompress: 0, compressed: 0 });
@@ -2626,14 +2626,19 @@ describe("runGcCommand session compression", () => {
 		expect(await snapshot(file)).toEqual(before);
 	});
 
-	test.skipIf(!onApfs)("--apply removes scratch dirs a killed run left behind", async () => {
-		const { file } = await writeIdleSession(Bun.randomUUIDv7());
-		const inSessions = path.join(path.dirname(file), ".omp-gc-compress.tmp");
-		const inArchive = path.join(root, "archive", "sessions", "project", "x", ".omp-gc-compress.tmp");
+	test.skipIf(!onApfs)("--apply removes only the scratch dirs a killed run left behind", async () => {
+		const { file, artifact } = await writeIdleSession(Bun.randomUUIDv7());
+		const inSessions = path.join(path.dirname(file), ".omp-gc-compress-a1b2c3");
+		const inArchive = path.join(root, "archive", "sessions", "project", "x", ".omp-gc-compress-d4e5f6");
 		for (const dir of [inSessions, inArchive]) {
 			await fs.mkdir(dir, { recursive: true });
+			await Bun.write(path.join(dir, ".omp-gc-compress-owner"), "");
 			await Bun.write(path.join(dir, "copy.jsonl"), filler);
 		}
+		// An artifact that merely shares the name carries no owner marker.
+		const userArtifact = path.join(path.dirname(artifact), ".omp-gc-compress-notes", "keep.txt");
+		await fs.mkdir(path.dirname(userArtifact), { recursive: true });
+		await Bun.write(userArtifact, "keep");
 
 		const dryRun = await runGcCommand({ flags: { agentDir: root, compress: true } });
 		expect(dryRun.compress?.leftoverScratchDirs).toBe(2);
@@ -2642,6 +2647,7 @@ describe("runGcCommand session compression", () => {
 		const applied = await runGcCommand({ flags: { agentDir: root, compress: true, apply: true } });
 		expect(applied.compress).toMatchObject({ leftoverScratchDirs: 2, compressed: 2, errors: [] });
 		for (const dir of [inSessions, inArchive]) expect(await fs.exists(dir)).toBe(false);
+		expect(await Bun.file(userArtifact).text()).toBe("keep");
 	});
 
 	test.skipIf(!onApfs)("a failed batch still counts its files as allocated afterwards", async () => {
@@ -2680,6 +2686,33 @@ describe("runGcCommand session compression", () => {
 		}
 
 		expect(result.compress).toMatchObject({ scanned: 2, skippedLive: 1, wouldCompress: 0, compressed: 0 });
+		expect(await Promise.all(targets.map(snapshot))).toEqual(before);
+	});
+
+	test.skipIf(!supported)("leaves a session uncompressed while a nested transcript is live", async () => {
+		const parent = await writeIdleSession(Bun.randomUUIDv7());
+		const nestedId = Bun.randomUUIDv7();
+		const nested = path.join(path.dirname(parent.artifact), "0-subagent.jsonl");
+		const header = JSON.stringify({
+			type: "session",
+			version: 3,
+			id: nestedId,
+			timestamp: "2026-01-01T00:00:00.000Z",
+		});
+		await Bun.write(nested, `${header}\n${filler}`);
+		await agePathSubMs(nested, 30);
+		const release = new FileSessionStorage().claimSession(nestedId, nested);
+		if (!release) throw new Error("Expected to claim the nested session lease");
+		const targets = [parent.file, parent.artifact, nested];
+		const before = await Promise.all(targets.map(snapshot));
+		let result: GcResult;
+		try {
+			result = await runGcCommand({ flags: { agentDir: root, compress: true, apply: true } });
+		} finally {
+			release();
+		}
+
+		expect(result.compress).toMatchObject({ skippedLive: 1, wouldCompress: 0, compressed: 0 });
 		expect(await Promise.all(targets.map(snapshot))).toEqual(before);
 	});
 
