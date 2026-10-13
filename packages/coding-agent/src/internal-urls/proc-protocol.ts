@@ -22,6 +22,7 @@ import {
 import type { ProcReadDetails } from "@oh-my-pi/pi-tui/tools/proc-render";
 import procPromptDoc from "../prompts/internal-urls/proc.md" with { type: "text" };
 import type { ToolSession } from "../tools";
+import { isSharedBrowserDaemonName } from "../tools/browser/shared-daemon";
 import type {
 	InternalResource,
 	InternalUrl,
@@ -216,6 +217,10 @@ export class ProcProtocolHandler implements ProtocolHandler {
 			if (!service) throw new Error(`Service not found: ${id}`);
 			if (content !== "persist" && content !== "session" && content !== "detached")
 				throw new Error("Service mode must be persist, session, or detached");
+			// The broker detaches a service by relaunching it, which would start the
+			// shared Chrome on an unprepared profile and reopen its previous pages.
+			if (content === "detached" && isSharedBrowserDaemonName(id))
+				throw new Error(`${id} is omp's project-shared browser and cannot be detached`);
 			const updated = await modeService(session, id, content, context?.signal);
 			return {
 				content: [{ type: "text", text: `${serviceStatus(updated)}; mode=${content}` }],
