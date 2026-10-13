@@ -64,6 +64,7 @@ import {
 	type NewSessionOptions,
 	type ResetBoundaryEntry,
 	type ServiceTierChangeEntry,
+	sessionEntryLeafId,
 	type SessionEntry,
 	type SessionHeader,
 	type SessionInitEntry,
@@ -550,7 +551,8 @@ class SessionEntryIndex {
 		const previousLeaf = this.#leaf;
 		const isNew = !this.#entriesById.has(entry.id);
 		this.#entriesById.set(entry.id, entry);
-		this.#leaf = entry.id;
+		// Late usage is physically last but replays to the active leaf captured at append time.
+		this.#leaf = sessionEntryLeafId(entry);
 		this.#generation++;
 		const cache = this.#branchCache;
 		if (
@@ -3436,6 +3438,7 @@ export class SessionManager {
 			parentId: owner.parentId,
 			timestamp: nowIso(),
 			...usage,
+			...(activeLeafId !== owner.parentId ? { activeLeafId } : {}),
 		};
 		this.#recordEntry(entry);
 		if (activeLeafId !== owner.parentId) this.#index.setLeaf(activeLeafId);

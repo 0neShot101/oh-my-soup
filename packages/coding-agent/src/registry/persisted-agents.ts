@@ -172,6 +172,11 @@ async function readPersistedAgentHistory(
 					const usage = recordOf(record.usage);
 					const cost = recordOf(usage?.cost);
 					directCost += finiteNumber(cost?.total);
+					if (typeof record.activeLeafId === "string") {
+						leafId = record.activeLeafId;
+					} else if (record.activeLeafId === null) {
+						leafId = undefined;
+					}
 					return;
 				}
 				if (record.type === "model_change" && typeof record.model === "string") {
