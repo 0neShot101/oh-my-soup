@@ -972,11 +972,13 @@ export class AsyncJobManager {
 	 * retention window; a consumed result passes the shorter
 	 * {@link #consumedResultEvictionMs}. The delay is clamped to the configured
 	 * retention so an explicit short retention always stays the effective cap.
-	 * A timer that fires while the job's delivery is in flight (its
+	 * A timer that fires while a suppressed job's delivery is in flight (its
 	 * async-result entry parked on a busy owner's yield queue) evicts only once
 	 * that attempt settles: the parked entry's isStale check resolves through
 	 * the suppression marker #evictJob clears, so evicting mid-park would
-	 * re-inject a result a foreground snapshot already consumed.
+	 * re-inject a result a foreground snapshot already consumed. Unsuppressed
+	 * in-flight deliveries keep the bounded lifecycle, so a receipt that never
+	 * settles cannot pin the row and its retained artifacts.
 	 */
 	#scheduleEviction(jobId: string, delayMs: number = this.#retentionMs): void {
 		if (this.#disposed) return;
@@ -988,7 +990,7 @@ export class AsyncJobManager {
 		clearTimeout(this.#evictionTimers.get(jobId));
 		const timer = setTimeout(() => {
 			const inFlight = this.#inFlightDeliveries.find(delivery => delivery.jobId === jobId)?.promise;
-			if (!inFlight) {
+			if (!inFlight || !this.isDeliverySuppressed(jobId)) {
 				this.#evictJob(jobId);
 				return;
 			}
