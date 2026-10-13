@@ -24,11 +24,12 @@ import {
 import { col, node } from "../native/describe";
 import type { NativeNode, NativeUiEvent } from "../native/node";
 import { actionBar, actionButton } from "../native/overlay";
-import { sanitizeDisplayLines } from "../render/render-utils";
+import { PREVIEW_LIMITS, sanitizeDisplayLines } from "../render/render-utils";
 import { theme } from "../theme/theme";
+import { CountdownTimer } from "../chrome/countdown-timer";
 
 /** Detail rows shown before the rest scrolls: the prompt stays compact, the transcript has the call in full. */
-const MAX_DETAIL_ROWS = 8;
+const MAX_DETAIL_ROWS: number = PREVIEW_LIMITS.COLLAPSED_ITEMS;
 /** The approve key is ignored this long after mount, so a follow-up sent as the prompt appears cannot approve it. */
 export const APPROVE_ARM_MS = 500;
 
@@ -41,6 +42,14 @@ interface ApprovalDialogOptions {
 	tui?: TUI;
 	/** Wrap long details instead of clipping them to a row: set when the dialog is the only place they show. */
 	wrapDetails?: boolean;
+	/** Deny once this many ms pass without input (any key restarts the countdown). */
+	timeout?: number;
+	/** Called when {@link timeout} expires, before the dialog denies. */
+	onTimeout?: () => void;
+	/** Called when the countdown starts, as the dialog mounts. */
+	onTimeoutStart?: () => void;
+	/** Called each time a key restarts the countdown. */
+	onTimeoutReset?: () => void;
 }
 
 export class ApprovalDialogComponent implements Component {
@@ -54,6 +63,7 @@ export class ApprovalDialogComponent implements Component {
 	#closed = false;
 	#native: NativeNode | undefined;
 	readonly #armedAt = performance.now() + APPROVE_ARM_MS;
+	readonly #countdown: CountdownTimer | undefined;
 
 	/** `prompt`: the approval title on its first line, the details after it. */
 	constructor(
@@ -70,6 +80,20 @@ export class ApprovalDialogComponent implements Component {
 		this.#panel.addChild(this.#body);
 		this.#panel.addChild(new PanelDivider());
 		this.#panel.addChild(this.#footer);
+		if (options.timeout && options.timeout > 0) {
+			options.onTimeoutStart?.();
+			this.#countdown = new CountdownTimer(
+				options.timeout,
+				options.tui,
+				seconds => {
+					this.#panel.title = `${title} (${seconds}s)`;
+				},
+				() => {
+					options.onTimeout?.();
+					this.#finish(false);
+				},
+			);
+		}
 	}
 
 	invalidate(): void {
@@ -79,11 +103,18 @@ export class ApprovalDialogComponent implements Component {
 
 	dispose(): void {
 		this.#closed = true;
+		this.#countdown?.dispose();
 		this.#panel.dispose();
 	}
 
 	handleInput(keyData: string): void {
 		if (this.#closed) return;
+		if (this.#countdown) {
+			this.#countdown.reset();
+			this.options.onTimeoutReset?.();
+			// The described countdown restarts with it.
+			this.#native = undefined;
+		}
 		if (matchesAppApprove(keyData)) {
 			if (performance.now() >= this.#armedAt) this.#finish(true);
 			return;
@@ -155,7 +186,8 @@ export class ApprovalDialogComponent implements Component {
 			);
 			children.push(node("col", { role: "omp.approval.details" }, rows, "details"));
 		}
-		children.push(actionBar([null, deny, approve]));
+		// The countdown, when one runs, leads the bar like the ask dialog's.
+		children.push(actionBar([...(this.#countdown ? [this.#countdown.describe()] : []), null, deny, approve]));
 		// Under the `omp.editor.ask` prefix: Tern's console layout sizes an ask's rows to the
 		// composer column by that prefix, where a bare `omp.editor.*` role spans the whole dock.
 		this.#native = col(children, { role: "omp.editor.ask.approval", gap: "md" });
@@ -191,6 +223,7 @@ export class ApprovalDialogComponent implements Component {
 	#finish(approved: boolean): void {
 		if (this.#closed) return;
 		this.#closed = true;
+		this.#countdown?.dispose();
 		if (approved) this.callbacks.onApprove();
 		else this.callbacks.onDeny();
 	}

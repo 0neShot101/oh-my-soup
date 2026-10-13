@@ -6,13 +6,14 @@
  * - compare a tool capability tier against the active approval mode,
  * - format the generic approval prompt body.
  */
-import type { AgentTool, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, ApprovalDetailsOptions, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
 import type { Settings } from "../config/settings";
 import type { ExtensionUIContext } from "../extensibility/extensions/types";
 
+import { countNewlines } from "@oh-my-pi/pi-utils";
 import { cfgToolsApproval, cfgToolsApprovalMode } from "./settings";
 
-export type { ToolApproval, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
+export type { ApprovalDetailsOptions, ToolApproval, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
 
 export type ApprovalPolicy = "allow" | "deny" | "prompt";
 export type ApprovalMode = "always-ask" | "write" | "yolo";
@@ -362,6 +363,14 @@ export function truncateForPrompt(value: string, maxChars = DEFAULT_PROMPT_TRUNC
 }
 
 /**
+ * A `formatApprovalDetails` value as the prompt needs it: whole for a compact prompt (which
+ * counts its lines and truncates the row it keeps), else {@link truncateForPrompt}ed.
+ */
+export function truncateApprovalDetail(value: string, options?: ApprovalDetailsOptions): string {
+	return options?.compact ? value : truncateForPrompt(value);
+}
+
+/**
  * Format the approval prompt body shown to the user. `compact` keeps one row per detail: a
  * multi-line value (file content, code, a long command) keeps its first line and counts the
  * rest, for surfaces that show the tool call itself in the transcript beside the prompt.
@@ -370,7 +379,7 @@ export function formatApprovalPrompt(
 	tool: ApprovalSubject,
 	args: unknown,
 	reason?: string,
-	options?: { compact?: boolean },
+	options?: ApprovalDetailsOptions,
 ): string {
 	const lines = [`Allow tool: ${tool.name}`];
 
@@ -382,10 +391,11 @@ export function formatApprovalPrompt(
 		lines.push(`Reason: ${reason}`);
 	}
 
-	const details = tool.formatApprovalDetails?.(args);
+	const compact = options?.compact === true;
+	const details = tool.formatApprovalDetails?.(args, { compact });
 	for (const detail of typeof details === "string" ? [details] : (details ?? [])) {
 		if (detail.length === 0) continue;
-		lines.push(options?.compact ? compactApprovalDetail(detail) : detail);
+		lines.push(compact ? compactApprovalDetail(detail) : detail);
 	}
 
 	return lines.join("\n");
@@ -394,9 +404,10 @@ export function formatApprovalPrompt(
 /** `Content:\n<40 lines>` → `Content: 40 lines in the tool call`; `Command: a\nb` → `Command: a … +1 line in the tool call`. */
 function compactApprovalDetail(detail: string): string {
 	const newline = detail.indexOf("\n");
-	if (newline < 0) return detail;
-	const head = detail.slice(0, newline).trimEnd();
-	const rest = detail.slice(newline + 1).split("\n").length;
+	if (newline < 0) return truncateForPrompt(detail);
+	const head = truncateForPrompt(detail.slice(0, newline).trimEnd());
+	// Every newline starts one more line after the head; counted without splitting a body that may be megabytes.
+	const rest = countNewlines(detail);
 	const count = `${rest} line${rest === 1 ? "" : "s"} in the tool call`;
 	return head.endsWith(":") ? `${head} ${count}` : `${head} … +${count}`;
 }
