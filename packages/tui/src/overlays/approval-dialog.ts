@@ -5,7 +5,9 @@
  * so an Enter typed for the composer as the prompt appears never approves a
  * call, and the chord itself only arms {@link APPROVE_ARM_MS} after mount: it
  * is also the follow-up key, pressed mid-run exactly when prompts appear.
- * Esc denies.
+ * Esc denies. With an {@link ApprovalDialogDraft}, every other key edits the
+ * composer mounted beneath the dialog, so a message can steer the turn while
+ * the call waits; an empty composer ignores Enter and arrows scroll the details.
  */
 import { type Component, Ellipsis, ScrollView, type TUI, truncateToWidth, wrapTextWithAnsi } from "../index";
 import { formatKeyHints, formatTooltipKey } from "../app-keybindings";
@@ -38,6 +40,13 @@ interface ApprovalDialogCallbacks {
 	onDeny(): void;
 }
 
+/** The composer mounted beneath the dialog: it receives every key the dialog does not own. */
+export interface ApprovalDialogDraft {
+	/** True while the composer holds a draft: arrows and Enter then edit and send it. */
+	hasText(): boolean;
+	handleInput(keyData: string): void;
+}
+
 interface ApprovalDialogOptions {
 	tui?: TUI;
 	/** Wrap long details instead of clipping them to a row: set when the dialog is the only place they show. */
@@ -50,6 +59,8 @@ interface ApprovalDialogOptions {
 	onTimeoutStart?: () => void;
 	/** Called each time a key restarts the countdown. */
 	onTimeoutReset?: () => void;
+	/** Route typing to the composer instead of dropping it. */
+	draft?: ApprovalDialogDraft;
 }
 
 export class ApprovalDialogComponent implements Component {
@@ -123,11 +134,23 @@ export class ApprovalDialogComponent implements Component {
 			this.#finish(false);
 			return;
 		}
+		const draft = this.options.draft;
+		if (draft?.hasText()) {
+			this.#editDraft(draft, keyData);
+			return;
+		}
 		const page = Math.max(1, this.#bodyRows - 1);
 		if (matchesSelectUp(keyData)) this.#scroll(-1);
 		else if (matchesSelectDown(keyData)) this.#scroll(1);
 		else if (matchesSelectPageUp(keyData)) this.#scroll(-page);
 		else if (matchesSelectPageDown(keyData)) this.#scroll(page);
+		// An empty composer swallows Enter: it would otherwise submit nothing, or interrupt the run.
+		else if (draft && !getKeybindings().matches(keyData, "tui.input.submit")) this.#editDraft(draft, keyData);
+	}
+
+	#editDraft(draft: ApprovalDialogDraft, keyData: string): void {
+		draft.handleInput(keyData);
+		this.options.tui?.requestRender();
 	}
 
 	render(width: number): readonly string[] {
@@ -211,8 +234,11 @@ export class ApprovalDialogComponent implements Component {
 
 	#footerHint(overflows: boolean): string {
 		const approve = formatKeyHints(appApproveKeys());
+		const hint = `${approve} approve · ${editorKey("tui.select.cancel")} deny`;
+		const draft = this.options.draft;
+		if (draft?.hasText()) return `${hint} · ${editorKey("tui.input.submit")} deny and send`;
 		const scroll = overflows ? ` · ${editorKeys("tui.select.up", "tui.select.down")} scroll` : "";
-		return `${approve} approve · ${editorKey("tui.select.cancel")} deny${scroll}`;
+		return `${hint}${scroll}${draft ? " · type to steer instead" : ""}`;
 	}
 
 	#scroll(delta: number): void {

@@ -41,6 +41,8 @@ function makeHarness() {
 	};
 	const showOverlay = vi.fn(() => fakeHandle);
 	let uiContext: ExtensionUIContext | undefined;
+	const steering: string[] = [];
+	const sessionListeners = new Set<(event: { type: string; steering?: string[] }) => void>();
 	const ctx = {
 		editor,
 		ui: {
@@ -54,6 +56,11 @@ function makeHarness() {
 		session: {
 			extensionRunner: undefined,
 			setUsageFallbackConfirmer: vi.fn(),
+			getQueuedMessages: () => ({ steering: [...steering], followUp: [], liveSteered: 0 }),
+			subscribe(listener: (event: { type: string; steering?: string[] }) => void) {
+				sessionListeners.add(listener);
+				return () => sessionListeners.delete(listener);
+			},
 		},
 		setToolUIContext(context: ExtensionUIContext, hasUI: boolean): void {
 			expect(hasUI).toBe(true);
@@ -78,6 +85,11 @@ function makeHarness() {
 		controller,
 		inputController: (readText: () => Promise<string>) =>
 			new InputController(ctx, { readImage: async () => null, readText }),
+		/** Queue a user steer the way the session does: append, then emit `queue_update`. */
+		queueSteer(text: string): void {
+			steering.push(text);
+			for (const listener of sessionListeners) listener({ type: "queue_update", steering: [...steering] });
+		},
 		handleInput(data: string): void {
 			if (!focused?.handleInput) throw new Error("Expected a focused input component");
 			focused.handleInput(data);
@@ -505,5 +517,31 @@ describe("ExtensionUiController custom overlay", () => {
 		expect(component.dispose).toHaveBeenCalledTimes(1);
 		expect(harness.editorContainer.children).toEqual([harness.editor]);
 		expect(harness.editor.getText()).toBe("draft typed while factory is pending");
+	});
+});
+
+describe("ExtensionUiController tool approval", () => {
+	const prompt = {
+		full: "Allow tool: bash\nCommand: rm -rf build",
+		compact: "Allow tool: bash\nCommand: rm -rf build",
+	};
+
+	it("lets the composer steer while a call waits: the queued message denies the call", async () => {
+		const harness = makeHarness();
+		// A steer queued before the prompt appeared does not answer it.
+		harness.queueSteer("earlier message");
+		harness.editor.onSubmit = text => harness.queueSteer(text);
+		const pending = harness.controller.showCollabAwareApproval(prompt);
+		const [dialog] = harness.editorContainer.children;
+		expect(harness.editorContainer.children).toEqual([dialog, harness.editor]);
+		// Enter on an empty composer is swallowed: the dialog stays up (settling unmounts it synchronously).
+		harness.handleInput("\r");
+		expect(harness.editorContainer.children).toEqual([dialog, harness.editor]);
+		for (const key of "keep the build dir") harness.handleInput(key);
+		expect(harness.editor.getText()).toBe("keep the build dir");
+		harness.handleInput("\r");
+		expect(await pending).toBe(false);
+		expect(harness.editorContainer.children).toEqual([harness.editor]);
+		expect(harness.getFocused()).toBe(harness.editor);
 	});
 });

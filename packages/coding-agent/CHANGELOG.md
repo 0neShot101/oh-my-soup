@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- The composer stays usable while a tool approval is pending: sending a message denies the call and steers the turn with it, so the agent knows why it was denied ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+
+### Changed
+
+- The in-composer tool approval prompt no longer repeats the command, path, or content; the tool call in the transcript shows them (with tool activity hidden, the prompt still shows them) ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+
 ## [18.10.4] - 2026-10-13
 
 ### Added

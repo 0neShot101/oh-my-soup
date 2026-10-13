@@ -5,6 +5,7 @@ import {
 	type ApprovalMode,
 	denyError,
 	formatApprovalPrompt,
+	requestApproval,
 	requiresApproval,
 	resolveApproval,
 	resolveApprovalFromContext,
@@ -237,24 +238,28 @@ describe("MCP fallback and prompt formatting", () => {
 		]);
 	});
 
-	it("compact prompts keep one row per detail, counting multi-line bodies instead of showing them", () => {
-		const subject = tool("write", "write", () => ["Path: /tmp/out", "Content:\nsecret\nbody", "Command: ls\n-la"]);
-		expect(formatApprovalPrompt(subject, {}, undefined, { compact: true }).split("\n")).toEqual([
-			"Allow tool: write",
-			"Path: /tmp/out",
-			"Content: 2 lines in the tool call",
-			"Command: ls … +1 line in the tool call",
-		]);
-	});
-
-	it("compact prompts count every line of a detail the formatter would truncate", () => {
-		const command = Array.from({ length: 1000 }, (_, i) => `echo ${i}`).join("\n");
-		const bash = createBashTool();
-		expect(formatApprovalPrompt(bash, { command }, undefined, { compact: true })).toBe(
-			"Allow tool: bash\nCommand: echo 0 … +999 lines in the tool call",
+	it("the dialog's compact prompt drops the tool's details but keeps origin, reason, and appendix", async () => {
+		const subject = tool("mcp__server__write", undefined, () => ["Path: /tmp/out", "Content:\nsecret"]);
+		let shown: { full: string; compact: string } | undefined;
+		const ui = {
+			select: async () => undefined,
+			approve: async (prompt: { full: string; compact: string }) => {
+				shown = prompt;
+				return true;
+			},
+		};
+		expect(await requestApproval(ui, subject, {}, "Critical pattern", ["Provider safety checks:", "- check"])).toBe(
+			true,
 		);
-		// The full prompt keeps the formatter's truncation.
-		expect(formatApprovalPrompt(bash, { command })).toContain("ch elided…]");
+		expect(shown?.compact.split("\n")).toEqual([
+			"Allow tool: mcp__server__write",
+			"Origin: MCP server tool",
+			"Reason: Critical pattern",
+			"Provider safety checks:",
+			"- check",
+		]);
+		// The full prompt, for surfaces where the call is not in view, keeps the details.
+		expect(shown?.full).toContain("Content:\nsecret");
 	});
 
 	it("does not add MCP origin for annotated MCP tools", () => {

@@ -266,6 +266,39 @@ describe("dialogs under a native surface", () => {
 		}
 	});
 
+	it("approval: with a composer draft, typing edits it, an empty Enter is swallowed, and arrows scroll only while it is empty", () => {
+		let draft = "";
+		const routed: string[] = [];
+		const callbacks = { onApprove: vi.fn(), onDeny: vi.fn() };
+		const details = Array.from({ length: 20 }, (_, i) => `Line ${i}`).join("\n");
+		const dialog = new ApprovalDialogComponent(`Allow tool: bash\n${details}`, callbacks, {
+			draft: {
+				hasText: () => draft.length > 0,
+				handleInput: key => {
+					routed.push(key);
+					if (key.length === 1 && key >= " ") draft += key;
+				},
+			},
+		});
+		// Empty composer: Enter neither submits nor interrupts, and Down scrolls the details.
+		dialog.handleInput(ENTER);
+		dialog.handleInput(DOWN);
+		expect(routed).toEqual([]);
+		expect(stripVTControlCharacters(dialog.render(60).join("\n"))).not.toContain("Line 0");
+		// Typing reaches the composer; once it holds text, arrows and Enter edit and send it.
+		dialog.handleInput("n");
+		dialog.handleInput("o");
+		dialog.handleInput(UP);
+		dialog.handleInput(ENTER);
+		expect(routed).toEqual(["n", "o", UP, ENTER]);
+		expect(stripVTControlCharacters(dialog.render(60).join("\n"))).not.toContain("Line 0");
+		// Esc stays the dialog's: it denies without touching the draft.
+		dialog.handleInput("\x1b");
+		expect(callbacks.onDeny).toHaveBeenCalledTimes(1);
+		expect(routed).toHaveLength(4);
+		expect(callbacks.onApprove).not.toHaveBeenCalled();
+	});
+
 	it("approval: any key restarts the timeout (reporting start and reset), so a scroll before the deadline keeps it open", () => {
 		vi.useFakeTimers();
 		const callbacks = { onApprove: vi.fn(), onDeny: vi.fn() };

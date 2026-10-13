@@ -653,8 +653,11 @@ export class ExtensionUiController {
 
 	/**
 	 * The tool-approval prompt in the composer's place; a collab guest answers it as an Approve/Deny
-	 * select over the full prompt. Locally the compact prompt stands in for multi-line details only
+	 * select over the full prompt. Locally the compact prompt, without the tool's details, shows
 	 * while tool activity shows the call in the transcript; hidden, the dialog wraps the full one.
+	 * The composer stays mounted beneath it and takes the typing: a user message queued as steering
+	 * while the call waits (sent here, from Tern, or by a collab guest) denies the call, so the
+	 * message tells the agent why instead of a bare denial.
 	 */
 	async showCollabAwareApproval(
 		prompt: ExtensionApprovalPrompt,
@@ -668,6 +671,14 @@ export class ExtensionUiController {
 		const choice = await this.#raceCollabDialog(request, dialogOptions?.signal, signal =>
 			this.#presentDialog(signal, settle => {
 				const callHidden = this.ctx.hideToolActivity;
+				const editor = this.ctx.editor;
+				const session = this.ctx.session;
+				let steeringBaseline = session.getQueuedMessages().steering.length;
+				const unsubscribe = session.subscribe(event => {
+					if (event.type !== "queue_update") return;
+					if (event.steering.length > steeringBaseline) settle(DENY_OPTION);
+					else steeringBaseline = event.steering.length;
+				});
 				const dialog = new ApprovalDialogComponent(
 					callHidden ? prompt.full : prompt.compact,
 					{ onApprove: () => settle(APPROVE_OPTION), onDeny: () => settle(DENY_OPTION) },
@@ -678,17 +689,25 @@ export class ExtensionUiController {
 						onTimeout: dialogOptions?.onTimeout,
 						onTimeoutStart: dialogOptions?.onTimeoutStart,
 						onTimeoutReset: dialogOptions?.onTimeoutReset,
+						draft: {
+							hasText: () => editor.getText().length > 0,
+							handleInput: keyData => editor.handleDraftEdit(keyData),
+						},
 					},
 				);
 				this.ctx.editorContainer.clear();
 				this.ctx.editorContainer.addChild(dialog);
+				this.ctx.editorContainer.addChild(editor);
 				this.ctx.ui.setFocus(dialog);
+				// The dialog owns focus but forwards typing: keep the composer's cursor visible.
+				editor.focused = true;
 				this.ctx.ui.requestRender();
 				return () => {
+					unsubscribe();
 					dialog.dispose();
 					this.ctx.editorContainer.clear();
-					this.ctx.editorContainer.addChild(this.ctx.editor);
-					this.ctx.ui.setFocus(this.ctx.editor);
+					this.ctx.editorContainer.addChild(editor);
+					this.ctx.ui.setFocus(editor);
 					this.ctx.ui.requestRender();
 				};
 			}),
