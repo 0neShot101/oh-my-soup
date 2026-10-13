@@ -208,15 +208,22 @@ describe("python prelude", () => {
 		expect(requests).toMatchObject([{ name: "read", args: { path: "artifact://12:raw:1-1" } }]);
 	});
 
-	it("fails instead of returning read tool text that names no artifact file", async () => {
-		const { stdout, stderr } = await runWithReadBridge(
-			`try:\n    read("artifact://12")\nexcept RuntimeError as e:\n    print(e)`,
+	it("returns a replacement read tool's text when it names no artifact file", async () => {
+		// An extension's same-name `read` replacement returns its own content without the built-in's `details`.
+		const { stdout, stderr, requests } = await runWithReadBridge(
+			[`print(read("artifact://12"))`, `print(read("artifact://12", offset=2, limit=2))`].join("\n"),
 			{},
-			async () => "Unbounded raw read blocked for artifact://12",
+			async args => ({ text: `replaced ${args.path}` }),
 		);
 
 		expect(stderr).toBe("");
-		expect(stdout).toContain("could not locate artifact://12");
+		expect(stdout).toBe("replaced artifact://12:raw\nreplaced artifact://12:raw:2-3\n");
+		expect(requests).toMatchObject([
+			{ name: "read", args: { path: "artifact://12:raw:1-1" } },
+			{ name: "read", args: { path: "artifact://12:raw" } },
+			{ name: "read", args: { path: "artifact://12:raw:1-1" } },
+			{ name: "read", args: { path: "artifact://12:raw:2-3" } },
+		]);
 	});
 
 	it("bypasses discovered proxies for loopback bridge calls", async () => {

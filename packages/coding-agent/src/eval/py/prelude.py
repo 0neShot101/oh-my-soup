@@ -167,8 +167,8 @@ if "__omp_prelude_loaded__" not in globals():
                 details = located.get("details") if isinstance(located, dict) else None
                 file_path = details.get("resolvedPath") if isinstance(details, dict) else None
                 if not isinstance(file_path, str):
-                    text = located.get("text") if isinstance(located, dict) else located
-                    raise RuntimeError(f"read() could not locate {path}: {text}")
+                    # An extension's replacement `read` may name no file: its own text for the selected lines is the answer.
+                    return _read_through_tool(f"{path}:raw", offset, limit)
                 p = Path(file_path)
         elif _should_delegate_read(path):
             return _read_through_tool(path, offset, limit)

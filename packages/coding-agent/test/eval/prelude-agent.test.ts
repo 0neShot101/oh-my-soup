@@ -5,7 +5,6 @@ import { TempDir } from "@oh-my-pi/pi-utils/temp";
 import { createHelpers } from "../../src/eval/js/shared/helpers";
 import { JAVASCRIPT_PRELUDE_SOURCE } from "../../src/eval/js/shared/prelude";
 import { artifactReadBridge } from "../helpers/artifact-read-bridge";
-import { rejectionOf } from "../helpers/rejection";
 
 /**
  * The eval `agent()` helper always returns an `AgentHandle` — spawning is
@@ -281,11 +280,19 @@ describe("eval js read() URI delegation", () => {
 		]);
 	});
 
-	it("fails instead of returning read tool text that names no artifact file", async () => {
-		const { sandbox } = loadArtifactPrelude(undefined, async () => "Unbounded raw read blocked for artifact://12");
+	it("returns a replacement read tool's text when it names no artifact file", async () => {
+		// An extension's same-name `read` replacement returns its own content without the built-in's `details`.
+		const { calls, sandbox } = loadArtifactPrelude(undefined, async args => ({ text: `replaced ${args.path}` }));
 
-		expect(await rejectionOf(vm.runInContext(`read("artifact://12")`, sandbox))).toMatchObject({
-			message: expect.stringContaining("could not locate artifact://12"),
-		});
+		expect(await vm.runInContext(`read("artifact://12")`, sandbox)).toBe("replaced artifact://12:raw");
+		expect(await vm.runInContext(`read("artifact://12", { offset: 2, limit: 2 })`, sandbox)).toBe(
+			"replaced artifact://12:raw:2-3",
+		);
+		expect(calls).toEqual([
+			{ name: "read", args: { path: "artifact://12:raw:1-1" } },
+			{ name: "read", args: { path: "artifact://12:raw" } },
+			{ name: "read", args: { path: "artifact://12:raw:1-1" } },
+			{ name: "read", args: { path: "artifact://12:raw:2-3" } },
+		]);
 	});
 });
