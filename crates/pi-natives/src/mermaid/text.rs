@@ -148,8 +148,9 @@ pub fn wrap_label(label: &str, width: usize) -> String {
 /// node boxes. Passes run in the same order as the reference renderer.
 /// Character references (`&lt;`, `&#60;`, Mermaid's `#lt;` / `#60;`) are
 /// decoded last, so an escaped tag or marker stays literal text, the way the
-/// browser shows it. Tabs, carriage returns, and form feeds become spaces:
-/// the canvas counts each as one cell, but terminals move the cursor.
+/// browser shows it. Tabs, carriage returns, and form feeds become spaces;
+/// standalone zero-width clusters are omitted, because neither occupies the
+/// canvas cell that the renderer would reserve for it.
 pub fn normalize_label(label: &str) -> String {
 	let unquoted = label
 		.strip_prefix('"')
@@ -164,11 +165,30 @@ pub fn normalize_label(label: &str) -> String {
 	let text = strip_paired_marker(&text, "~~");
 	let text = mermaid_codes_to_html(&text);
 	let text = html_escape::decode_html_entities(&text);
-	if text.contains(['\t', '\r', '\u{c}']) {
+	let text = if text.contains(['\t', '\r', '\u{c}']) {
 		text.replace(['\t', '\r', '\u{c}'], " ")
 	} else {
 		text.into_owned()
+	};
+	if text.is_ascii() {
+		return text;
 	}
+	let mut offset = 0;
+	let mut clusters = xutf::graphemes_str(&text);
+	for cluster in &mut clusters {
+		if cluster != "\n" && xutf::width_str(cluster) == 0 {
+			let mut visible = String::with_capacity(text.len());
+			visible.push_str(&text[..offset]);
+			for cluster in clusters {
+				if cluster == "\n" || xutf::width_str(cluster) != 0 {
+					visible.push_str(cluster);
+				}
+			}
+			return visible;
+		}
+		offset += cluster.len();
+	}
+	text
 }
 
 /// Rewrite Mermaid entity codes (`#\w+;`) as HTML character references:
@@ -383,6 +403,9 @@ mod tests {
 		assert_eq!(normalize_label("&amp;lt; #amp;gt;"), "&lt; &gt;");
 		// Decoded tabs, CRs, and form feeds would misalign the canvas.
 		assert_eq!(normalize_label("a&#9;b#9;c&Tab;d&#13;e&#12;f"), "a b c d e f");
+		// Retain emoji ZWJ.
+		assert_eq!(normalize_label("a&ZeroWidthSpace;b#8203;c"), "abc");
+		assert_eq!(normalize_label("👩‍💻\na"), "👩‍💻\na");
 		// Unknown names, controls, and unterminated codes stay verbatim.
 		assert_eq!(
 			normalize_label("step #1; #nope; #x2192; C# &bogus; &lt"),
