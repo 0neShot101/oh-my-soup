@@ -1,11 +1,29 @@
 import type { Protocol } from "devtools-protocol";
 import { untilAborted } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import type { ElementHandle, JSHandle, KeyInput, KeyPressOptions, MouseButton, Page } from "puppeteer-core";
+import type {
+	ElementHandle,
+	FileChooser,
+	JSHandle,
+	KeyInput,
+	KeyPressOptions,
+	MouseButton,
+	Page,
+	Realm,
+} from "puppeteer-core";
 import { ToolAbortError, throwIfAborted } from "../tool-errors";
 import { splitKeyCombo, ternKey } from "./tern/keys";
 import { devtoolsFrameId } from "./frames";
-import { openUploadSource, readFilePayloads, type UploadFileInfo, type UploadSource } from "./upload-files";
+import {
+	createFilePicker,
+	openUploadSources,
+	pickedFiles,
+	setFileInputPaths,
+	type UploadFileInfo,
+	type UploadRoute,
+	type UploadSource,
+	type UploadStaging,
+} from "./upload-files";
 
 /** Options accepted by coordinate-based mouse clicks. */
 export interface ClickAtOptions {
@@ -621,9 +639,6 @@ export async function selectElementOptions(
 	return outcome.selected;
 }
 
-/** How the page gets uploaded files: paths the browser reads itself, or contents omp reads and hands over. */
-export type UploadDelivery = "paths" | "contents";
-
 /** How long a click has to open a file chooser before the target counts as a drop zone. */
 const FILE_CHOOSER_WAIT_MS = 400;
 
@@ -633,96 +648,225 @@ const FILE_CHOOSER_WAIT_MS = 400;
  */
 const UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
 
-/** Append one base64 chunk to file `index` of a page-side upload. Runs in the page. */
-function appendUploadChunk(parts: Uint8Array[][], index: number, data: string): void {
+/** Chunk calls in flight at once, so the CDP round trips overlap. */
+const UPLOAD_CHUNKS_IN_FLIGHT = 4;
+
+/** Store chunk `seq` of file `index` of a page-side upload. Runs in the isolated world. */
+function storeUploadChunk(parts: Uint8Array[][], index: number, seq: number, data: string): void {
 	parts[index] ??= [];
-	parts[index].push(Uint8Array.from(atob(data), character => character.charCodeAt(0)));
+	// Chrome before 140 has no `fromBase64`.
+	parts[index][seq] =
+		typeof Uint8Array.fromBase64 === "function"
+			? Uint8Array.fromBase64(data)
+			: Uint8Array.from(atob(data), character => character.charCodeAt(0));
 }
 
-/**
- * Check that a file input takes `files`, and with `parts` assign them and fire the events a user's pick would.
- * Returns why it refused. Runs in the page.
- */
-function assignUploadParts(el: unknown, files: UploadFileInfo[], parts: Uint8Array[][] | null): string | null {
+/** Build an upload's files from their stored chunks. Runs in the isolated world. */
+function buildUploadFiles(parts: Uint8Array[][], files: UploadFileInfo[]): unknown[] {
+	const page = globalThis as unknown as PageGlobals;
+	return files.map(
+		(file, index) =>
+			new page.File(parts[index] ?? [], file.name, { type: file.type, lastModified: file.lastModified }),
+	);
+}
+
+/** Why a file input cannot take `count` files, or null. Runs in the page. */
+function fileInputRefusal(el: unknown, count: number): string | null {
+	const element = el as PageElement & { multiple: boolean };
+	if (count > 1 && !element.multiple) return "Multiple file uploads only work with <input type=file multiple>";
+	if (element.tagName !== "INPUT" || element.type?.toLowerCase() !== "file") return "Node is not a file input element";
+	return null;
+}
+
+/** Give a file input `files` and fire the events a user's pick would; returns why it refused. Runs in the isolated world. */
+function assignInputFiles(el: unknown, files: unknown[]): string | null {
 	const element = el as PageElement & { multiple: boolean };
 	const page = globalThis as unknown as PageGlobals;
 	if (files.length > 1 && !element.multiple) return "Multiple file uploads only work with <input type=file multiple>";
 	if (element.tagName !== "INPUT" || element.type?.toLowerCase() !== "file") return "Node is not a file input element";
-	if (!parts) return null;
 	const transfer = new page.DataTransfer();
-	files.forEach((file, index) => {
-		transfer.items.add(
-			new page.File(parts[index] ?? [], file.name, { type: file.type, lastModified: file.lastModified }),
-		);
-	});
+	for (const file of files) transfer.items.add(file);
 	element.files = transfer.files;
 	element.dispatchEvent(new page.Event("input", { bubbles: true, composed: true }));
 	element.dispatchEvent(new page.Event("change", { bubbles: true }));
 	return null;
 }
 
-/**
- * Give a file input the files' contents instead of their paths, streamed in chunks. `handle` evaluates in the
- * isolated world, so the DataTransfer, File, Event and atob a page may replace are never the ones used.
- */
-export async function uploadFileContents(
-	handle: ElementHandle,
-	absolutePaths: string[],
-	signal?: AbortSignal,
-): Promise<void> {
-	const sources: UploadSource[] = [];
-	for (const absolute of absolutePaths) {
-		throwIfAborted(signal);
-		sources.push(await openUploadSource(absolute));
+/** Drop `files` on an element through the drag events a user's drop fires. Runs in the isolated world. */
+function dropUploadFiles(el: unknown, files: unknown[]): void {
+	const element = el as PageElement;
+	const page = globalThis as unknown as PageGlobals;
+	const transfer = new page.DataTransfer();
+	for (const file of files) transfer.items.add(file);
+	for (const type of ["dragenter", "dragover", "drop"]) {
+		element.dispatchEvent(new page.DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }));
 	}
-	const files = sources.map(source => source.info);
-	const refused = await untilAborted(signal, () => handle.evaluate(assignUploadParts, files, null));
-	if (refused) throw new ToolError(refused);
-	const parts = await untilAborted(signal, () => handle.evaluateHandle(() => [] as Uint8Array[][]));
+}
+
+/**
+ * Stream files into `realm` in chunks, several calls in flight, and return a handle to the built `File` array. The
+ * isolated world builds them, so the `File` and base64 decoding a page may replace are never the ones used.
+ */
+async function streamUploadFiles(
+	realm: Realm,
+	sources: UploadSource[],
+	signal: AbortSignal | undefined,
+): Promise<JSHandle<unknown[]>> {
+	const parts = await untilAborted(signal, () => realm.evaluateHandle(() => [] as Uint8Array[][]));
 	try {
-		for (const [index, { file, size }] of sources.entries()) {
-			for (let start = 0; start < size; start += UPLOAD_CHUNK_BYTES) {
-				const chunk = await untilAborted(signal, () => file.slice(start, start + UPLOAD_CHUNK_BYTES).arrayBuffer());
-				const data = Buffer.from(chunk).toString("base64");
-				await untilAborted(signal, () => parts.evaluate(appendUploadChunk, index, data));
+		const chunks = sources.flatMap(({ file, size }, index) =>
+			Array.from({ length: Math.ceil(size / UPLOAD_CHUNK_BYTES) }, (_, seq) => ({ file, index, seq })),
+		);
+		// The first failed chunk stops the others.
+		const stop = new AbortController();
+		const chunkSignal = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal;
+		let next = 0;
+		const send = async (): Promise<void> => {
+			while (next < chunks.length) {
+				const { file, index, seq } = chunks[next++]!;
+				const start = seq * UPLOAD_CHUNK_BYTES;
+				const bytes = await untilAborted(chunkSignal, () =>
+					file.slice(start, start + UPLOAD_CHUNK_BYTES).arrayBuffer(),
+				);
+				const data = Buffer.from(bytes).toString("base64");
+				await untilAborted(chunkSignal, () => parts.evaluate(storeUploadChunk, index, seq, data));
 			}
-		}
-		const late = await untilAborted(signal, () => handle.evaluate(assignUploadParts, files, parts));
-		if (late) throw new ToolError(late);
+		};
+		const senders = Math.min(UPLOAD_CHUNKS_IN_FLIGHT, chunks.length);
+		await Promise.all(
+			Array.from({ length: senders }, () =>
+				send().catch(error => {
+					stop.abort(error);
+					throw error;
+				}),
+			),
+		);
+		const files = sources.map(source => source.info);
+		return await untilAborted(signal, () => realm.evaluateHandle(buildUploadFiles, parts, files));
 	} finally {
 		await parts.dispose().catch(() => undefined);
 	}
 }
 
-/** Pages with a chooser-trigger upload in flight: a second one would catch the first one's chooser. */
-const pagesAwaitingChooser = new WeakSet<Page>();
+/** Fill a detached picker with `paths` and return its files, which the browser built from the paths itself. */
+async function pickFiles(realm: Realm, paths: string[], signal: AbortSignal | undefined): Promise<JSHandle<unknown[]>> {
+	const picker = await untilAborted(signal, () => realm.evaluateHandle(createFilePicker));
+	try {
+		const input = picker.asElement();
+		if (!input) throw new ToolError("Could not create a file picker to drop files from");
+		await untilAborted(signal, () => setFileInputPaths(input, paths));
+		return await untilAborted(signal, () => realm.evaluateHandle(pickedFiles, picker));
+	} finally {
+		await picker.dispose().catch(() => undefined);
+	}
+}
 
-/** A frame's isolated realm, `@internal` upstream and stripped from Puppeteer's published types. */
-interface IsolatedRealmFrame {
-	isolatedRealm(): { adoptBackendNode(backendNodeId: number): Promise<JSHandle> };
+/** Hand a file input the files: staged copies' paths, or contents streamed into the isolated world. */
+async function deliverToInput(
+	input: ElementHandle,
+	sources: UploadSource[],
+	route: UploadRoute,
+	staging: UploadStaging,
+	signal: AbortSignal | undefined,
+): Promise<void> {
+	if (route === "paths") {
+		const staged = await staging.stage(sources, signal);
+		await untilAborted(signal, () => setFileInputPaths(input, staged));
+		return;
+	}
+	const realm = input.frame.isolatedRealm();
+	const target = await untilAborted(signal, () => realm.adoptHandle(input));
+	try {
+		const files = await streamUploadFiles(realm, sources, signal);
+		try {
+			const refusal = await untilAborted(signal, () => realm.evaluate(assignInputFiles, target, files));
+			if (refusal) throw new ToolError(refusal);
+		} finally {
+			await files.dispose().catch(() => undefined);
+		}
+	} finally {
+		await target.dispose().catch(() => undefined);
+	}
+}
+
+/** Drop the files on an element, built from staged copies by a detached picker or from streamed contents. */
+async function deliverToDropZone(
+	zone: ElementHandle,
+	sources: UploadSource[],
+	route: UploadRoute,
+	staging: UploadStaging,
+	signal: AbortSignal | undefined,
+): Promise<void> {
+	const realm = zone.frame.isolatedRealm();
+	const target = await untilAborted(signal, () => realm.adoptHandle(zone));
+	try {
+		const files =
+			route === "paths"
+				? await pickFiles(realm, await staging.stage(sources, signal), signal)
+				: await streamUploadFiles(realm, sources, signal);
+		try {
+			await untilAborted(signal, () => realm.evaluate(dropUploadFiles, target, files));
+		} finally {
+			await files.dispose().catch(() => undefined);
+		}
+	} finally {
+		await target.dispose().catch(() => undefined);
+	}
 }
 
 /**
- * Click `handle` and hand the file chooser it opens the files' contents; false when no chooser opened.
- * Puppeteer's FileChooser accepts only paths and hides its input, so the chooser is caught on a CDP session of our own.
+ * An upload whose target is found. Finding it runs under the action deadline; `deliver` hands over the files, which for
+ * streamed contents takes time in proportion to their size, so it runs under its own, longer one.
  */
-async function fillClickedFileChooserWithContents(
+export interface PreparedUpload {
+	/** Bytes `deliver` hands over. */
+	readonly bytes: number;
+	deliver(signal: AbortSignal): Promise<void>;
+	/** Release what finding the target held: an unfilled chooser is cancelled. */
+	dispose(): Promise<void>;
+}
+
+function preparedUpload(
+	sources: UploadSource[],
+	deliver: (signal: AbortSignal) => Promise<void>,
+	dispose: () => Promise<void> = async () => {},
+): PreparedUpload {
+	return { bytes: sources.reduce((sum, source) => sum + source.size, 0), deliver, dispose };
+}
+
+/** Prepare an upload into a file input: open the files and check the input takes that many. */
+export async function prepareInputUpload(
+	input: ElementHandle,
+	absolutePaths: string[],
+	route: UploadRoute,
+	staging: UploadStaging,
+	signal?: AbortSignal,
+): Promise<PreparedUpload> {
+	const sources = await openUploadSources(absolutePaths, signal);
+	const refusal = await untilAborted(signal, () => input.evaluate(fileInputRefusal, sources.length));
+	if (refusal) throw new ToolError(refusal);
+	return preparedUpload(sources, sig => deliverToInput(input, sources, route, staging, sig));
+}
+
+/** Pages with a chooser-trigger upload in flight: a second one would catch the first one's chooser. */
+const pagesAwaitingChooser = new WeakSet<Page>();
+
+/**
+ * Click `handle` and return the file input of the chooser it opens, adopted into the isolated world; null when no
+ * chooser opened. Puppeteer's FileChooser accepts only paths and hides its input, so the chooser is caught on a CDP
+ * session of our own, which lets go of the interception as soon as the input is adopted.
+ */
+async function catchChooserInput(
 	page: Page,
 	handle: ElementHandle,
-	absolutePaths: string[],
 	label: string,
 	signal: AbortSignal | undefined,
-): Promise<boolean> {
-	if (pagesAwaitingChooser.has(page)) {
-		throw new ToolError(`${label} cannot run while another uploadFile on this tab waits for its file chooser`);
-	}
-	pagesAwaitingChooser.add(page);
+): Promise<ElementHandle | null> {
 	let timer: NodeJS.Timeout | undefined;
 	const creating = page.createCDPSession();
 	const session = await untilAborted(signal, () => creating).catch(error => {
 		// An abort does not stop the attach; detach the session once it arrives.
 		void creating.then(late => late.detach()).catch(() => undefined);
-		pagesAwaitingChooser.delete(page);
 		throw error;
 	});
 	try {
@@ -734,7 +878,7 @@ async function fillClickedFileChooserWithContents(
 		timer = setTimeout(() => resolve(null), FILE_CHOOSER_WAIT_MS);
 		await clickElement(handle, label, signal);
 		const chooser = await untilAborted(signal, () => opened);
-		if (!chooser) return false;
+		if (!chooser) return null;
 		if (chooser.backendNodeId === undefined) {
 			throw new ToolError(
 				`${label} opened a File System Access picker (showOpenFilePicker), which automation cannot fill; upload through the page's <input type=file> or drop zone instead`,
@@ -743,36 +887,46 @@ async function fillClickedFileChooserWithContents(
 		const { backendNodeId } = chooser;
 		const frame = page.frames().find(candidate => devtoolsFrameId(candidate) === chooser.frameId);
 		if (!frame) throw new ToolError(`${label} opened a file chooser in a frame that has since gone away`);
-		// The isolated world, like the direct-input route, so the page's own globals never touch the files.
-		// Puppeteer keeps the isolated realm and node adoption on internal APIs its public types omit.
-		const realm = (frame as unknown as IsolatedRealmFrame).isolatedRealm();
-		const node = await untilAborted(signal, () => realm.adoptBackendNode(backendNodeId));
-		try {
-			const input = node.asElement();
-			if (!input) throw new ToolError("Node is not a file input element");
-			await uploadFileContents(input, absolutePaths, signal);
-		} finally {
+		const node = await untilAborted(signal, () => frame.isolatedRealm().adoptBackendNode(backendNodeId));
+		const input = node.asElement();
+		if (!input) {
 			await node.dispose().catch(() => undefined);
+			throw new ToolError("Node is not a file input element");
 		}
-		return true;
+		return input;
 	} finally {
 		clearTimeout(timer);
 		// The relay serves every session of a tab from one debugger attachment, so detaching alone leaves it on.
 		await session.send("Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => undefined);
 		await session.detach().catch(() => undefined);
-		pagesAwaitingChooser.delete(page);
 	}
 }
 
-/** Upload files through an input, native chooser trigger, or synthetic drop-zone event sequence. */
-export async function uploadFilesToElement(
+/** Click `handle` and return the chooser it opens through Puppeteer, which fills it with paths; null when none opened. */
+async function catchChooser(
+	page: Page,
+	handle: ElementHandle,
+	label: string,
+	signal: AbortSignal | undefined,
+): Promise<FileChooser | null> {
+	const chooserPromise = page.waitForFileChooser({ timeout: FILE_CHOOSER_WAIT_MS }).catch(() => null);
+	await clickElement(handle, label, signal);
+	return await untilAborted(signal, () => chooserPromise);
+}
+
+/**
+ * Find what takes an upload through `handle`: the file input itself, the chooser its click opens, or else the element
+ * as a drop zone. `route` is how the browser gets the files; see {@link UploadStaging.route}.
+ */
+export async function prepareElementUpload(
 	page: Page,
 	handle: ElementHandle,
 	absolutePaths: string[],
 	label: string,
+	route: UploadRoute,
+	staging: UploadStaging,
 	signal?: AbortSignal,
-	delivery: UploadDelivery = "paths",
-): Promise<void> {
+): Promise<PreparedUpload> {
 	const inputType = (await untilAborted(signal, () =>
 		handle.evaluate(el => {
 			const element = el as unknown as PageElement;
@@ -780,45 +934,52 @@ export async function uploadFilesToElement(
 		}),
 	)) as { tag: string; type: string };
 	if (inputType.tag === "INPUT" && inputType.type.toLowerCase() === "file") {
-		if (delivery === "contents") {
-			await uploadFileContents(handle, absolutePaths, signal);
-			return;
-		}
-		await untilAborted(signal, () =>
-			(handle as unknown as { uploadFile: (...paths: string[]) => Promise<void> }).uploadFile(...absolutePaths),
-		);
-		return;
+		return await prepareInputUpload(handle, absolutePaths, route, staging, signal);
 	}
+	const sources = await openUploadSources(absolutePaths, signal);
 
-	if (delivery === "contents") {
-		if (await fillClickedFileChooserWithContents(page, handle, absolutePaths, label, signal)) return;
-	} else {
-		const chooserPromise = page.waitForFileChooser({ timeout: FILE_CHOOSER_WAIT_MS }).catch(() => null);
-		await clickElement(handle, label, signal);
-		const chooser = await untilAborted(signal, () => chooserPromise);
-		if (chooser) {
-			await untilAborted(signal, () => chooser.accept(absolutePaths));
-			return;
-		}
+	if (pagesAwaitingChooser.has(page)) {
+		throw new ToolError(`${label} cannot run while another uploadFile on this tab waits for its file chooser`);
 	}
-
-	const files = await readFilePayloads(absolutePaths, signal);
-	await untilAborted(signal, () =>
-		handle.evaluate((el, payloads) => {
-			const element = el as unknown as PageElement;
-			const page = globalThis as unknown as PageGlobals;
-			const transfer = new page.DataTransfer();
-			for (const payload of payloads) {
-				const bytes = Uint8Array.from(atob(payload.data), character => character.charCodeAt(0));
-				transfer.items.add(new page.File([bytes], payload.name, { type: payload.type }));
-			}
-			for (const type of ["dragenter", "dragover", "drop"]) {
-				element.dispatchEvent(
-					new page.DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }),
+	pagesAwaitingChooser.add(page);
+	try {
+		if (route === "paths") {
+			const chooser = await catchChooser(page, handle, label, signal);
+			if (chooser) {
+				let handled = false;
+				return preparedUpload(
+					sources,
+					async sig => {
+						const staged = await staging.stage(sources, sig);
+						handled = true;
+						await untilAborted(sig, () => chooser.accept(staged));
+					},
+					async () => {
+						if (!handled) await chooser.cancel().catch(() => undefined);
+					},
 				);
 			}
-		}, files),
-	);
+		} else {
+			const input = await catchChooserInput(page, handle, label, signal);
+			if (input) {
+				try {
+					const refusal = await untilAborted(signal, () => input.evaluate(fileInputRefusal, sources.length));
+					if (refusal) throw new ToolError(refusal);
+				} catch (error) {
+					await input.dispose().catch(() => undefined);
+					throw error;
+				}
+				return preparedUpload(
+					sources,
+					sig => deliverToInput(input, sources, route, staging, sig),
+					() => input.dispose().catch(() => undefined),
+				);
+			}
+		}
+	} finally {
+		pagesAwaitingChooser.delete(page);
+	}
+	return preparedUpload(sources, sig => deliverToDropZone(handle, sources, route, staging, sig));
 }
 
 /** Press a keyboard key without releasing it. */

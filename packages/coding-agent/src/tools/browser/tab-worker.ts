@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { postmortem, Snowflake, untilAborted, withTimeout } from "@oh-my-pi/pi-utils";
+import { formatBytes, postmortem, Snowflake, untilAborted, withTimeout } from "@oh-my-pi/pi-utils";
 import type { HTMLElement } from "@oh-my-pi/pi-utils/dom";
 import type {
 	Accessibility,
@@ -182,10 +182,10 @@ import {
 	pressKey,
 	selectElementOptions,
 	setElementChecked,
+	type PreparedUpload,
+	prepareElementUpload,
+	prepareInputUpload,
 	type ScrollOptions,
-	type UploadDelivery,
-	uploadFileContents,
-	uploadFilesToElement,
 	wheel,
 } from "./interactions";
 import {
@@ -218,6 +218,7 @@ import {
 import { navigateMainFrame, pushState, reloadPage, traverseHistory, type NavigationWaitUntil } from "./navigation";
 
 import { cloneSafe, RunOutput } from "./run-output";
+import { UploadStaging } from "./upload-files";
 import type {
 	Observation,
 	ObservationEntry,
@@ -620,6 +621,32 @@ async function runGuardedHandleAction<T>(
 	}
 }
 
+/** How an actionable handle uploads files: `prepare` runs under the action deadline, delivery under `deliverGuard`. */
+export interface HandleUploads {
+	prepare(filePaths: string[], signal: AbortSignal): Promise<PreparedUpload>;
+	/** A guard with a deadline long enough to stream a large file. */
+	deliverGuard: HandleOpGuard;
+}
+
+async function uploadThroughHandle(
+	handle: ElementHandle,
+	state: RawHandleMethods,
+	filePaths: string[],
+	guard: HandleOpGuard,
+	uploads: HandleUploads,
+	invalidate?: () => Promise<void>,
+): Promise<void> {
+	const label = "handle.uploadFile()";
+	const prepared = await guard(label, signal =>
+		runGuardedHandleAction(handle, state, label, signal, () => uploads.prepare(filePaths, signal), invalidate),
+	);
+	try {
+		await uploads.deliverGuard(`${label} sending ${formatBytes(prepared.bytes)}`, signal => prepared.deliver(signal));
+	} finally {
+		await prepared.dispose();
+	}
+}
+
 /**
  * Re-home element handles in `args` into `realm` so they can be passed to an
  * evaluation there. The stealth patch resolves selectors (`tab.waitForSelector`,
@@ -685,7 +712,7 @@ export function toActionableHandle(
 	handle: ElementHandle,
 	guard?: HandleOpGuard,
 	invalidate?: () => Promise<void>,
-	uploadFiles?: (filePaths: string[], signal: AbortSignal) => Promise<void>,
+	uploads?: HandleUploads,
 ): ActionableHandle {
 	const enriched = handle as HandleWithRawMethods;
 	const methods = enriched as unknown as Partial<Record<GuardedHandleMethod, RawHandleMethod>>;
@@ -841,18 +868,16 @@ export function toActionableHandle(
 				invalidate,
 			),
 		);
-	if (uploadFiles) {
-		enriched.uploadFile = (...filePaths: string[]) =>
-			guard<void>("handle.uploadFile()", signal =>
-				runGuardedHandleAction(
-					enriched,
-					originals,
-					"handle.uploadFile()",
-					signal,
-					() => uploadFiles(filePaths, signal),
-					invalidate,
-				),
-			);
+	const clearFiles = methods.uploadFile;
+	if (uploads) {
+		enriched.uploadFile = async (...filePaths: string[]) => {
+			// With no paths Puppeteer's own method clears the input; there is nothing to route.
+			if (!filePaths.length && clearFiles) {
+				await clearFiles();
+				return;
+			}
+			await uploadThroughHandle(enriched, originals, filePaths, guard, uploads, invalidate);
+		};
 	}
 	return enrichElementQueries(enriched, guard);
 }
@@ -1383,8 +1408,8 @@ export class WorkerCore {
 	#uninstallRejectionGuard: () => void;
 	#mode?: WorkerInitPayload["mode"];
 	#activateForScreenshot = true;
-	/** A browser the user drives (connected, relay) reads paths under its own permissions, so it gets file contents. */
-	#uploadDelivery: UploadDelivery = "paths";
+	/** Staged copies and the upload route this tab's browser connection takes. */
+	readonly #uploads = new UploadStaging();
 	#dialogs?: RuntimeDialogController;
 	#network?: BrowserNetworkManager;
 	#initScripts?: InitScriptManager;
@@ -1531,7 +1556,6 @@ export class WorkerCore {
 		try {
 			this.#mode = payload.mode;
 			this.#activateForScreenshot = payload.mode === "headless" || payload.activateForScreenshot !== false;
-			this.#uploadDelivery = payload.mode === "attach" && payload.userDriven === true ? "contents" : "paths";
 			const puppeteer = await loadPuppeteerInWorker(payload.safeDir);
 			registerSemanticQueryHandlers(puppeteer);
 			this.#browser = await connectPuppeteer(puppeteer, {
@@ -2140,15 +2164,17 @@ export class WorkerCore {
 					this.#clearElementCache();
 					await this.#stopLoading();
 				},
-				// A user-driven browser gets contents through handles too, from session-relative paths like `tab.uploadFile`.
-				this.#uploadDelivery === "contents"
-					? (filePaths, sig) =>
-							uploadFileContents(
-								handle,
-								filePaths.map(filePath => resolveToCwd(filePath, session.cwd)),
-								sig,
-							)
-					: undefined,
+				{
+					prepare: async (filePaths, sig) =>
+						prepareInputUpload(
+							handle,
+							filePaths.map(filePath => resolveToCwd(filePath, session.cwd)),
+							await this.#uploads.route(page, sig),
+							this.#uploads,
+							sig,
+						),
+					deliverGuard: (label, fn) => op(label, budgetBound, fn),
+				},
 			);
 		return {
 			name,
@@ -2400,13 +2426,26 @@ export class WorkerCore {
 					sig => this.#select(selector, values, actionOpMs, sig),
 					{ selector, zeroMatchAfterMs: ZERO_MATCH_FAIL_FAST_MS },
 				),
-			uploadFile: (selector, ...filePaths) =>
-				op(
-					`tab.uploadFile(${JSON.stringify(selector)})`,
-					actionOpMs,
-					sig => this.#uploadFile(selector, filePaths, actionOpMs, sig, session),
-					{ selector, zeroMatchAfterMs: ZERO_MATCH_FAIL_FAST_MS },
-				),
+			uploadFile: (selector, ...filePaths) => {
+				const label = `tab.uploadFile(${JSON.stringify(selector)})`;
+				return markHandled(
+					(async () => {
+						const prepared = await op(
+							label,
+							actionOpMs,
+							sig => this.#prepareTabUpload(selector, filePaths, label, actionOpMs, sig, session),
+							{ selector, zeroMatchAfterMs: ZERO_MATCH_FAIL_FAST_MS },
+						);
+						try {
+							await op(`${label} sending ${formatBytes(prepared.bytes)}`, budgetBound, sig =>
+								prepared.deliver(sig),
+							);
+						} finally {
+							await prepared.dispose();
+						}
+					})(),
+				);
+			},
 			waitForUrl: (pattern, opts) => {
 				const w = waitMs(opts?.timeout);
 				return op("tab.waitForUrl()", w, sig => this.#waitForUrl(pattern, w, sig));
@@ -3086,27 +3125,32 @@ export class WorkerCore {
 		}
 	}
 
-	async #uploadFile(
+	/** Find what takes a `tab.uploadFile` under the action deadline; the result owns the resolved handle. */
+	async #prepareTabUpload(
 		selector: string,
 		filePaths: string[],
+		label: string,
 		timeoutMs: number,
 		signal: AbortSignal,
 		session: SessionSnapshot,
-	): Promise<void> {
+	): Promise<PreparedUpload> {
 		if (!filePaths.length) throw new ToolError("tab.uploadFile() requires at least one file path");
+		const page = this.#requirePage();
 		const handle = await this.#resolveActionHandle(selector, timeoutMs, signal);
 		try {
 			const absolute = filePaths.map(filePath => resolveToCwd(filePath, session.cwd));
-			await uploadFilesToElement(
-				this.#requirePage(),
-				handle,
-				absolute,
-				`tab.uploadFile(${JSON.stringify(selector)})`,
-				signal,
-				this.#uploadDelivery,
-			);
-		} finally {
+			const route = await this.#uploads.route(page, signal);
+			const prepared = await prepareElementUpload(page, handle, absolute, label, route, this.#uploads, signal);
+			return {
+				...prepared,
+				dispose: async () => {
+					await prepared.dispose();
+					await handle.dispose().catch(() => undefined);
+				},
+			};
+		} catch (error) {
 			await handle.dispose().catch(() => undefined);
+			throw error;
 		}
 	}
 
@@ -3252,6 +3296,8 @@ export class WorkerCore {
 		await this.#consoleCapture.detach();
 		this.#emulation?.dispose();
 		if (this.#mode === "headless" && page && !page.isClosed()) await page.close().catch(() => undefined);
+		// Chrome reads a picked file lazily, so the staged copies last until omp lets go of the tab.
+		await this.#uploads.dispose();
 		if (this.#browser?.connected) this.#browser.disconnect();
 		this.#transport.send({ type: "closed" });
 		this.#transport.close();
