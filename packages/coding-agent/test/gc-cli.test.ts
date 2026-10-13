@@ -2710,7 +2710,8 @@ describe("runGcCommand session compression", () => {
 			id: nestedId,
 			timestamp: "2026-01-01T00:00:00.000Z",
 		});
-		await Bun.write(nested, `${header}\n${filler}`);
+		// Leading JSON whitespace still parses as a header, so it must not hide the transcript.
+		await Bun.write(nested, `\n  ${header}\n${filler}`);
 		await agePathSubMs(nested, 30);
 		const release = new FileSessionStorage().claimSession(nestedId, nested);
 		if (!release) throw new Error("Expected to claim the nested session lease");

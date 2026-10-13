@@ -66,6 +66,8 @@ const GC_WRITE_GRACE_MS = 5 * 60_000;
 const SESSION_SUFFIX = ".jsonl";
 const COMPRESSED_SESSION_SUFFIX = ".jsonl.gz";
 const GC_LOCK_BREAKER_SUFFIX = ".break";
+/** Bytes sampled to rule out a session header before streaming an artifact. */
+const HEADER_SNIFF_BYTES = 4096;
 /**
  * Minimum age before a dangling session pointer is pruned. A lazy session's
  * marker and fresh breadcrumb name a transcript that is not on disk until its
@@ -1887,12 +1889,14 @@ async function collectSessionFiles(session: SessionInfo): Promise<string[]> {
 }
 
 /**
- * Session id in `file`'s header, or undefined when it has none. Only a file
- * whose first byte opens a JSON record (the header or the title slot before
- * it) is streamed, so binary and plain-text artifacts cost a one-byte read.
+ * Session id in `file`'s header, or undefined when it has none. A file is
+ * streamed only when its first byte past JSON whitespace opens a record (the
+ * header or the title slot before it), or when its sampled prefix is all
+ * whitespace; other binary and plain-text artifacts cost one small read.
  */
 async function readArtifactSessionId(file: string): Promise<string | undefined> {
-	if ((await Bun.file(file).slice(0, 1).text()) !== "{") return undefined;
+	const prefix = (await Bun.file(file).slice(0, HEADER_SNIFF_BYTES).text()).replace(/^[ \t\r\n]+/, "");
+	if (prefix !== "" && prefix[0] !== "{") return undefined;
 	return readSessionHeaderId(file);
 }
 
