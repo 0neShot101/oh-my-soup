@@ -15,17 +15,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { $ } from "bun";
 import { dlopen, FFIType, ptr } from "bun:ffi";
+import { COMPRESS_SCRATCH_PREFIX } from "@oh-my-pi/omp-stats/parser";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { FileSessionStorage } from "../session/session-storage";
 import { errorMessage } from "../slash-commands/helpers/parse";
 import { sha256File } from "../utils/file-hash";
 
-/**
- * Name prefix of the scratch directory `mkdtemp` creates beside the files of
- * one APFS batch. A crashed run can leave one behind; the next
- * `omp gc --compress --apply` removes it.
- */
-export const COMPRESS_SCRATCH_PREFIX = ".omp-gc-compress-";
 const SCRATCH_GLOB = new Bun.Glob(`**/${COMPRESS_SCRATCH_PREFIX}*`);
 /**
  * Written into each scratch directory before anything else, so the sweep
@@ -206,11 +201,13 @@ export async function sweepCompressScratch(roots: string[], apply: boolean, erro
  * APFS: each directory's files are copied with compression into a scratch
  * directory beside them, and a copy replaces its original only when its size
  * and SHA-256 match and the original is unchanged since it was selected.
- * NTFS: the filesystem compresses each file in place.
+ * Paths in `transcripts` (files with a session header) swap under the session
+ * publish lock. NTFS: the filesystem compresses each file in place.
  */
 export async function compressFilesInPlace(
 	candidates: CompressCandidate[],
 	method: CompressMethod,
+	transcripts: ReadonlySet<string>,
 ): Promise<CompressBatchResult> {
 	const result: CompressBatchResult = { compressed: 0, allocatedAfter: 0, errors: [] };
 	if (method === "ntfs") {
@@ -228,7 +225,7 @@ export async function compressFilesInPlace(
 	}
 	for (const [dir, group] of byDir) {
 		for (let start = 0; start < group.length; start += DITTO_BATCH) {
-			await compressBatch(dir, group.slice(start, start + DITTO_BATCH), result);
+			await compressBatch(dir, group.slice(start, start + DITTO_BATCH), transcripts, result);
 		}
 	}
 	return result;
@@ -238,8 +235,10 @@ async function compactBatch(batch: CompressCandidate[], result: CompressBatchRes
 	for (const candidate of batch) result.allocatedAfter += candidate.allocated;
 	// LZNT1 rather than `/exe` (WOF) compression: WOF inflates the whole file on
 	// its next write, so a resumed session would lose all its savings. LZNT1
-	// compresses in place, so a concurrent appender cannot lose data.
-	const run = await $`compact /c /q ${batch.map(candidate => candidate.path)}`.quiet().nothrow();
+	// compresses in place, so a concurrent appender cannot lose data. `/i` keeps
+	// going past a file that fails (one held open) instead of stopping the batch;
+	// `/a` because compact documents Hidden and System files as excluded by default.
+	const run = await $`compact /c /i /a /q ${batch.map(candidate => candidate.path)}`.quiet().nothrow();
 	if (run.exitCode !== 0) {
 		const output = `${run.stdout.toString()}${run.stderr.toString()}`.trim().split("\n").slice(-3).join(" ");
 		result.errors.push(`compact exited ${run.exitCode}: ${output}`);
@@ -256,21 +255,33 @@ async function compactBatch(batch: CompressCandidate[], result: CompressBatchRes
 	}
 }
 
-/** The file at `candidate.path` is still the one selected: same inode, size, and mtime. */
+/**
+ * The file at `candidate.path` is still the one selected: same inode, size,
+ * and mtime, and still its only link (a hard link added since selection would
+ * be split from it by the rename).
+ */
 function unchangedSinceSelection(candidate: CompressCandidate): boolean {
 	const current = fsSync.lstatSync(candidate.path, { bigint: true });
 	return (
-		current.ino === candidate.ino && current.size === BigInt(candidate.bytes) && current.mtimeNs === candidate.mtimeNs
+		current.ino === candidate.ino &&
+		current.nlink === 1n &&
+		current.size === BigInt(candidate.bytes) &&
+		current.mtimeNs === candidate.mtimeNs
 	);
 }
 
 /**
  * Rename `copyPath` over `candidate.path` if the original is unchanged, checked
- * immediately before the rename. Transcripts (`.jsonl`) swap under the session
- * publish lock, which serializes them against appends from any omp binary.
+ * immediately before the rename. Transcripts swap under the session publish
+ * lock, which serializes them against appends from any omp binary.
  */
-function swapIfUnchanged(storage: FileSessionStorage, candidate: CompressCandidate, copyPath: string): boolean {
-	if (candidate.path.endsWith(".jsonl")) {
+function swapIfUnchanged(
+	storage: FileSessionStorage,
+	candidate: CompressCandidate,
+	copyPath: string,
+	transcript: boolean,
+): boolean {
+	if (transcript) {
 		return storage.replaceSessionFileSync(candidate.path, copyPath, () => unchangedSinceSelection(candidate));
 	}
 	if (!unchangedSinceSelection(candidate)) return false;
@@ -286,7 +297,12 @@ async function sha256Files(files: string[]): Promise<string[]> {
 	return digests;
 }
 
-async function compressBatch(dir: string, batch: CompressCandidate[], result: CompressBatchResult): Promise<void> {
+async function compressBatch(
+	dir: string,
+	batch: CompressCandidate[],
+	transcripts: ReadonlySet<string>,
+	result: CompressBatchResult,
+): Promise<void> {
 	// Every candidate counts at its current allocation until its compressed copy replaces it,
 	// so failed and skipped files are still reported as occupying disk.
 	for (const candidate of batch) result.allocatedAfter += candidate.allocated;
@@ -315,7 +331,7 @@ async function compressBatch(dir: string, batch: CompressCandidate[], result: Co
 				// Incompressible: APFS stored the copy uncompressed, so the original stays.
 				if (copied.blocks * 512 >= candidate.allocated) continue;
 				// ditto copied the nanosecond mtime; the rename keeps it.
-				if (!swapIfUnchanged(storage, candidate, copyPath)) continue;
+				if (!swapIfUnchanged(storage, candidate, copyPath, transcripts.has(candidate.path))) continue;
 				result.compressed += 1;
 				result.allocatedAfter += copied.blocks * 512 - candidate.allocated;
 			} catch (error) {

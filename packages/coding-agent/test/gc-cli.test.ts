@@ -2702,14 +2702,16 @@ describe("runGcCommand session compression", () => {
 	test.skipIf(!supported)("leaves a session uncompressed while a nested transcript is live", async () => {
 		const parent = await writeIdleSession(Bun.randomUUIDv7());
 		const nestedId = Bun.randomUUIDv7();
-		const nested = path.join(path.dirname(parent.artifact), "0-subagent.jsonl");
+		// `--session` opens any path, so the transcript is found by its header, not its name.
+		const nested = path.join(path.dirname(parent.artifact), "0-subagent.log");
 		const header = JSON.stringify({
 			type: "session",
 			version: 3,
 			id: nestedId,
 			timestamp: "2026-01-01T00:00:00.000Z",
 		});
-		await Bun.write(nested, `${header}\n${filler}`);
+		// Leading JSON whitespace still parses as a header, so it must not hide the transcript.
+		await Bun.write(nested, `\n  ${header}\n${filler}`);
 		await agePathSubMs(nested, 30);
 		const release = new FileSessionStorage().claimSession(nestedId, nested);
 		if (!release) throw new Error("Expected to claim the nested session lease");
@@ -2734,6 +2736,18 @@ describe("runGcCommand session compression", () => {
 
 		expect(result.compress).toMatchObject({ skippedLive: 0, compressed: 2 });
 		expect(await fs.readFile(interrupted.file)).toEqual(bytes);
+	});
+
+	test.skipIf(!supported)("compresses a session whose artifact tree holds a copy of its transcript", async () => {
+		const { file, artifact } = await writeIdleSession(Bun.randomUUIDv7());
+		// A plain copy keeps the parent's session id; leasing that id twice must not read as live.
+		const copy = path.join(path.dirname(artifact), "backup.jsonl");
+		await fs.copyFile(file, copy);
+		await agePathSubMs(copy, 30);
+
+		const result = await runGcCommand({ flags: { agentDir: root, compress: true, apply: true } });
+
+		expect(result.compress).toMatchObject({ skippedLive: 0, compressed: 3 });
 	});
 
 	test.skipIf(!supported)("--compress-after-days overrides gc.compressAfterDays", async () => {

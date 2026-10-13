@@ -5,6 +5,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGunzip, createGzip } from "node:zlib";
 import { withStatsSyncLock } from "@oh-my-pi/omp-stats/aggregator";
+import { isCompressScratchPath } from "@oh-my-pi/omp-stats/parser";
 import {
 	formatBytes,
 	getAgentDir,
@@ -33,7 +34,6 @@ import { FileSessionStorage, SESSION_STAGING_RE, tryAcquireSessionLease } from "
 import {
 	type CompressCandidate,
 	type CompressMethod,
-	COMPRESS_SCRATCH_PREFIX,
 	compressCandidate,
 	compressFilesInPlace,
 	compressMethod,
@@ -66,6 +66,8 @@ const GC_WRITE_GRACE_MS = 5 * 60_000;
 const SESSION_SUFFIX = ".jsonl";
 const COMPRESSED_SESSION_SUFFIX = ".jsonl.gz";
 const GC_LOCK_BREAKER_SUFFIX = ".break";
+/** Bytes sampled to rule out a session header before streaming an artifact. */
+const HEADER_SNIFF_BYTES = 4096;
 /**
  * Minimum age before a dangling session pointer is pruned. A lazy session's
  * marker and fresh breadcrumb name a transcript that is not on disk until its
@@ -1877,7 +1879,7 @@ async function collectSessionFiles(session: SessionInfo): Promise<string[]> {
 	const files = [session.path];
 	try {
 		for await (const name of ANY_FILE_GLOB.scan({ cwd: artifactsDir, dot: true, onlyFiles: true })) {
-			if (name.split(/[\\/]/).some(part => part.startsWith(COMPRESS_SCRATCH_PREFIX))) continue;
+			if (isCompressScratchPath(name)) continue;
 			files.push(path.join(artifactsDir, name));
 		}
 	} catch (error) {
@@ -1887,22 +1889,52 @@ async function collectSessionFiles(session: SessionInfo): Promise<string[]> {
 }
 
 /**
- * Leases of the transcripts nested in a session's artifact tree (subagent
- * sessions), which a process can open on their own. Null, with every lease
- * taken so far released, when any of them is live.
+ * Session id in `file`'s header, or undefined when it has none. A file is
+ * streamed only when its first byte past JSON whitespace opens a record (the
+ * header or the title slot before it), or when its sampled prefix is all
+ * whitespace; other binary and plain-text artifacts cost one small read.
  */
-async function tryAcquireNestedLeases(session: SessionInfo, files: string[]): Promise<FileLockHandle[] | null> {
+async function readArtifactSessionId(file: string): Promise<string | undefined> {
+	const prefix = (await Bun.file(file).slice(0, HEADER_SNIFF_BYTES).text()).replace(/^[ \t\r\n]+/, "");
+	if (prefix !== "" && prefix[0] !== "{") return undefined;
+	return readSessionHeaderId(file);
+}
+
+/**
+ * Leases of every transcript in a session: its own and those nested in its
+ * artifact tree (subagent sessions, or any file a process can open with
+ * `--session`), found by their session header rather than their name. Each
+ * session id is leased once, so a copied transcript that shares an id does
+ * not read as live. Null, with every lease taken so far released, when any of
+ * them is live or cannot be probed (an unknown owner counts as live).
+ */
+async function tryAcquireSessionTreeLeases(
+	session: SessionInfo,
+	files: string[],
+): Promise<{ leases: FileLockHandle[]; transcripts: Set<string> } | null> {
 	const leases: FileLockHandle[] = [];
+	const leasedIds = new Set<string>();
+	const transcripts = new Set<string>([session.path]);
 	for (const file of files) {
-		if (file === session.path || !file.endsWith(".jsonl")) continue;
-		const lease = await tryAcquireSessionFileLease(file);
+		let lease: FileLockHandle | null;
+		try {
+			const sessionId = await readArtifactSessionId(file);
+			if (sessionId === undefined) continue;
+			transcripts.add(file);
+			if (leasedIds.has(sessionId)) continue;
+			lease = tryAcquireSessionLease(sessionId);
+			if (lease) leasedIds.add(sessionId);
+		} catch (error) {
+			if (codeOf(error) === "ENOENT") continue;
+			lease = null;
+		}
 		if (lease === null) {
 			for (const held of leases) held.release();
 			return null;
 		}
-		if (lease) leases.push(lease);
+		leases.push(lease);
 	}
-	return leases;
+	return { leases, transcripts };
 }
 
 /**
@@ -1964,15 +1996,10 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 			}
 		}
 		if (candidates.length === 0) continue;
-		const lease = await tryAcquireSessionFileLease(session.path);
-		if (lease === null) {
-			result.skippedLive += 1;
-			continue;
-		}
-		let nested: FileLockHandle[] | null = [];
+		let tree: { leases: FileLockHandle[]; transcripts: Set<string> } | null = null;
 		try {
-			nested = await tryAcquireNestedLeases(session, files);
-			if (nested === null) {
+			tree = await tryAcquireSessionTreeLeases(session, files);
+			if (tree === null) {
 				result.skippedLive += 1;
 				continue;
 			}
@@ -1983,7 +2010,7 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 				result.allocatedBefore += candidate.allocated;
 			}
 			if (!options.apply) continue;
-			const batch = await compressFilesInPlace(candidates, method);
+			const batch = await compressFilesInPlace(candidates, method, tree.transcripts);
 			result.compressed += batch.compressed;
 			result.allocatedAfter += batch.allocatedAfter;
 			result.errors.push(...batch.errors);
@@ -1991,8 +2018,7 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 			result.errors.push(`${session.path}: ${errorMessage(error)}`);
 		} finally {
 			// Held through the rewrite so no omp process resumes the session mid-swap.
-			for (const held of nested ?? []) held.release();
-			lease?.release();
+			for (const held of tree?.leases ?? []) held.release();
 		}
 	}
 	return result;
