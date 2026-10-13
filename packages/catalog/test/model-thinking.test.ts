@@ -613,6 +613,12 @@ describe("model thinking derivation", () => {
 				expect(mapEffortToGoogleThinkingLevel(Effort.Medium, argon)).toBe("MEDIUM");
 			}
 		}
+
+		// The Argon ladder must not leak onto other Gemini 4 lines: Pro keeps
+		// its own low/high ladder (and must not tie with it).
+		const vertexPro4 = createModel({ id: "gemini-4-pro", api: "google-vertex", provider: "google-vertex" });
+		expect(vertexPro4.thinking?.mode).toBe("google-level");
+		expect(getSupportedEfforts(vertexPro4)).toEqual([Effort.Low, Effort.High]);
 	});
 
 	it("bakes requiresEffort for Gemini 3.x on any provider and backfills explicit metadata", () => {

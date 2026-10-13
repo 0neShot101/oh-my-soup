@@ -66,9 +66,9 @@ class "gemini" {
 			}
 		}
 	}
-	// Gemini 3.7+ Flash and Gemini 4 native thinkingLevel does not accept
+	// Gemini 3.7+ Flash and Gemini 4 Argon native thinkingLevel does not accept
 	// `minimal` (400 THINKING_LEVEL_MINIMAL; observed on Flash 3.7 and 3.8, and
-	// documented for Gemini 4 Argon and its Cyber Permissive variant). Only the direct
+	// documented for Argon and Argon Cyber Permissive). Only the direct
 	// google-level transports emit `thinkingLevel` on the wire, so the tier is
 	// dropped there; budget (anthropic-messages) and reasoning_effort resellers
 	// never send the rejected value and keep the four-tier ladder. The collapsed
@@ -82,7 +82,8 @@ class "gemini" {
 				thinking-efforts "low" "medium" "high"
 			}
 		}
-		revision ">=4" {
+		// Exact ids: a revision-wide rule would tie with the Pro low/high ladder.
+		models "gemini-4-argon" "gemini-4-argon-cyber-permissive" {
 			thinking-efforts "low" "medium" "high"
 		}
 	}

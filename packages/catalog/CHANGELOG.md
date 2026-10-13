@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed Gemini 4 Argon on Google Vertex and the Gemini API failing every request with "Thinking budget is not supported for this model": Gemini 4 now sends `thinkingLevel` instead of `thinkingBudget`, and offers only the low, medium, and high levels Google accepts
+- Fixed Gemini 4 Argon on Google Vertex and the Gemini API failing every request with "Thinking budget is not supported for this model": Gemini 4 now sends `thinkingLevel` instead of `thinkingBudget`, and Argon offers only the low, medium, and high levels Google accepts ([#15643](https://github.com/can1357/oh-my-pi/pull/15643) by [@kevcube](https://github.com/kevcube))
 
 ## [18.10.4] - 2026-10-13
 
