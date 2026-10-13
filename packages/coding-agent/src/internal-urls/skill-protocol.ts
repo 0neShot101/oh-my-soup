@@ -40,6 +40,13 @@ import type {
 class UnknownSkillError extends Error {}
 
 /**
+ * Most an unknown `skill://` name waits for still-connecting MCP servers to advertise it: long
+ * enough for a healthy handshake, short enough that a hung server or its reconnect ladder cannot
+ * hold a read of a typo'd or disabled skill name for the rest of the turn.
+ */
+const UNKNOWN_SKILL_MCP_WAIT_MS = 5_000;
+
+/**
  * Path a skill:// URL addresses, after traversal and plugin-root containment
  * checks. A bare URL addresses the skill's instruction file, or its base
  * directory when `directory` is set. The path may not exist; with `create`, a
@@ -133,6 +140,7 @@ export class SkillProtocolHandler implements ProtocolHandler {
 			// Loaded skills always win; otherwise serve the resource an MCP server advertises under
 			// exactly this URI (Figma's `skill://figma/figma-use/SKILL.md`). Templates stay behind `mcp://`.
 			// A deferred MCP startup that fails cannot change the diagnosis: the skill is still unknown.
+			// Most such names are not MCP resources at all, so the wait for connecting servers is capped.
 			let mcpManager: MCPManager | undefined;
 			try {
 				mcpManager = await MCPManager.load();
@@ -142,7 +150,12 @@ export class SkillProtocolHandler implements ProtocolHandler {
 				throw error;
 			}
 			const resource =
-				mcpManager && (await readMcpResource(mcpManager, url, { exact: true, signal: context?.signal }));
+				mcpManager &&
+				(await readMcpResource(mcpManager, url, {
+					exact: true,
+					waitMs: UNKNOWN_SKILL_MCP_WAIT_MS,
+					signal: context?.signal,
+				}));
 			if (!resource) throw error;
 			// The server, not a loaded skill, sizes this text: keep `read`'s normal result limits.
 			return { ...resource, unbounded: false };

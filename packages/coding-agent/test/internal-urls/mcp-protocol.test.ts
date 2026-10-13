@@ -6,6 +6,8 @@ import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { loadSkillsFromDir } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import { readMcpResource } from "@oh-my-pi/pi-coding-agent/internal-urls/mcp-protocol";
+import { parseInternalUrl } from "@oh-my-pi/pi-coding-agent/internal-urls/parse";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import type { MCPResource, MCPResourceReadResult, MCPResourceTemplate } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -717,6 +719,16 @@ describe("skill:// falls back to an MCP resource with the same URI", () => {
 				name: "AbortError",
 			});
 		}
+	});
+
+	it("gives up on a server that never settles once the wait budget is spent, without an abort", async () => {
+		const manager = createMockManager({
+			servers: [],
+			// A hung handshake or reconnect ladder: nothing ever settles and no signal is passed.
+			waitForPendingConnections: () => Promise.withResolvers<void>().promise,
+		});
+		const reading = readMcpResource(manager, parseInternalUrl("skill://nope"), { exact: true, waitMs: 20 });
+		expect(await withTimeout(reading, 2_000, "bounded wait never ended")).toBeUndefined();
 	});
 
 	it("runs the deferred MCP loader once and installs its manager for later reads", async () => {
