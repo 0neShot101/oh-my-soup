@@ -572,14 +572,15 @@ describe("devin native display filtering", () => {
 		expect(find("fusion-kimi-k3-sidekick-swe-2-high")).toBeUndefined();
 		expect(wireId("fusion-sidekick-swe-2-high")).toBeUndefined();
 		expect(wireId("fusion")).toBeUndefined();
-		// Only the lead runs, so limits and pricing are the lead's — including
-		// the lead's own cache-write rate and long-context tier — not the
-		// composite card's.
+		// Only the lead runs, so limits and pricing are the lead's, not the
+		// composite card's. Discovery carries the lead's card as reported; the
+		// lead's own cache-write rate and long-context tier apply at build.
 		const routed = find("fusion-gpt-6-sol-high-sidekick-swe-2-high");
 		expect(routed?.contextWindow).toBe(400_000);
 		expect(routed?.maxTokens).toBe(128_000);
 		expect(routed?.input).toEqual(["text", "image"]);
-		expect(routed?.cost).toEqual({
+		expect(routed?.cost).toEqual({ input: 2, output: 8, cacheRead: 0, cacheWrite: 0 });
+		expect(buildModel(routed!).cost).toEqual({
 			input: 2,
 			output: 8,
 			cacheRead: 0,
@@ -871,5 +872,12 @@ describe("devin catalog pricing", () => {
 			cacheRead: 0.4,
 			cacheWrite: 0,
 		});
+	});
+
+	it("leaves generations Devin publishes no tier for untiered", () => {
+		for (const id of ["gpt-7-sol", "gemini-4-pro", "grok-5"]) {
+			const model = buildModel(spec(id, { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 }));
+			expect(model.cost.longContext).toBeUndefined();
+		}
 	});
 });

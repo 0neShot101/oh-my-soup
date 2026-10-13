@@ -113,11 +113,13 @@ provider "devin" {
 	// total prompt tokens (uncached input, cache reads, and cache writes)
 	// exceed the threshold. GPT and Gemini Pro tiers double input and cache
 	// rates and raise output 1.5x; Grok doubles every leg. Cache writes
-	// follow `cache-write-rate`.
+	// follow `cache-write-rate`. Each selector stops at the next major
+	// generation: the page lists GPT 5.4–6.1, Gemini 2.5 and 3.1 Pro, and
+	// Grok 4.5–4.7, so an unlisted generation carries no tier.
 	class "openai" {
 		family "gpt" {
 			// Every GPT-6 lane, Fast (`-priority`) lanes included.
-			revision ">=6" {
+			revision ">=6 <7" {
 				long-context-cost {
 					input-threshold 272000
 					multiplier 2.0
@@ -144,7 +146,7 @@ provider "devin" {
 	}
 	class "gemini" {
 		family "pro" {
-			revision ">=2.5" {
+			revision ">=2.5 <4" {
 				long-context-cost {
 					input-threshold 200000
 					multiplier 2.0
@@ -163,7 +165,7 @@ provider "devin" {
 	}
 	class "xai" {
 		family "grok" {
-			revision ">=4.5" {
+			revision ">=4.5 <5" {
 				long-context-cost {
 					input-threshold 200000
 					multiplier 2.0
