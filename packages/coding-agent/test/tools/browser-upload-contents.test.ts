@@ -11,6 +11,7 @@ import { ensureChromiumExecutable } from "@oh-my-pi/pi-coding-agent/tools/browse
 import { releaseAllTabs } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
 import {
 	openUploadSource,
+	sweepUploadStaging,
 	type UploadRoute,
 	UploadStaging,
 } from "@oh-my-pi/pi-coding-agent/tools/browser/upload-files";
@@ -271,6 +272,11 @@ afterAll(async () => {
 	await disposeAllVmContexts();
 	site?.stop(true);
 	if (tempDir) await fs.rm(tempDir, { recursive: true, force: true });
+	// Connected tabs leave their staging folders for the sweep; this process made them.
+	for (const name of await stagingFolders()) {
+		if (name.startsWith(`omp-uploads-${process.pid}-`))
+			await fs.rm(path.join(os.tmpdir(), name), { recursive: true, force: true });
+	}
 });
 
 /** omp's upload staging folders now in the temp directory. */
@@ -322,14 +328,17 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser uploadFile into a browser omp did 
 				});
 				// The route check, then one call per path upload, versus only the refused route check.
 				expect(proxy.filePathCalls).toBe(route === "paths" ? 6 : 1);
-				created = [...(await stagingFolders())].filter(name => !before.has(name));
-				expect(created).toHaveLength(1);
+				created = [...(await stagingFolders())].filter(
+					name => !before.has(name) && name.startsWith(`omp-uploads-${process.pid}-`),
+				);
+				// One folder for the tab's copies; the contents route copies nothing, so it makes none.
+				expect(created).toHaveLength(route === "paths" ? 1 : 0);
 			} finally {
 				await close();
 			}
-			// The staged copies go when omp lets go of the tab, even though this browser keeps the page open.
+			// A page omp only attached to can outlive omp's tab, so its staged copies stay for the sweep.
 			const left = await stagingFolders();
-			expect(created.filter(name => left.has(name))).toEqual([]);
+			expect(created.filter(name => left.has(name))).toEqual(created);
 		}, 60_000);
 
 		test("fails a chooser upload whose input went away or another upload holds", async () => {
@@ -460,6 +469,67 @@ ${collectErrors(`() => tab.uploadFile("#direct", "slow.bin"),`).replace("return 
 	}, 60_000);
 });
 
+describe.skipIf(!CHROMIUM_AVAILABLE)("browser uploadFile into a browser omp launched", () => {
+	test("keeps a tab's staged copies when it moves to a new worker, and removes them with the page", async () => {
+		const session = makeSession();
+		const prelude = createBrowserPrelude(session);
+		const context = { session, toolCallId: "browser-upload-managed" };
+		const name = `upload-managed-${crypto.randomUUID()}`;
+		const run = (code: string) => prelude.invoke({ action: "run", name, timeout: 15, code }, context);
+		const valueOf = (result: { details?: unknown }) =>
+			result.details && typeof result.details === "object" && "value" in result.details
+				? result.details.value
+				: undefined;
+		const before = await stagingFolders();
+		await prelude.invoke({ action: "open", name, url }, context);
+		try {
+			const file = path.join(tempDir, "recycled.txt");
+			await Bun.write(file, "outlives its worker");
+			expect(valueOf(await run(collectErrors(`() => tab.uploadFile("#direct", "recycled.txt"),`)))).toEqual([]);
+			await fs.rm(file);
+			// Request interception that cannot be reset after the run moves the tab to a new worker.
+			const recycled = await run(`await page.setRequestInterception(true);
+const client = page._client();
+const send = client.send.bind(client);
+client.send = (method, ...args) => (method === "Fetch.disable" ? Promise.withResolvers().promise : send(method, ...args));
+return "done";`);
+			expect(JSON.stringify(recycled.content)).toContain("reattached to a new worker");
+			const read = await run(`return await tab.evaluate(() => document.querySelector("#direct").files[0].text());`);
+			expect(valueOf(read)).toBe("outlives its worker");
+		} finally {
+			await prelude.invoke({ action: "close", name }, context);
+		}
+		// omp closed the page it launched, the last reader of the copies.
+		expect([...(await stagingFolders())].filter(folder => !before.has(folder))).toEqual([]);
+	}, 60_000);
+});
+
+test("sweeps a staging folder a day after its last upload unless an open tab or a running omp owns it", async () => {
+	const now = Date.now();
+	const dayAgo = new Date(now - 25 * 60 * 60 * 1000);
+	// No process has a pid this large; the parent of this test process is running.
+	const folders = {
+		open: [`omp-uploads-${process.pid}-sweep-open`, dayAgo],
+		recent: [`omp-uploads-${process.pid}-sweep-recent`, new Date(now)],
+		closed: [`omp-uploads-${process.pid}-sweep-closed`, dayAgo],
+		orphaned: [`omp-uploads-99999999-sweep-orphaned`, dayAgo],
+		otherOmp: [`omp-uploads-${process.ppid}-sweep-other`, dayAgo],
+	} as const;
+	for (const [name, modified] of Object.values(folders)) {
+		const folder = path.join(os.tmpdir(), name);
+		await fs.mkdir(folder, { recursive: true });
+		await fs.utimes(folder, modified, modified);
+	}
+	try {
+		await sweepUploadStaging(new Set([path.join(os.tmpdir(), folders.open[0])]), now);
+		const left = await stagingFolders();
+		expect(Object.values(folders).map(([name]) => left.has(name))).toEqual([true, true, false, false, true]);
+	} finally {
+		for (const [name] of Object.values(folders))
+			await fs.rm(path.join(os.tmpdir(), name), { recursive: true, force: true });
+	}
+});
+
 test("reports the type a browser's own pick would for the contents route", async () => {
 	const files = { "a.txt": "text/plain", "a.bin": "application/octet-stream", "a.unknownext": "", notes: "" };
 	for (const name of Object.keys(files)) await Bun.write(path.join(tempDir, name), "x");
@@ -484,9 +554,8 @@ test("detaches a chooser session that attaches after the upload was cancelled", 
 	const handle = { evaluate: async () => ({ tag: "BUTTON", type: "" }) } as unknown as ElementHandle;
 	const file = path.join(tempDir, "late.txt");
 	await Bun.write(file, "late");
-	await rejectionOf(
-		prepareElementUpload(page, handle, [file], "upload", "contents", new UploadStaging(), controller.signal),
-	);
+	const staging = new UploadStaging(path.join(tempDir, "late-staging"));
+	await rejectionOf(prepareElementUpload(page, handle, [file], "upload", "contents", staging, controller.signal));
 	attach({
 		detach: async () => {
 			detached = true;

@@ -1408,8 +1408,8 @@ export class WorkerCore {
 	#uninstallRejectionGuard: () => void;
 	#mode?: WorkerInitPayload["mode"];
 	#activateForScreenshot = true;
-	/** Staged copies and the upload route this tab's browser connection takes. */
-	readonly #uploads = new UploadStaging();
+	/** The upload route this worker's browser connection takes, and the tab's staging folder. */
+	#uploads?: UploadStaging;
 	#dialogs?: RuntimeDialogController;
 	#network?: BrowserNetworkManager;
 	#initScripts?: InitScriptManager;
@@ -1556,6 +1556,7 @@ export class WorkerCore {
 		try {
 			this.#mode = payload.mode;
 			this.#activateForScreenshot = payload.mode === "headless" || payload.activateForScreenshot !== false;
+			this.#uploads = new UploadStaging(payload.uploadDir);
 			const puppeteer = await loadPuppeteerInWorker(payload.safeDir);
 			registerSemanticQueryHandlers(puppeteer);
 			this.#browser = await connectPuppeteer(puppeteer, {
@@ -2165,14 +2166,16 @@ export class WorkerCore {
 					await this.#stopLoading();
 				},
 				{
-					prepare: async (filePaths, sig) =>
-						prepareInputUpload(
+					prepare: async (filePaths, sig) => {
+						const uploads = this.#requireUploads();
+						return prepareInputUpload(
 							handle,
 							filePaths.map(filePath => resolveToCwd(filePath, session.cwd)),
-							await this.#uploads.route(page, sig),
-							this.#uploads,
+							await uploads.route(page, sig),
+							uploads,
 							sig,
-						),
+						);
+					},
 					deliverGuard: (label, fn) => op(label, budgetBound, fn),
 				},
 			);
@@ -3139,8 +3142,9 @@ export class WorkerCore {
 		const handle = await this.#resolveActionHandle(selector, timeoutMs, signal);
 		try {
 			const absolute = filePaths.map(filePath => resolveToCwd(filePath, session.cwd));
-			const route = await this.#uploads.route(page, signal);
-			const prepared = await prepareElementUpload(page, handle, absolute, label, route, this.#uploads, signal);
+			const uploads = this.#requireUploads();
+			const route = await uploads.route(page, signal);
+			const prepared = await prepareElementUpload(page, handle, absolute, label, route, uploads, signal);
 			return {
 				...prepared,
 				dispose: async () => {
@@ -3296,8 +3300,6 @@ export class WorkerCore {
 		await this.#consoleCapture.detach();
 		this.#emulation?.dispose();
 		if (this.#mode === "headless" && page && !page.isClosed()) await page.close().catch(() => undefined);
-		// Chrome reads a picked file lazily, so the staged copies last until omp lets go of the tab.
-		await this.#uploads.dispose();
 		if (this.#browser?.connected) this.#browser.disconnect();
 		this.#transport.send({ type: "closed" });
 		this.#transport.close();
@@ -3306,6 +3308,11 @@ export class WorkerCore {
 	#requirePage(): Page {
 		if (!this.#page) throw new ToolError("Tab worker is not initialized");
 		return this.#page;
+	}
+
+	#requireUploads(): UploadStaging {
+		if (!this.#uploads) throw new ToolError("Tab worker is not initialized");
+		return this.#uploads;
 	}
 
 	#requireDialogs(): RuntimeDialogController {

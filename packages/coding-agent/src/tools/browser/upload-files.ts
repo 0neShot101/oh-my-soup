@@ -123,13 +123,64 @@ function readFirstPickedFile(picker: PagePicker): Promise<string> | string {
 	return file ? file.text() : "";
 }
 
+/** Staging folders are `omp-uploads-<pid>-<id>` in the temp directory; the pid names the omp process that owns one. */
+const STAGING_FOLDER = /^omp-uploads-(\d+)-/;
+
 /**
- * One tab's upload state: its staging directory, and the route a one-time check picked for its browser connection.
- * The staged copies stay until the tab closes, since Chrome reads a picked file lazily.
+ * How long a staging folder no open tab owns stays after its last upload: a page omp let go of may still be open in the
+ * user's browser, and Chrome reads a picked file only when the page does.
+ */
+const STAGING_KEPT_MS = 24 * 60 * 60 * 1000;
+
+/** The staging folder path for a new tab; it is created on the tab's first upload. */
+export function newUploadStagingDir(): string {
+	return path.join(os.tmpdir(), `omp-uploads-${process.pid}-${crypto.randomUUID().slice(0, 8)}`);
+}
+
+/** Remove a tab's staging folder, once the page that may read its copies is gone. */
+export async function removeUploadStaging(directory: string): Promise<void> {
+	await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined);
+}
+
+function processAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return error instanceof Error && "code" in error && error.code === "EPERM";
+	}
+}
+
+/**
+ * Remove staging folders a day after their last upload once no open tab of this process owns them and the omp
+ * process that made them is this one or gone. Another running omp sweeps its own.
+ */
+export async function sweepUploadStaging(live: ReadonlySet<string>, now = Date.now()): Promise<void> {
+	const root = os.tmpdir();
+	for (const name of await fs.readdir(root).catch(() => [])) {
+		const owner = STAGING_FOLDER.exec(name);
+		const directory = path.join(root, name);
+		if (!owner || live.has(directory)) continue;
+		const pid = Number(owner[1]);
+		if (pid !== process.pid && processAlive(pid)) continue;
+		const stat = await fs.stat(directory).catch(() => null);
+		if (stat && now - stat.mtimeMs >= STAGING_KEPT_MS) await removeUploadStaging(directory);
+	}
+}
+
+/**
+ * One tab worker's uploads: the route a one-time check picked for its browser connection, and the tab's staging
+ * folder, which outlives the worker (a recycle or a relay release starts a new one on the same page) and is removed by
+ * the supervisor, since Chrome reads a picked file lazily.
  */
 export class UploadStaging {
-	#directory: Promise<string> | undefined;
+	readonly #directory: string;
+	#created: Promise<unknown> | undefined;
 	#route: Promise<UploadRoute> | undefined;
+
+	constructor(directory: string) {
+		this.#directory = directory;
+	}
 
 	/**
 	 * The route for this connection, checked on the first upload: the browser gets a token file's path through
@@ -166,43 +217,41 @@ export class UploadStaging {
 		return staged;
 	}
 
-	/** Remove the staged copies. */
-	async dispose(): Promise<void> {
-		const directory = this.#directory;
-		this.#directory = undefined;
-		if (!directory) return;
-		await fs.rm(await directory, { recursive: true, force: true }).catch(() => undefined);
-	}
-
-	#ensureDirectory(): Promise<string> {
-		this.#directory ??= fs.mkdtemp(path.join(os.tmpdir(), "omp-uploads-"));
+	async #ensureDirectory(): Promise<string> {
+		this.#created ??= fs.mkdir(this.#directory, { recursive: true });
+		await this.#created;
 		return this.#directory;
 	}
 
 	async #checkRoute(page: Page): Promise<UploadRoute> {
 		const token = crypto.randomUUID();
-		const tokenPath = path.join(await this.#ensureDirectory(), "route-check");
-		await Bun.write(tokenPath, token);
-		const picker = await page.mainFrame().isolatedRealm().evaluateHandle(createFilePicker);
+		// Its own folder, so a tab that never stages a file leaves no staging folder behind.
+		const checkDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-upload-check-"));
 		try {
-			const input = picker.asElement();
-			if (!input) throw new Error("The upload route check could not create a file input");
+			const tokenPath = path.join(checkDirectory, "route-check");
+			await Bun.write(tokenPath, token);
+			const picker = await page.mainFrame().isolatedRealm().evaluateHandle(createFilePicker);
 			try {
-				await setFileInputPaths(input, [tokenPath]);
-			} catch (error) {
-				// Chrome refuses every path to a client without file access (a relay extension by default).
-				if (error instanceof Error && error.message.includes("Not allowed")) return "contents";
-				throw error;
+				const input = picker.asElement();
+				if (!input) throw new Error("The upload route check could not create a file input");
+				try {
+					await setFileInputPaths(input, [tokenPath]);
+				} catch (error) {
+					// Chrome refuses every path to a client without file access (a relay extension by default).
+					if (error instanceof Error && error.message.includes("Not allowed")) return "contents";
+					throw error;
+				}
+				const text = await withTimeout(
+					picker.evaluate(readFirstPickedFile),
+					ROUTE_CHECK_READ_MS,
+					"upload route check read timed out",
+				).catch(() => null);
+				return text === token ? "paths" : "contents";
+			} finally {
+				await picker.dispose().catch(() => undefined);
 			}
-			const text = await withTimeout(
-				picker.evaluate(readFirstPickedFile),
-				ROUTE_CHECK_READ_MS,
-				"upload route check read timed out",
-			).catch(() => null);
-			return text === token ? "paths" : "contents";
 		} finally {
-			await picker.dispose().catch(() => undefined);
-			await fs.rm(tokenPath, { force: true }).catch(() => undefined);
+			await fs.rm(checkDirectory, { recursive: true, force: true }).catch(() => undefined);
 		}
 	}
 }
