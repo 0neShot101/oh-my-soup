@@ -606,6 +606,21 @@ export class PlanReviewOverlay implements Component {
 		slider.onChange?.(next);
 	}
 
+	/** Synchronize an external tier pick with the displayed slider before committing. */
+	setSliderIndex(index: number): void {
+		if (this.#committed || !this.#slider) return;
+		this.#moveSlider(index - this.#sliderIndex);
+	}
+
+	/** Commit an external answer through the same input-locking path as Enter. */
+	selectOption(label: string): void {
+		if (this.#committed) return;
+		const index = this.#options.indexOf(label);
+		if (index < 0 || this.#disabled.has(index)) return;
+		this.#selectedIndex = index;
+		this.#confirmSelection();
+	}
+
 	#confirmSelection(): void {
 		const index = this.#selectedIndex;
 		if (index >= 0 && index < this.#options.length && !this.#disabled.has(index)) {

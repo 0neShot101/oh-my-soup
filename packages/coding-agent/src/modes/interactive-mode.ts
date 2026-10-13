@@ -5334,7 +5334,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		};
 		this.#planReviewOwner = owner;
 		this.#planReviewCancel = () => finish(undefined);
-		this.#planReviewPick = choice => finish(choice);
+		this.#planReviewPick = choice => overlay.selectOption(choice);
 		const onClose = dialogOptions?.onClose;
 		this.#planReviewOnHide = onClose ? () => onClose(picked) : undefined;
 		const overlay = new PlanReviewOverlay(
@@ -6531,20 +6531,23 @@ export class InteractiveMode implements InteractiveModeContext {
 			return false;
 		}
 		const planContent = await this.#readPlanFile(planFilePath);
-		if (planContent === null) {
+		if (!planContent) {
 			this.showWarning(noPlan);
 			return false;
 		}
 		const { title } = resolvePlanTitle({ planContent, planFilePath });
-		// Fire-and-forget: callers get the review via `plan_review_requested` /
-		// `getPendingPlanReview`; awaiting here would hold them until it closes.
-		void this.handlePlanApproval({ planFilePath, title, planExists: true }).catch(error => {
-			this.showError(`Failed to open plan review: ${error instanceof Error ? error.message : String(error)}`);
-		});
-		return true;
+		const opened = Promise.withResolvers<boolean>();
+		void this.handlePlanApproval({ planFilePath, title, planExists: true }, () => opened.resolve(true)).then(
+			() => opened.resolve(false),
+			error => {
+				opened.resolve(false);
+				this.showError(`Failed to open plan review: ${error instanceof Error ? error.message : String(error)}`);
+			},
+		);
+		return opened.promise;
 	}
 
-	async handlePlanApproval(details: PlanApprovalDetails): Promise<void> {
+	async handlePlanApproval(details: PlanApprovalDetails, onOpened?: () => void): Promise<void> {
 		if (!this.planModeEnabled) {
 			this.showWarning("Plan mode is not active.");
 			return;
@@ -6643,7 +6646,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				? role => {
 						const index = cycle!.models.findIndex(entry => entry.role === role);
 						if (index < 0) return false;
-						selectedTierIndex = index;
+						this.#planReviewOverlay?.setSliderIndex(index);
 						return true;
 					}
 				: undefined,
@@ -6688,6 +6691,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			},
 			{ slider },
 		);
+		onOpened?.();
 		// Handlers get their own copy so mutating the event cannot re-enable a refused choice.
 		const requestedDelivery = extensionRunner?.emit(structuredClone(request));
 		void requestedDelivery?.then(

@@ -672,8 +672,8 @@ export interface ExtensionContext {
 	 */
 	getPendingPlanReview(): PlanReviewRequestedEvent | undefined;
 	/**
-	 * (Re-)open the interactive plan review, like `/plan-review` — for a plan still pending
-	 * after the review was dismissed. False when plan mode is not active or no plan file exists.
+	 * (Re-)open the interactive plan review, like `/plan-review`. True once the overlay
+	 * and request exist, without waiting for a choice; false if no review can be opened.
 	 */
 	openPlanReview(): Promise<boolean>;
 	/** Identity of the agent this session runs: the top-level session or a subagent. */
@@ -1253,7 +1253,7 @@ export interface PlanReviewRequestedEvent {
 	planFilePath: string;
 	planContent: string;
 	options: PlanReviewOption[];
-	/** Execution tiers the model slider offers, first entry selected; omitted when fewer than two resolve. */
+	/** Execution tiers in slider order (not selection order); omitted when fewer than two resolve. */
 	tiers?: PlanReviewTier[];
 }
 /**

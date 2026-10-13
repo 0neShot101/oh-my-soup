@@ -474,6 +474,9 @@ describe("InteractiveMode plan review rendering", () => {
 		let answered: boolean | undefined;
 		const recorder = planReviewRecorder("remote", (event, ctx) => {
 			answered = ctx.resolvePlanReview(event.reviewId, "keep", { role: "slow" });
+			const overlay = mode.ui.getFocused() as PlanReviewOverlay;
+			overlay.handleInput("\x1b[C");
+			overlay.handleInput("\x1b[D");
 		});
 		await loadExtensions(recorder.extension);
 
@@ -576,12 +579,32 @@ describe("InteractiveMode plan review rendering", () => {
 
 		const opened = await ctxForLater!.openPlanReview();
 		expect(opened).toBe(true);
+		expect(ctxForLater!.getPendingPlanReview()?.reviewId).not.toBe(first.reviewId);
+		expect(ctxForLater!.getPendingPlanReview()).toBeDefined();
 		const second = await secondOpened.promise;
 		expect(second.reviewId).not.toBe(first.reviewId);
 		expect(ctxForLater!.resolvePlanReview(second.reviewId, "execute")).toBe(true);
 		const resolved = await secondResolved.promise;
 		await approval;
 		expect(resolvedEvents[0]).toMatchObject({ reviewId: first.reviewId, choice: undefined, by: "local" });
+		expect(resolved).toMatchObject({ reviewId: second.reviewId, choice: "execute", by: "extension" });
+	});
+
+	it("refuses reopening an empty plan without publishing a review", async () => {
+		const planFilePath = "local://PLAN.md";
+		await Bun.write(
+			resolveLocalUrlToPath(planFilePath, {
+				getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+				getSessionId: () => session.sessionManager.getSessionId(),
+			}),
+			"",
+		);
+		mode.planModeEnabled = true;
+		const recorder = planReviewRecorder("observer");
+		const runner = await loadExtensions(recorder.extension);
+		expect(await runner.createContext().openPlanReview()).toBe(false);
+		expect(runner.createContext().getPendingPlanReview()).toBeUndefined();
+		expect(recorder.events).toEqual([]);
 	});
 
 	it("sends remote refinement feedback verbatim as the next planning prompt", async () => {
@@ -2729,7 +2752,7 @@ describe("InteractiveMode plan review rendering", () => {
 				getSessionId: () => session.sessionManager.getSessionId(),
 			});
 
-		it("forwards the newest local plan file and its heading title to the approval flow", async () => {
+		it("opens the newest local plan rather than a stale draft", async () => {
 			await Bun.write(localPath("local://old-plan.md"), "# Old plan\n\nstale body");
 			await Bun.write(localPath("local://auth-refactor-plan.md"), "# Auth refactor\n\nfresh body");
 			// #listLocalPlanFiles sorts by mtime, newest first — pin mtimes so the
@@ -2741,16 +2764,14 @@ describe("InteractiveMode plan review rendering", () => {
 			// The default points at a file that never exists; the scan must still find
 			// the real plan, and getPlanReferencePath() is empty before any approval.
 			mode.planModePlanFilePath = "local://PLAN.md";
-			const approval = vi.spyOn(mode, "handlePlanApproval").mockResolvedValue();
-
-			await mode.openPlanReview();
-
-			expect(approval).toHaveBeenCalledTimes(1);
-			expect(approval).toHaveBeenCalledWith({
-				planFilePath: "local://auth-refactor-plan.md",
-				title: "Auth-refactor",
-				planExists: true,
-			});
+			const runner = await loadExtensions(planReviewExtension("observer", () => {}));
+			vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+			const ctx = runner.createContext();
+			expect(await ctx.openPlanReview()).toBe(true);
+			const review = ctx.getPendingPlanReview();
+			expect(review?.planContent).toContain("fresh body");
+			expect(review?.planContent).not.toContain("stale body");
+			expect(ctx.resolvePlanReview(review!.reviewId, "refine", { feedback: "revise" })).toBe(true);
 		});
 
 		it("warns and does not start approval when plan mode is inactive", async () => {
