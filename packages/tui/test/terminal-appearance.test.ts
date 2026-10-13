@@ -742,6 +742,7 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		Object.defineProperty(process.stdin, "setRawMode", { value: vi.fn(), configurable: true });
 		originalCellDims = { ...getCellDimensions() };
 		previousHeadless = setTerminalHeadless(false);
+		delete Bun.env.TMUX;
 	});
 
 	afterEach(() => {
@@ -755,6 +756,7 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		restoreProperty(process.stdout, "columns", stdoutColumnsDescriptor);
 		restoreProperty(process.stdout, "rows", stdoutRowsDescriptor);
 		setCellDimensions(originalCellDims);
+		restoreEnv("TMUX", originalTmux);
 	});
 
 	function setup(startOptions?: TerminalStartOptions) {
@@ -852,6 +854,20 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		terminal.stop();
 		terminal.write("after stop");
 		expect(writes.at(-1)).toBe("after stop");
+	});
+
+	it("rearms bracketed paste inside tmux even though tmux never answers DECRQM 2004 (#15596)", () => {
+		// tmux <= 3.5a answers the DA1 sentinel but not `CSI ? 2004 $ p`, and it
+		// drops paste markers whenever the pane's own 2004 flag was cleared.
+		Bun.env.TMUX = "/tmp/tmux-1000/default,1234,0";
+		const { terminal, writes, reports } = setup();
+		while (!reports.some(report => report.mode === 2004)) process.stdin.emit("data", "\x1b[?1;2c");
+		expect(reports).toContainEqual({ mode: 2004, supported: false });
+		writes.length = 0;
+		terminal.write("frame");
+		process.stdin.emit("data", "x");
+		expect(writes).toEqual(["\x1b[?2004hframe", "\x1b[?2004h"]);
+		terminal.stop();
 	});
 
 	it("coalesces an unbracketed multiline burst when bracketed paste is unconfirmed (#12540)", () => {
