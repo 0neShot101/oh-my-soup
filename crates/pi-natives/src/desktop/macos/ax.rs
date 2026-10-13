@@ -995,10 +995,9 @@ fn replace_utf16_selection(
 	Some(result)
 }
 
-/// `UIKit` (Mac Catalyst, iPhone and iPad apps) answers `AXPress` by tapping
-/// the element where it is drawn, so pressing a row scrolled out of its view
-/// reports success and does nothing. Scrolling it into view first lets the tap
-/// land; for an element already in view the scroll changes nothing.
+/// In a Mac Catalyst (`UIKit`) app, pressing a row scrolled out of its view
+/// reports success and does nothing. Scrolling it into view first lets the
+/// press land; for an element already in view the scroll changes nothing.
 fn scrolls_before_press(native: &str, actions: &[String], uikit: impl FnOnce() -> bool) -> bool {
 	native == "AXPress" && actions.iter().any(|action| action == SCROLL_TO_VISIBLE) && uikit()
 }

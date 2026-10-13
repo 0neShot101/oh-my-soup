@@ -206,8 +206,8 @@ pub(super) fn is_screen_sharing(pid: libc::pid_t) -> bool {
 		.is_some_and(|bundle| bundle.isEqualToString(ns_string!("com.apple.ScreenSharing")))
 }
 
-/// Whether `pid` is a `UIKit` app: Mac Catalyst, or an iPhone or iPad app.
-/// Their bundles declare `UIDeviceFamily`; `AppKit` apps' do not. The session
+/// Whether `pid` is a `UIKit` app such as Mac Catalyst: its bundle declares
+/// `UIDeviceFamily`, which `AppKit` apps' do not. The session
 /// thread has no autorelease pool of its own, so the lookup brings one.
 pub(super) fn is_uikit(pid: libc::pid_t) -> bool {
 	autoreleasepool(|_| {
