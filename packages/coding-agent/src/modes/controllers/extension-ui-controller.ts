@@ -653,9 +653,8 @@ export class ExtensionUiController {
 
 	/**
 	 * The tool-approval prompt in the composer's place; a collab guest answers it as an Approve/Deny
-	 * select over the full prompt. Locally the compact prompt, without the tool's details, shows
-	 * only while the gated call's card is in the transcript; for hidden tool activity or a call the
-	 * transcript never shows (eval-bridged tools, preludes), the dialog wraps the full one.
+	 * select over the full prompt. Locally it shows the compact prompt (the details summarized to a
+	 * row, so the composer beneath keeps its room), and the expand key swaps in the full one.
 	 * The composer stays mounted beneath it and takes the typing: a user message queued as steering
 	 * while the call waits (sent here, from Tern, or by a collab guest) denies the call, so the
 	 * message tells the agent why instead of a bare denial. The watch starts with the request, so
@@ -682,16 +681,13 @@ export class ExtensionUiController {
 		try {
 			const choice = await this.#raceCollabDialog(request, signal, localSignal =>
 				this.#presentDialog(localSignal, settle => {
-					const toolCallId = prompt.toolCallId;
-					const callHidden =
-						this.ctx.hideToolActivity || toolCallId === undefined || !this.ctx.pendingTools.has(toolCallId);
 					const editor = this.ctx.editor;
 					const dialog = new ApprovalDialogComponent(
-						callHidden ? prompt.full : prompt.compact,
+						prompt.compact,
 						{ onApprove: () => settle(APPROVE_OPTION), onDeny: () => settle(DENY_OPTION) },
 						{
 							tui: this.ctx.ui,
-							wrapDetails: callHidden,
+							fullPrompt: prompt.full === prompt.compact ? undefined : prompt.full,
 							timeout: dialogOptions?.timeout,
 							onTimeout: dialogOptions?.onTimeout,
 							onTimeoutStart: dialogOptions?.onTimeoutStart,

@@ -261,8 +261,6 @@ export type AutocompleteProviderFactory = (current: AutocompleteProvider) => Aut
 export interface ExtensionApprovalPrompt {
 	full: string;
 	compact: string;
-	/** The gated call's id; absent when no transcript call backs the approval (eval preludes). */
-	toolCallId?: string;
 }
 
 /**
@@ -302,9 +300,9 @@ export interface ExtensionUIContext {
 
 	/**
 	 * Show a tool-approval prompt; true only for an explicit approval. Each prompt is a title line
-	 * then details: `compact` omits the tool's own details (command, path, content) and is only
-	 * for a host that shows the `toolCallId` call itself beside the prompt; otherwise use `full`.
-	 * Absent: callers fall back to an Approve/Deny `select`.
+	 * then details: `compact` summarizes the tool's own details (command, path, content) to one
+	 * row for a host with little room, `full` keeps them whole. Absent: callers fall back to an
+	 * Approve/Deny `select`.
 	 */
 	approve?(prompt: ExtensionApprovalPrompt, dialogOptions?: ExtensionUIDialogOptions): Promise<boolean>;
 

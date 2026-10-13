@@ -43,7 +43,6 @@ function makeHarness() {
 	let uiContext: ExtensionUIContext | undefined;
 	const steering: string[] = [];
 	const sessionListeners = new Set<(event: { type: string; steering?: string[] }) => void>();
-	const pendingTools = new Map<string, Component>();
 	const ctx = {
 		editor,
 		ui: {
@@ -54,7 +53,6 @@ function makeHarness() {
 			terminal: { rows: 40, columns: 120 },
 		},
 		editorContainer,
-		pendingTools,
 		session: {
 			extensionRunner: undefined,
 			setUsageFallbackConfirmer: vi.fn(),
@@ -76,7 +74,6 @@ function makeHarness() {
 	const controller = new ExtensionUiController(ctx);
 
 	return {
-		pendingTools,
 		editor,
 		requestRender,
 		addAutocompleteProvider,
@@ -526,7 +523,7 @@ describe("ExtensionUiController custom overlay", () => {
 describe("ExtensionUiController tool approval", () => {
 	const prompt = {
 		full: "Allow tool: bash\nCommand: rm -rf build",
-		compact: "Allow tool: bash",
+		compact: "Allow tool: bash\nCommand: rm -rf build",
 	};
 
 	it("lets the composer steer while a call waits: the queued message denies the call", async () => {
@@ -602,20 +599,5 @@ describe("ExtensionUiController tool approval", () => {
 		await Promise.resolve();
 		await Promise.resolve();
 		expect(onSubmit).toHaveBeenCalledWith("[Image #1]");
-	});
-
-	it("drops the details only beside the gated call's transcript card", () => {
-		const harness = makeHarness();
-		harness.pendingTools.set("call-1", harness.editor);
-		const shown = (toolCallId?: string): string => {
-			void harness.controller.showCollabAwareApproval({ ...prompt, toolCallId });
-			const text = harness.editorContainer.children[0]!.render(80).join("\n");
-			harness.handleInput("\x1b");
-			return text;
-		};
-		expect(shown("call-1")).not.toContain("rm -rf build");
-		// An eval-bridged call (no card) and a prelude (no call id) show what they would run.
-		expect(shown("js-bash-unrendered")).toContain("rm -rf build");
-		expect(shown()).toContain("rm -rf build");
 	});
 });

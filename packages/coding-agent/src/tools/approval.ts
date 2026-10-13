@@ -375,42 +375,56 @@ function approvalHeader(tool: ApprovalSubject, reason?: string): string[] {
 	return lines;
 }
 
-/** Format the approval prompt body shown to the user: the header, then the tool's own details. */
-export function formatApprovalPrompt(tool: ApprovalSubject, args: unknown, reason?: string): string {
-	const lines = approvalHeader(tool, reason);
+/** The tool's own detail rows for `args` (command, path, content), blanks dropped. */
+function approvalDetails(tool: ApprovalSubject, args: unknown): string[] {
 	const details = tool.formatApprovalDetails?.(args);
-	for (const detail of typeof details === "string" ? [details] : (details ?? [])) {
-		if (detail.length > 0) lines.push(detail);
-	}
-	return lines.join("\n");
+	return (typeof details === "string" ? [details] : (details ?? [])).filter(detail => detail.length > 0);
 }
 
-/** What a call's approval prompt says beyond the tool and its args. */
-export interface ApprovalRequestOptions {
-	/** Why the call needs approval. */
-	reason?: string;
-	/** Lines after the prompt on every surface (provider safety checks). */
-	appendix?: readonly string[];
-	/** The transcript call this approval gates; absent for calls the transcript never shows (eval preludes, bridged tools). */
-	toolCallId?: string;
+/** Format the approval prompt body shown to the user: the header, then the tool's own details. */
+export function formatApprovalPrompt(tool: ApprovalSubject, args: unknown, reason?: string): string {
+	return [...approvalHeader(tool, reason), ...approvalDetails(tool, args)].join("\n");
+}
+
+/**
+ * The details as one row for a prompt that must stay small: each detail's first line, joined
+ * by ` · `, ending in `…` when any detail has more lines. A label alone (`Code:`, its body on
+ * the following lines) takes the body's first line after it.
+ */
+function approvalSummary(details: readonly string[]): string | undefined {
+	if (details.length === 0) return undefined;
+	let omitted = false;
+	const heads = details.map(detail => {
+		const lines = detail.split("\n", 3);
+		const head = lines[0]!.trimEnd();
+		const labelOnly = head.endsWith(":") && lines.length > 1;
+		if (lines.length > (labelOnly ? 2 : 1)) omitted = true;
+		return labelOnly ? `${head} ${lines[1]!.trim()}` : head;
+	});
+	const row = heads.join(" · ");
+	return omitted ? `${row} …` : row;
 }
 
 /**
  * Ask the user to approve a call: the host's approval dialog when it has one (it gets the full
- * prompt, a compact one without the tool's details, and the gated call's id, and shows the
- * compact one only beside that call in the transcript), else an Approve/Deny select with the
- * full prompt (RPC, ACP, extension hosts). True only for an explicit approval.
+ * prompt and a compact one with the details summarized to a row, so the composer beneath it
+ * keeps its room), else an Approve/Deny select with the full prompt (RPC, ACP, extension hosts).
+ * `appendix` lines follow the prompt on both. True only for an explicit approval.
  */
 export async function requestApproval(
 	ui: Pick<ExtensionUIContext, "select" | "approve">,
 	tool: ApprovalSubject,
 	args: unknown,
-	{ reason, appendix = [], toolCallId }: ApprovalRequestOptions = {},
+	reason?: string,
+	appendix: readonly string[] = [],
 ): Promise<boolean> {
-	const full = [formatApprovalPrompt(tool, args, reason), ...appendix].join("\n");
+	const header = approvalHeader(tool, reason);
+	const details = approvalDetails(tool, args);
+	const full = [...header, ...details, ...appendix].join("\n");
 	if (ui.approve) {
-		const compact = [...approvalHeader(tool, reason), ...appendix].join("\n");
-		return (await ui.approve({ full, compact, toolCallId })) === true;
+		const summary = approvalSummary(details);
+		const compact = [...header, ...(summary === undefined ? [] : [summary]), ...appendix].join("\n");
+		return (await ui.approve({ full, compact })) === true;
 	}
 	return (await ui.select(full, ["Approve", "Deny"])) === "Approve";
 }

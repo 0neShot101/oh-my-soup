@@ -8,7 +8,7 @@
 
 ### Changed
 
-- The in-composer tool approval prompt no longer repeats the command, path, or content when the call's card is in the transcript; with tool activity hidden, or for a call made from inside `eval`, it still shows them ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+- The in-composer tool approval prompt summarizes the command, path, or content to one row so the composer keeps its room; `Ctrl+O` shows them in full ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
 
 ## [18.10.4] - 2026-10-13
 

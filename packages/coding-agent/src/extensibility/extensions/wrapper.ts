@@ -14,7 +14,6 @@ import { sanitizeText, untilAborted } from "@oh-my-pi/pi-utils";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import {
 	denyError,
-	formatApprovalPrompt,
 	requestApproval,
 	resolveApproval,
 	resolveApprovalFromContext,
@@ -347,25 +346,12 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 
 		if (approvalCheck.required) {
 			const scheduledCall = context?.toolCall?.toolCalls[context.toolCall.index];
-			// The transcript card for this exact call: an `xd://` dispatch reuses the outer call's id
-			// under another tool name, and an eval-bridged call has an id the transcript never saw.
-			const ownCard =
+			if (
 				scheduledCall?.id === toolCallId &&
-				(scheduledCall.name === this.tool.name || scheduledCall.name === this.tool.customWireName);
-			if (ownCard) {
+				(scheduledCall.name === this.tool.name || scheduledCall.name === this.tool.customWireName)
+			) {
 				await untilAborted(signal, () => this.runner.waitForToolApprovalPreview(toolCallId));
 			}
-			// The card renders `transcriptArgs`. Lean on it only when it shows the details being
-			// approved: an argument transform (secret deobfuscation) or a `tool_call` replacement here
-			// changes the input after the card rendered. Handlers run here may also edit the input in
-			// place after the card rendered it, so they rule the card out too.
-			const transcriptArgs = context?.toolCall?.transcriptArgs;
-			const cardShowsArgs =
-				ownCard &&
-				transcriptArgs !== undefined &&
-				(loopEmittedToolCall || !this.runner.hasHandlers("tool_call")) &&
-				formatApprovalPrompt(this.tool, approvalArgs(transcriptArgs, context)) ===
-					formatApprovalPrompt(this.tool, resolvedArgs);
 
 			const hasApprovalHandlers =
 				this.runner.hasHandlers("tool_approval_requested") || this.runner.hasHandlers("tool_approval_resolved");
@@ -418,11 +404,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				pendingSafetyChecks.length > 0 ? ["Provider safety checks:", ...safetyCheckLines(pendingSafetyChecks)] : [];
 			let approved: boolean;
 			try {
-				approved = await requestApproval(uiContext, this.tool, resolvedArgs, {
-					reason: approvalCheck.reason,
-					appendix: safetyAppendix,
-					toolCallId: cardShowsArgs ? toolCallId : undefined,
-				});
+				approved = await requestApproval(uiContext, this.tool, resolvedArgs, approvalCheck.reason, safetyAppendix);
 			} catch (err) {
 				await emitApprovalResolved(false, err instanceof Error ? err.message : "approval aborted");
 				cancelPreflight();

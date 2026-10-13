@@ -346,16 +346,35 @@ describe("dialogs under a native surface", () => {
 		}
 	});
 
-	it("approval: wrapDetails shows a long detail whole instead of clipping it to one row", () => {
-		const command = `Command: echo ok && ${"x".repeat(120)} && rm -rf ~`;
-		const callbacks = { onApprove: vi.fn(), onDeny: vi.fn() };
-		const body = (dialog: ApprovalDialogComponent) =>
-			stripVTControlCharacters(dialog.render(60).join("\n")).replace(/[│\s]+/g, "");
-		expect(body(new ApprovalDialogComponent(`Allow tool: bash\n${command}`, callbacks))).not.toContain("rm-rf~");
-		const wrapped = new ApprovalDialogComponent(`Allow tool: bash\n${command}`, callbacks, { wrapDetails: true });
-		expect(body(wrapped)).toContain("rm-rf~");
-		const row = find(wrapped.describe(), node => node.p?.role === "omp.approval.details")?.node.c?.[0];
+	it("approval: the expand key or Details swaps the one-row summary for every detail, wrapped, even mid-draft", () => {
+		const command = `Command: echo ok && ${"x".repeat(120)} && rm -rf ~\nsecond line`;
+		const routed: string[] = [];
+		const dialog = new ApprovalDialogComponent(
+			"Allow tool: bash\nCommand: echo ok …",
+			{ onApprove: vi.fn(), onDeny: vi.fn() },
+			{
+				fullPrompt: `Allow tool: bash\n${command}`,
+				draft: { hasDraft: () => true, handleInput: key => routed.push(key) },
+			},
+		);
+		const body = () => stripVTControlCharacters(dialog.render(60).join("\n")).replace(/[│\s]+/g, "");
+		expect(body()).not.toContain("rm-rf~");
+		// Ctrl+O belongs to the dialog, not the draft that holds the other keys.
+		dialog.handleInput("\x0f");
+		expect(routed).toEqual([]);
+		expect(body()).toContain("rm-rf~");
+		expect(body()).toContain("secondline");
+		const row = find(dialog.describe(), node => node.p?.role === "omp.approval.details")?.node.c?.[0];
 		expect((row as NativeNode).p).not.toHaveProperty("truncate");
+		const expand = find(dialog.describe(), node => node.p?.role === "omp.btn" && node.key === "expand");
+		dialog.handleNativeEvent({ type: "action", key: expand!.path, act: "expand", mods: [] });
+		expect(body()).not.toContain("rm-rf~");
+		// Without a full prompt there is nothing to expand, so no Details button.
+		const plain = new ApprovalDialogComponent("Allow tool: bash\nCommand: ls", {
+			onApprove: vi.fn(),
+			onDeny: vi.fn(),
+		});
+		expect(find(plain.describe(), node => node.key === "expand")).toBeUndefined();
 	});
 
 	it("approval: docks in place of the composer with its details, not a card over the transcript", async () => {

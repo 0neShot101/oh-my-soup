@@ -25,7 +25,6 @@ import {
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import type {
 	Extension,
-	ExtensionApprovalPrompt,
 	ExtensionError,
 	ExtensionUIContext,
 	InputEvent,
@@ -2508,7 +2507,6 @@ describe("ExtensionRunner", () => {
 		const initializeRunner = (
 			runner: ExtensionRunner,
 			select: (title: string, options: string[]) => Promise<string | undefined>,
-			approve?: ExtensionUIContext["approve"],
 		) => {
 			runner.initialize(
 				{
@@ -2539,7 +2537,6 @@ describe("ExtensionRunner", () => {
 				undefined,
 				{
 					select,
-					approve,
 					confirm: async () => false,
 					input: async () => undefined,
 					notify: () => {},
@@ -2743,83 +2740,6 @@ describe("ExtensionRunner", () => {
 				await execution;
 				expect(order).toEqual([`preview_wait:${toolCallId}`, "preview_ready", "ui_select"]);
 			}
-		});
-
-		it("names the gated call for a compact prompt only when its own card shows the approved input", async () => {
-			const commandTool = {
-				...approvalTool,
-				formatApprovalDetails: (args: unknown) => [
-					`Command: ${args && typeof args === "object" && "command" in args ? String(args.command) : ""}`,
-				],
-			};
-			const run = async ({
-				toolCallId = "call-1",
-				scheduledName = "dangerous_tool",
-				shownCommand = "git push",
-				observingHandler = false,
-			}: {
-				toolCallId?: string;
-				scheduledName?: string;
-				shownCommand?: string;
-				observingHandler?: boolean;
-			}) => {
-				fs.rmSync(extensionsDir, { recursive: true, force: true });
-				fs.mkdirSync(extensionsDir, { recursive: true });
-				if (observingHandler) {
-					fs.writeFileSync(
-						path.join(extensionsDir, "observe.ts"),
-						`export default function(pi) { pi.on("tool_call", async () => undefined); }`,
-					);
-				}
-				const result = await loadTestExtensions();
-				const runner = new ExtensionRunner(
-					result.extensions,
-					result.runtime,
-					tempDir.path(),
-					sessionManager,
-					modelRegistry,
-				);
-				let shown: ExtensionApprovalPrompt | undefined;
-				initializeRunner(
-					runner,
-					async () => "Deny",
-					async prompt => {
-						shown = prompt;
-						return true;
-					},
-				);
-				await (new ExtensionToolWrapper(commandTool, runner) as ExtensionToolWrapper<any>).execute(
-					toolCallId,
-					{ command: "git push" },
-					undefined,
-					undefined,
-					{
-						sessionManager,
-						modelRegistry,
-						model: undefined,
-						isIdle: () => true,
-						hasQueuedMessages: () => false,
-						abort: () => {},
-						settings: Settings.isolated({ "tools.approvalMode": "always-ask" }),
-						toolCall: {
-							batchId: "batch",
-							index: 0,
-							total: 1,
-							toolCalls: [{ id: "call-1", name: scheduledName }],
-							transcriptArgs: { command: shownCommand },
-						},
-					},
-				);
-				return shown?.toolCallId;
-			};
-			expect(await run({})).toBe("call-1");
-			// An `xd://` dispatch shares the outer write's id; an eval-bridged call has its own.
-			expect(await run({ scheduledName: "write" })).toBeUndefined();
-			expect(await run({ toolCallId: "js-dangerous_tool-1" })).toBeUndefined();
-			// The card shows the pre-transform input (an obfuscated secret), not what runs.
-			expect(await run({ shownCommand: "git push #SECRET_1#" })).toBeUndefined();
-			// A handler run here could edit the input in place after the card rendered it.
-			expect(await run({ observingHandler: true })).toBeUndefined();
 		});
 
 		it("emits resolved false when approval is denied", async () => {

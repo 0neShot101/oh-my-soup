@@ -2,10 +2,6 @@
 
 ## [Unreleased]
 
-### Added
-
-- `ToolCallContext.transcriptArgs` carries the arguments hosts display for a call (before `transformToolCallArguments`), so tools can tell when what they run differs from what the transcript shows ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
-
 ### Breaking Changes
 
 - Removed `ApprovalDetailsOptions`; `formatApprovalDetails` takes only `args` again, since the compact approval prompt no longer shows tool details ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))

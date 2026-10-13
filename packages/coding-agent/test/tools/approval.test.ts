@@ -238,27 +238,37 @@ describe("MCP fallback and prompt formatting", () => {
 		]);
 	});
 
-	it("the dialog's compact prompt drops the tool's details but keeps origin, reason, and appendix", async () => {
-		const subject = tool("mcp__server__write", undefined, () => ["Path: /tmp/out", "Content:\nsecret"]);
-		let shown: { full: string; compact: string } | undefined;
+	it("the dialog's compact prompt summarizes the details to one row, keeping origin, reason, and appendix", async () => {
+		const prompts: { full: string; compact: string }[] = [];
 		const ui = {
 			select: async () => undefined,
 			approve: async (prompt: { full: string; compact: string }) => {
-				shown = prompt;
+				prompts.push(prompt);
 				return true;
 			},
 		};
-		const appendix = ["Provider safety checks:", "- check"];
-		expect(await requestApproval(ui, subject, {}, { reason: "Critical pattern", appendix })).toBe(true);
-		expect(shown?.compact.split("\n")).toEqual([
+		const write = tool("mcp__server__write", undefined, () => ["Path: /tmp/out", "Content:\nsecret\nbody"]);
+		expect(await requestApproval(ui, write, {}, "Critical pattern", ["Provider safety checks:", "- check"])).toBe(
+			true,
+		);
+		expect(prompts[0]!.compact.split("\n")).toEqual([
 			"Allow tool: mcp__server__write",
 			"Origin: MCP server tool",
 			"Reason: Critical pattern",
+			// A label alone takes its body's first line; `…` marks the lines left out.
+			"Path: /tmp/out · Content: secret …",
 			"Provider safety checks:",
 			"- check",
 		]);
-		// The full prompt, for surfaces where the call is not in view, keeps the details.
-		expect(shown?.full).toContain("Content:\nsecret");
+		// The full prompt, which the dialog's expand key shows, keeps every detail whole.
+		expect(prompts[0]!.full).toContain("Content:\nsecret\nbody");
+		// A detail that fits on its row is shown as is, without an ellipsis.
+		await requestApproval(
+			ui,
+			tool("bash", "exec", () => ["Command: git push"]),
+			{},
+		);
+		expect(prompts[1]!.compact).toBe("Allow tool: bash\nCommand: git push");
 	});
 
 	it("does not add MCP origin for annotated MCP tools", () => {
