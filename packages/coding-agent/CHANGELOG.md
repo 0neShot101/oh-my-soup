@@ -53,6 +53,10 @@
 - Fixed local memory injection and `learn` using the `Settings` directory instead of the session's project directory, so SDK hosts sharing one `Settings` across projects injected another project's lessons and never the project's consolidated summary; sharpshooter memory follows the session directory too ([#15375](https://github.com/can1357/oh-my-pi/issues/15375))
 - Fixed ACP bash approvals ignoring `bash.patterns`, and an earlier "Always allow" letting critical commands such as `rm -rf /` run without a prompt ([#15473](https://github.com/can1357/oh-my-pi/issues/15473))
 
+### Fixed
+
+- Hashline edits now reject column-cut `read` and `grep` lines until a raw read reveals the full line, preventing silent tail loss ([#15649](https://github.com/can1357/oh-my-pi/issues/15649)).
+
 ## [18.10.4] - 2026-10-13
 
 ### Added

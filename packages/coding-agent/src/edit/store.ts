@@ -16,3 +16,29 @@ export function getEditStore(session: EditStoreOwner): EditStore {
 	session.editStore ??= new EditStore();
 	return session.editStore;
 }
+
+const SEEN_ROW_PREFIX = /^[ *]?(\d+)(?:-(\d+))?:/;
+
+/** Record numbered output without treating column-cut rows as complete source lines. */
+export function recordFullySeenRows(
+	store: EditStore,
+	path: string,
+	tag: string,
+	body: string,
+	cutLines?: ReadonlySet<number>,
+): void {
+	if (!cutLines?.size) {
+		store.recordSeenLinesFromBody(path, tag, body);
+		return;
+	}
+	// An all-cut read still needs explicit provenance so the edit guard fails closed.
+	store.recordSeenLines(path, tag, []);
+	const completeRows = body
+		.split("\n")
+		.filter(row => {
+			const prefix = SEEN_ROW_PREFIX.exec(row);
+			return !prefix || (!cutLines.has(Number(prefix[1])) && (!prefix[2] || !cutLines.has(Number(prefix[2]))));
+		})
+		.join("\n");
+	store.recordSeenLinesFromBody(path, tag, completeRows);
+}

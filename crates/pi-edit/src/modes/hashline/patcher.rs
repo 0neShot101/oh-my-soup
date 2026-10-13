@@ -15,7 +15,7 @@ use super::{
 	input::{Parsed, Patch, PatchSection},
 	messages::{
 		HEADTAIL_DRIFT_WARNING, RevealedLine, UnseenLinesReveal, missing_snapshot_tag_message,
-		path_recovered_from_tag_message, unseen_lines_message,
+		path_recovered_from_tag_message, unseen_lines_message, wide_unseen_lines_message,
 	},
 	mismatch::{MismatchDetails, mismatch_error},
 	parser::{ParseFailure, parse_patch},
@@ -359,9 +359,6 @@ fn assert_seen_lines(
 	let Some(seen) = snapshot.seen_lines else {
 		return Ok(());
 	};
-	if seen.is_empty() {
-		return Ok(());
-	}
 	let mut unseen = section
 		.collect_anchor_lines()?
 		.into_iter()
@@ -384,7 +381,18 @@ fn assert_seen_lines(
 	}
 	let source = snapshot.text.split('\n').collect::<Vec<_>>();
 	let mut revealed = Vec::new();
-	let mut column_truncated = false;
+	for &line in &unseen {
+		let Some(value) = usize::try_from(line)
+			.ok()
+			.and_then(|n| n.checked_sub(1))
+			.and_then(|n| source.get(n))
+		else {
+			continue;
+		};
+		if value.chars().count() > SEEN_LINE_REVEAL_MAX_COLUMNS {
+			return Err(EditError::matched(wide_unseen_lines_message(section.path.as_str(), &unseen)));
+		}
+	}
 	for &line in unseen.iter().take(SEEN_LINE_REVEAL_CAP) {
 		let Some(value) = usize::try_from(line)
 			.ok()
@@ -393,21 +401,9 @@ fn assert_seen_lines(
 		else {
 			continue;
 		};
-		let chars = value.chars().collect::<Vec<_>>();
-		if chars.len() > SEEN_LINE_REVEAL_MAX_COLUMNS {
-			revealed.push(RevealedLine {
-				line,
-				text: chars[..SEEN_LINE_REVEAL_MAX_COLUMNS]
-					.iter()
-					.collect::<String>()
-					+ "…",
-			});
-			column_truncated = true;
-		} else {
-			revealed.push(RevealedLine { line, text: (*value).to_owned() });
-		}
+		revealed.push(RevealedLine { line, text: (*value).to_owned() });
 	}
-	let truncated = unseen.len() > revealed.len() || column_truncated;
+	let truncated = unseen.len() > revealed.len();
 	if !truncated {
 		store.record_seen_lines(
 			canonical,
@@ -1114,5 +1110,24 @@ mod lifecycle {
 			"let v0021 = 21; // b",
 			"let v0022 = 22;",
 		]);
+	}
+	#[tokio::test]
+	async fn wide_unseen_line_requires_full_read_even_when_only_line_was_cut() {
+		let ctx = Lifecycle::new("wide.txt", 1);
+		let original = format!("note: {} END-OF-LINE-TAIL\n", "abcdefghij".repeat(80));
+		ctx.write_text("wide.txt", &original);
+		let tag = ctx.read("wide.txt", &[]);
+		let shortened = format!("NOTE: {}\n", &"abcdefghij".repeat(80)[..762]);
+		let patch = format!("[wide.txt#{tag}]\nPUT 1.=1:\n+{}", shortened);
+		let err = ctx.edit(&patch).await.unwrap_err();
+		assert!(err.contains("wide.txt:1:raw"), "unexpected error: {err}");
+		assert_eq!(ctx.text("wide.txt"), original);
+		let err = ctx.edit(&patch).await.unwrap_err();
+		assert!(err.contains("wide.txt:1:raw"), "unexpected retry: {err}");
+		ctx.store
+			.record_seen_lines(&ctx.canonical("wide.txt"), &tag, &[1]);
+		let full = format!("[wide.txt#{tag}]\nPUT 1.=1:\n+{}", original.replace("note:", "NOTE:"));
+		ctx.edit(&full).await.unwrap();
+		assert_eq!(ctx.text("wide.txt"), original.replace("note:", "NOTE:"));
 	}
 }
