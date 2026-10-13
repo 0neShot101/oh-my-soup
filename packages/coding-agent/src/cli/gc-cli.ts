@@ -1887,28 +1887,48 @@ async function collectSessionFiles(session: SessionInfo): Promise<string[]> {
 }
 
 /**
- * Leases of the transcripts nested in a session's artifact tree (subagent
- * sessions, or any file a process can open with `--session`), found by their
- * session header rather than their name. Null, with every lease taken so far
- * released, when any of them is live.
+ * Session id in `file`'s header, or undefined when it has none. Only a file
+ * whose first byte opens a JSON record (the header or the title slot before
+ * it) is streamed, so binary and plain-text artifacts cost a one-byte read.
  */
-async function tryAcquireNestedLeases(
+async function readArtifactSessionId(file: string): Promise<string | undefined> {
+	if ((await Bun.file(file).slice(0, 1).text()) !== "{") return undefined;
+	return readSessionHeaderId(file);
+}
+
+/**
+ * Leases of every transcript in a session: its own and those nested in its
+ * artifact tree (subagent sessions, or any file a process can open with
+ * `--session`), found by their session header rather than their name. Each
+ * session id is leased once, so a copied transcript that shares an id does
+ * not read as live. Null, with every lease taken so far released, when any of
+ * them is live or cannot be probed (an unknown owner counts as live).
+ */
+async function tryAcquireSessionTreeLeases(
 	session: SessionInfo,
 	files: string[],
 ): Promise<{ leases: FileLockHandle[]; transcripts: Set<string> } | null> {
 	const leases: FileLockHandle[] = [];
+	const leasedIds = new Set<string>();
 	const transcripts = new Set<string>([session.path]);
 	for (const file of files) {
-		if (file === session.path) continue;
-		const lease = await tryAcquireSessionFileLease(file);
+		let lease: FileLockHandle | null;
+		try {
+			const sessionId = await readArtifactSessionId(file);
+			if (sessionId === undefined) continue;
+			transcripts.add(file);
+			if (leasedIds.has(sessionId)) continue;
+			lease = tryAcquireSessionLease(sessionId);
+			if (lease) leasedIds.add(sessionId);
+		} catch (error) {
+			if (codeOf(error) === "ENOENT") continue;
+			lease = null;
+		}
 		if (lease === null) {
 			for (const held of leases) held.release();
 			return null;
 		}
-		if (lease) {
-			leases.push(lease);
-			transcripts.add(file);
-		}
+		leases.push(lease);
 	}
 	return { leases, transcripts };
 }
@@ -1972,15 +1992,10 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 			}
 		}
 		if (candidates.length === 0) continue;
-		const lease = await tryAcquireSessionFileLease(session.path);
-		if (lease === null) {
-			result.skippedLive += 1;
-			continue;
-		}
-		let nested: { leases: FileLockHandle[]; transcripts: Set<string> } | null = null;
+		let tree: { leases: FileLockHandle[]; transcripts: Set<string> } | null = null;
 		try {
-			nested = await tryAcquireNestedLeases(session, files);
-			if (nested === null) {
+			tree = await tryAcquireSessionTreeLeases(session, files);
+			if (tree === null) {
 				result.skippedLive += 1;
 				continue;
 			}
@@ -1991,7 +2006,7 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 				result.allocatedBefore += candidate.allocated;
 			}
 			if (!options.apply) continue;
-			const batch = await compressFilesInPlace(candidates, method, nested.transcripts);
+			const batch = await compressFilesInPlace(candidates, method, tree.transcripts);
 			result.compressed += batch.compressed;
 			result.allocatedAfter += batch.allocatedAfter;
 			result.errors.push(...batch.errors);
@@ -1999,8 +2014,7 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 			result.errors.push(`${session.path}: ${errorMessage(error)}`);
 		} finally {
 			// Held through the rewrite so no omp process resumes the session mid-swap.
-			for (const held of nested?.leases ?? []) held.release();
-			lease?.release();
+			for (const held of tree?.leases ?? []) held.release();
 		}
 	}
 	return result;

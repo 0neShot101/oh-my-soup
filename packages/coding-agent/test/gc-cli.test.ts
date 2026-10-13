@@ -2737,6 +2737,18 @@ describe("runGcCommand session compression", () => {
 		expect(await fs.readFile(interrupted.file)).toEqual(bytes);
 	});
 
+	test.skipIf(!supported)("compresses a session whose artifact tree holds a copy of its transcript", async () => {
+		const { file, artifact } = await writeIdleSession(Bun.randomUUIDv7());
+		// A plain copy keeps the parent's session id; leasing that id twice must not read as live.
+		const copy = path.join(path.dirname(artifact), "backup.jsonl");
+		await fs.copyFile(file, copy);
+		await agePathSubMs(copy, 30);
+
+		const result = await runGcCommand({ flags: { agentDir: root, compress: true, apply: true } });
+
+		expect(result.compress).toMatchObject({ skippedLive: 0, compressed: 3 });
+	});
+
 	test.skipIf(!supported)("--compress-after-days overrides gc.compressAfterDays", async () => {
 		await writeConfig(root, ["gc:", "  compressAfterDays: 60", ""].join("\n"));
 		await writeIdleSession(Bun.randomUUIDv7(), "complete", 30);
