@@ -6549,7 +6549,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return false;
 		}
 		const planContent = await this.#readPlanFile(planFilePath);
-		if (!planContent) {
+		if (!planContent?.trim()) {
 			warn(noPlan);
 			return false;
 		}
@@ -6596,6 +6596,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		const abortTurn = options?.abortTurn !== false;
+		const originSessionId = this.sessionManager.getSessionId();
 
 		// Abort the agent to prevent it from continuing (e.g., re-submitting the
 		// plan) while the popup is showing. The event listener fires asynchronously
@@ -6611,6 +6612,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showError(`Plan file not found at ${planFilePath}`);
 			return;
 		}
+		// The operator may have left plan mode or switched sessions while the turn was
+		// aborted or the plan was read; a stale review must not mount over that.
+		if (!this.planModeEnabled || this.sessionManager.getSessionId() !== originSessionId) return;
 		// Without the abort barrier, a turn or another review may have started while the
 		// plan was read; everything from here to the overlay is synchronous.
 		if (!abortTurn && (this.session.isStreaming || this.session.isCompacting || this.#hasAnswerablePlanReview())) {

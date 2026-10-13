@@ -592,14 +592,14 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(resolved).toMatchObject({ reviewId: second.reviewId, choice: "execute", by: "extension" });
 	});
 
-	it("refuses reopening an empty plan without publishing a review", async () => {
+	it("refuses reopening a blank plan without publishing a review", async () => {
 		const planFilePath = "local://PLAN.md";
 		await Bun.write(
 			resolveLocalUrlToPath(planFilePath, {
 				getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 				getSessionId: () => session.sessionManager.getSessionId(),
 			}),
-			"",
+			"\n  \n",
 		);
 		mode.planModeEnabled = true;
 		const recorder = planReviewRecorder("observer");
@@ -2819,6 +2819,21 @@ describe("InteractiveMode plan review rendering", () => {
 
 			expect(abort).not.toHaveBeenCalled();
 			expect(warn).not.toHaveBeenCalled();
+			expect(mode.ui.hasOverlay()).toBe(false);
+			expect(recorder.events).toEqual([]);
+		});
+
+		it("does not mount a review when plan mode exits while the turn is aborted", async () => {
+			await Bun.write(localPath("local://auth-plan.md"), "# Auth\n\nbody");
+			mode.planModeEnabled = true;
+			const recorder = planReviewRecorder("observer");
+			await loadExtensions(recorder.extension);
+			vi.spyOn(session, "abort").mockImplementation(async () => {
+				mode.planModeEnabled = false;
+			});
+
+			expect(await mode.openPlanReview()).toBe(false);
+
 			expect(mode.ui.hasOverlay()).toBe(false);
 			expect(recorder.events).toEqual([]);
 		});
