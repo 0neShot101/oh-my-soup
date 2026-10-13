@@ -148,7 +148,8 @@ pub fn wrap_label(label: &str, width: usize) -> String {
 /// node boxes. Passes run in the same order as the reference renderer.
 /// Character references (`&lt;`, `&#60;`, Mermaid's `#lt;` / `#60;`) are
 /// decoded last, so an escaped tag or marker stays literal text, the way the
-/// browser shows it.
+/// browser shows it. Tabs, carriage returns, and form feeds become spaces:
+/// the canvas counts each as one cell, but terminals move the cursor.
 pub fn normalize_label(label: &str) -> String {
 	let unquoted = label
 		.strip_prefix('"')
@@ -162,7 +163,12 @@ pub fn normalize_label(label: &str) -> String {
 	let text = strip_single_star_emphasis(&text);
 	let text = strip_paired_marker(&text, "~~");
 	let text = mermaid_codes_to_html(&text);
-	html_escape::decode_html_entities(&text).into_owned()
+	let text = html_escape::decode_html_entities(&text);
+	if text.contains(['\t', '\r', '\u{c}']) {
+		text.replace(['\t', '\r', '\u{c}'], " ")
+	} else {
+		text.into_owned()
+	}
 }
 
 /// Rewrite Mermaid entity codes (`#\w+;`) as HTML character references:
@@ -375,6 +381,8 @@ mod tests {
 		// Escaped markup is literal text, not a tag or emphasis marker.
 		assert_eq!(normalize_label("&lt;b&gt;x&lt;/b&gt; &#42;y&#42;"), "<b>x</b> *y*");
 		assert_eq!(normalize_label("&amp;lt; #amp;gt;"), "&lt; &gt;");
+		// Decoded tabs, CRs, and form feeds would misalign the canvas.
+		assert_eq!(normalize_label("a&#9;b#9;c&Tab;d&#13;e&#12;f"), "a b c d e f");
 		// Unknown names, controls, and unterminated codes stay verbatim.
 		assert_eq!(
 			normalize_label("step #1; #nope; #x2192; C# &bogus; &lt"),
