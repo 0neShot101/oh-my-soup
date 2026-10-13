@@ -30,7 +30,7 @@ import {
 } from "./terminal-capabilities";
 import { tmuxMultiplexer } from "./multiplexers/tmux";
 import type { TerminalMultiplexerBackgroundColorCache } from "./multiplexers/types";
-import { terminalMultiplexerSessions } from "./terminal-multiplexer";
+import { classifyTerminalMultiplexerModule, terminalMultiplexerSessions } from "./terminal-multiplexer";
 import { setTmuxPaneApcTitles, tmuxSessionSpeaksTsp } from "./tmux";
 import { setHangulCompatibilityJamoWidth } from "./utils";
 import { translateWindowsAltGrSequence } from "./windows-altgr";
@@ -1134,9 +1134,9 @@ export class ProcessTerminal implements Terminal {
 
 		// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
 		this.#safeWrite("\x1b[?2004h");
-		this.#rearmBracketedPaste = terminalMultiplexerSessions($env).some(
-			multiplexer => multiplexer.gatesBracketedPaste,
-		);
+		this.#rearmBracketedPaste =
+			terminalMultiplexerSessions($env).some(multiplexer => multiplexer.gatesBracketedPaste) ||
+			classifyTerminalMultiplexerModule($env)?.gatesBracketedPaste === true;
 
 		// Force normal cursor-key (DECCKM) and numeric-keypad mode (terminfo
 		// `rmkx` = "\x1b[?1l\x1b>"). omp decodes both CSI ("\x1b[A") and SS3
