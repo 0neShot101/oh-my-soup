@@ -19,7 +19,7 @@ export default class Gc extends Command {
 			description: "Prune dangling session markers/breadcrumbs and old debug reports and collab replicas",
 		}),
 		compress: Flags.boolean({
-			description: "Store idle sessions with filesystem compression in place (APFS, NTFS, btrfs)",
+			description: "Store idle sessions with filesystem compression in place (APFS, NTFS)",
 		}),
 		"cold-archive-after-days": Flags.integer({ description: "Minimum session age before archiving" }),
 		"retain-newest-global": Flags.integer({ description: "Always keep this many newest sessions active" }),

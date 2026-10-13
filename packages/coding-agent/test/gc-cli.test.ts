@@ -2538,8 +2538,6 @@ describe("runGcCommand stale state", () => {
 const method = await compressMethod(os.tmpdir());
 const supported = method !== undefined;
 const onApfs = method === "apfs";
-/** btrfs reports uncompressed blocks, so on-disk savings are measurable elsewhere only. */
-const measuresAllocation = method !== "btrfs";
 
 describe("runGcCommand session compression", () => {
 	const filler =
@@ -2601,14 +2599,12 @@ describe("runGcCommand session compression", () => {
 			compressed: 2,
 			errors: [],
 		});
-		if (measuresAllocation) {
-			expect(result.compress?.allocatedAfter).toBeLessThan(result.compress?.allocatedBefore ?? 0);
-		}
+		expect(result.compress?.allocatedAfter).toBeLessThan(result.compress?.allocatedBefore ?? 0);
 		for (const [index, target] of [file, artifact].entries()) {
 			const after = await snapshot(target);
 			expect(after.bytes).toBe(before[index].bytes);
 			expect(after.mtimeNs).toBe(before[index].mtimeNs);
-			if (measuresAllocation) expect(after.allocated).toBeLessThan(after.size);
+			expect(after.allocated).toBeLessThan(after.size);
 		}
 		expect((await fs.readdir(path.dirname(file))).filter(name => name.startsWith(".omp-gc-compress-"))).toEqual([]);
 

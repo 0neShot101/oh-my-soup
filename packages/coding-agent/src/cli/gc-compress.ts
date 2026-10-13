@@ -2,23 +2,21 @@
  * In-place transparent filesystem compression for cold session files.
  *
  * Compressed files keep their path, bytes, and mtime; the filesystem inflates
- * them on read, so every session reader works unchanged. A later write stores
- * the file uncompressed again. Supported filesystems:
+ * them on read, so every session reader works unchanged. Supported volumes:
  *
  * - APFS (macOS): `ditto --hfsCompression` writes compressed copies that are
- *   verified and renamed over the originals.
- * - NTFS (Windows): `compact /exe:lzx` compresses each file in place.
- * - btrfs (Linux): `btrfs filesystem defragment -czstd` recompresses each file
- *   in place; `filefrag` reports which files are stored compressed.
- *
- * The in-place tools run in the kernel, so the file keeps its inode and
- * timestamps and no copy is ever swapped in.
+ *   verified and renamed over the originals. A later write stores the file
+ *   uncompressed again.
+ * - NTFS (Windows): `compact /c` sets LZNT1 compression on each file in place,
+ *   keeping its inode and timestamps; later appends are stored compressed too.
  */
 import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { $ } from "bun";
+import { dlopen, FFIType, ptr } from "bun:ffi";
 import { FileSessionStorage } from "../session/session-storage";
+import { errorMessage } from "../slash-commands/helpers/parse";
 import { sha256File } from "../utils/file-hash";
 
 /**
@@ -35,7 +33,7 @@ const SCRATCH_GLOB = new Bun.Glob(`**/${COMPRESS_SCRATCH_PREFIX}*`);
  */
 const SCRATCH_OWNER_MARKER = ".omp-gc-compress-owner";
 
-/** Formats whose bytes are already compressed; APFS would store them as-is. */
+/** Formats whose bytes are already compressed; the filesystem would store them as-is. */
 const INCOMPRESSIBLE_EXTENSIONS: Record<string, true> = {
 	".gz": true,
 	".zst": true,
@@ -48,12 +46,15 @@ const INCOMPRESSIBLE_EXTENSIONS: Record<string, true> = {
 
 /** Bounded argv per tool spawn; Windows caps a command line at 32K characters. */
 const DITTO_BATCH = 256;
-const IN_PLACE_BATCH = 64;
+const COMPACT_BATCH = 64;
+/** Files hashed at once, well below common open-file limits. */
+const HASH_CONCURRENCY = 8;
 
-const BTRFS_SUPER_MAGIC = 0x9123683e;
+/** `GetVolumeInformationW` flag: the volume supports per-file compression. */
+const FILE_FILE_COMPRESSION = 0x10;
 
 /** How this machine compresses files in place: the filesystem the sessions live on. */
-export type CompressMethod = "apfs" | "ntfs" | "btrfs";
+export type CompressMethod = "apfs" | "ntfs";
 
 export interface CompressCandidate {
 	path: string;
@@ -74,37 +75,81 @@ export interface CompressBatchResult {
 }
 
 /**
- * The compression method for files under `dir`, or undefined when its
- * filesystem has no transparent compression this phase drives. On Windows,
- * `compact` reports a non-NTFS volume as a per-file error.
+ * The compression method for files under `dir`, or undefined when the volume
+ * holding it has no transparent compression this phase drives (exFAT, SMB,
+ * NFS, ReFS, FAT, Linux filesystems, or a missing `dir`).
  */
 export async function compressMethod(
 	dir: string,
 	platform: NodeJS.Platform = process.platform,
 ): Promise<CompressMethod | undefined> {
-	if (platform === "darwin") return "apfs";
-	if (platform === "win32") return "ntfs";
-	if (platform !== "linux") return undefined;
 	try {
-		if ((await fs.statfs(dir)).type !== BTRFS_SUPER_MAGIC) return undefined;
+		if (platform === "darwin") return (await isApfsVolume(dir)) ? "apfs" : undefined;
+		if (platform === "win32") return isCompressingNtfsVolume(dir) ? "ntfs" : undefined;
 	} catch {
-		return undefined;
+		// An unreadable dir or mount table means no supported volume.
 	}
-	return Bun.which("btrfs") && Bun.which("filefrag") ? "btrfs" : undefined;
+	return undefined;
+}
+
+/**
+ * Whether `dir` sits on an APFS volume. `statfs` reports a load-order type
+ * number on macOS, so the mount table entry with the same device decides.
+ */
+async function isApfsVolume(dir: string): Promise<boolean> {
+	const { dev } = await fs.stat(dir);
+	const mounts = await $`/sbin/mount`.quiet().nothrow();
+	for (const line of mounts.stdout.toString().split("\n")) {
+		// "/dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled, nobrowse)"
+		const match = /^.+? on (.+) \(([^,)]+)/.exec(line);
+		if (match?.[2] !== "apfs") continue;
+		try {
+			if ((await fs.stat(match[1])).dev === dev) return true;
+		} catch {
+			// A mount point this user cannot stat holds no sessions dir of theirs.
+		}
+	}
+	return false;
+}
+
+/** Whether `dir` sits on an NTFS volume that supports per-file compression. */
+function isCompressingNtfsVolume(dir: string): boolean {
+	const kernel32 = dlopen("kernel32.dll", {
+		GetVolumePathNameW: { args: [FFIType.ptr, FFIType.ptr, FFIType.u32], returns: FFIType.i32 },
+		GetVolumeInformationW: {
+			args: [FFIType.ptr, FFIType.ptr, FFIType.u32, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.u32],
+			returns: FFIType.i32,
+		},
+	});
+	try {
+		const chars = 261;
+		const root = Buffer.alloc(chars * 2);
+		const target = Buffer.from(`${path.resolve(dir)}\0`, "utf16le");
+		if (!kernel32.symbols.GetVolumePathNameW(ptr(target), ptr(root), chars)) return false;
+		const flags = new Uint32Array(1);
+		const name = Buffer.alloc(chars * 2);
+		if (!kernel32.symbols.GetVolumeInformationW(ptr(root), null, 0, null, null, ptr(flags), ptr(name), chars)) {
+			return false;
+		}
+		const fsName = name.toString("utf16le").split("\0")[0];
+		return fsName === "NTFS" && (flags[0] & FILE_FILE_COMPRESSION) !== 0;
+	} finally {
+		kernel32.close();
+	}
 }
 
 /**
  * Whether `file` should be compressed: a regular file larger than one
- * filesystem block, in a compressible format, and not already stored
- * compressed. A single-block file cannot shrink. A compressed APFS or NTFS
- * file allocates fewer blocks than its logical size; session files are never
- * sparse, so that comparison identifies them. btrfs reports logical blocks,
- * so `dropCompressed` filters its candidates.
+ * filesystem block, in a compressible format, with a single link, and not
+ * already stored compressed. A single-block file cannot shrink, and replacing
+ * a hard-linked file would split it from its other names. A compressed file
+ * allocates fewer blocks than its logical size; session files are never
+ * sparse, so that comparison identifies them.
  */
 export async function compressCandidate(file: string): Promise<CompressCandidate | undefined> {
 	if (INCOMPRESSIBLE_EXTENSIONS[path.extname(file).toLowerCase()]) return undefined;
 	const stat = await fs.lstat(file, { bigint: true });
-	if (!stat.isFile() || stat.size <= stat.blksize) return undefined;
+	if (!stat.isFile() || stat.nlink > 1n || stat.size <= stat.blksize) return undefined;
 	const allocated = Number(stat.blocks) * 512;
 	if (allocated < stat.size) return undefined;
 	return {
@@ -132,7 +177,7 @@ export async function sweepCompressScratch(roots: string[], apply: boolean, erro
 				dirs.push(path.join(root, name));
 			}
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") errors.push(`${root}: ${String(error)}`);
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") errors.push(`${root}: ${errorMessage(error)}`);
 			continue;
 		}
 		for (const dir of dirs) {
@@ -146,35 +191,11 @@ export async function sweepCompressScratch(roots: string[], apply: boolean, erro
 				else await fs.rmdir(dir);
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-				errors.push(`${dir}: ${error instanceof Error ? error.message : String(error)}`);
+				errors.push(`${dir}: ${errorMessage(error)}`);
 			}
 		}
 	}
 	return found;
-}
-
-/** Paths among `files` that btrfs stores with at least one compressed extent. */
-async function btrfsCompressedPaths(files: string[]): Promise<Set<string>> {
-	const compressed = new Set<string>();
-	for (let start = 0; start < files.length; start += IN_PLACE_BATCH) {
-		const out = await $`filefrag -v ${files.slice(start, start + IN_PLACE_BATCH)}`.quiet().nothrow();
-		let current: string | undefined;
-		for (const line of out.stdout.toString().split("\n")) {
-			if (line.startsWith("File size of ")) current = line.slice("File size of ".length, line.lastIndexOf(" is "));
-			else if (current !== undefined && line.includes("encoded")) compressed.add(current);
-		}
-	}
-	return compressed;
-}
-
-/** `candidates` minus files already stored compressed that block counts cannot reveal (btrfs). */
-export async function dropCompressed(
-	candidates: CompressCandidate[],
-	method: CompressMethod,
-): Promise<CompressCandidate[]> {
-	if (method !== "btrfs" || candidates.length === 0) return candidates;
-	const compressed = await btrfsCompressedPaths(candidates.map(candidate => candidate.path));
-	return candidates.filter(candidate => !compressed.has(candidate.path));
 }
 
 /**
@@ -184,16 +205,16 @@ export async function dropCompressed(
  * APFS: each directory's files are copied with compression into a scratch
  * directory beside them, and a copy replaces its original only when its size
  * and SHA-256 match and the original is unchanged since it was selected.
- * NTFS and btrfs: the kernel compresses each file in place.
+ * NTFS: the filesystem compresses each file in place.
  */
 export async function compressFilesInPlace(
 	candidates: CompressCandidate[],
 	method: CompressMethod,
 ): Promise<CompressBatchResult> {
 	const result: CompressBatchResult = { compressed: 0, allocatedAfter: 0, errors: [] };
-	if (method !== "apfs") {
-		for (let start = 0; start < candidates.length; start += IN_PLACE_BATCH) {
-			await compressInPlaceBatch(candidates.slice(start, start + IN_PLACE_BATCH), method, result);
+	if (method === "ntfs") {
+		for (let start = 0; start < candidates.length; start += COMPACT_BATCH) {
+			await compactBatch(candidates.slice(start, start + COMPACT_BATCH), result);
 		}
 		return result;
 	}
@@ -212,55 +233,25 @@ export async function compressFilesInPlace(
 	return result;
 }
 
-async function compressInPlaceBatch(
-	batch: CompressCandidate[],
-	method: Exclude<CompressMethod, "apfs">,
-	result: CompressBatchResult,
-): Promise<void> {
+async function compactBatch(batch: CompressCandidate[], result: CompressBatchResult): Promise<void> {
 	for (const candidate of batch) result.allocatedAfter += candidate.allocated;
-	const files = batch.map(candidate => candidate.path);
-	// btrfs defragment skips pages still awaiting writeback, so flush them first.
-	if (method === "btrfs") {
-		await Promise.all(
-			files.map(file =>
-				flushFile(file).catch(error => {
-					result.errors.push(`${file}: ${error instanceof Error ? error.message : String(error)}`);
-				}),
-			),
-		);
-	}
-	// Both tools keep the inode and timestamps. `compact` skips, and exits
-	// nonzero for, a file another process holds open.
-	const run =
-		method === "ntfs"
-			? await $`compact /c /exe:lzx /q ${files}`.quiet().nothrow()
-			: await $`btrfs filesystem defragment -czstd ${files}`.quiet().nothrow();
+	// LZNT1 rather than `/exe` (WOF) compression: WOF inflates the whole file on
+	// its next write, so a resumed session would lose all its savings. `compact`
+	// skips, and exits nonzero for, a file another process holds open.
+	const run = await $`compact /c /q ${batch.map(candidate => candidate.path)}`.quiet().nothrow();
 	if (run.exitCode !== 0) {
 		const output = `${run.stdout.toString()}${run.stderr.toString()}`.trim().split("\n").slice(-3).join(" ");
-		result.errors.push(`${method === "ntfs" ? "compact" : "btrfs defragment"} exited ${run.exitCode}: ${output}`);
+		result.errors.push(`compact exited ${run.exitCode}: ${output}`);
 	}
-	const btrfsCompressed = method === "btrfs" ? await btrfsCompressedPaths(files) : undefined;
 	for (const candidate of batch) {
 		try {
-			const stat = await fs.lstat(candidate.path);
-			if (btrfsCompressed) {
-				if (btrfsCompressed.has(candidate.path)) result.compressed += 1;
-			} else if (stat.blocks * 512 < candidate.allocated) {
-				result.compressed += 1;
-				result.allocatedAfter += stat.blocks * 512 - candidate.allocated;
-			}
+			const allocated = (await fs.lstat(candidate.path)).blocks * 512;
+			if (allocated >= candidate.allocated) continue;
+			result.compressed += 1;
+			result.allocatedAfter += allocated - candidate.allocated;
 		} catch (error) {
-			result.errors.push(`${candidate.path}: ${error instanceof Error ? error.message : String(error)}`);
+			result.errors.push(`${candidate.path}: ${errorMessage(error)}`);
 		}
-	}
-}
-
-async function flushFile(file: string): Promise<void> {
-	const handle = await fs.open(file, "r");
-	try {
-		await handle.sync();
-	} finally {
-		await handle.close();
 	}
 }
 
@@ -286,6 +277,14 @@ function swapIfUnchanged(storage: FileSessionStorage, candidate: CompressCandida
 	return true;
 }
 
+async function sha256Files(files: string[]): Promise<string[]> {
+	const digests: string[] = [];
+	for (let start = 0; start < files.length; start += HASH_CONCURRENCY) {
+		digests.push(...(await Promise.all(files.slice(start, start + HASH_CONCURRENCY).map(sha256File))));
+	}
+	return digests;
+}
+
 async function compressBatch(dir: string, batch: CompressCandidate[], result: CompressBatchResult): Promise<void> {
 	// Every candidate counts at its current allocation until its compressed copy replaces it,
 	// so failed and skipped files are still reported as occupying disk.
@@ -295,7 +294,7 @@ async function compressBatch(dir: string, batch: CompressCandidate[], result: Co
 		// A fresh directory: a pre-existing one with this name is never gc's to remove.
 		scratch = await fs.mkdtemp(path.join(dir, COMPRESS_SCRATCH_PREFIX));
 		await Bun.write(path.join(scratch, SCRATCH_OWNER_MARKER), "");
-		const digests = await Promise.all(batch.map(candidate => sha256File(candidate.path)));
+		const digests = await sha256Files(batch.map(candidate => candidate.path));
 		const copy = await $`ditto --hfsCompression ${batch.map(candidate => candidate.path)} ${scratch}`
 			.quiet()
 			.nothrow();
@@ -319,11 +318,11 @@ async function compressBatch(dir: string, batch: CompressCandidate[], result: Co
 				result.compressed += 1;
 				result.allocatedAfter += copied.blocks * 512 - candidate.allocated;
 			} catch (error) {
-				result.errors.push(`${candidate.path}: ${error instanceof Error ? error.message : String(error)}`);
+				result.errors.push(`${candidate.path}: ${errorMessage(error)}`);
 			}
 		}
 	} catch (error) {
-		result.errors.push(`${dir}: ${error instanceof Error ? error.message : String(error)}`);
+		result.errors.push(`${dir}: ${errorMessage(error)}`);
 	} finally {
 		if (scratch !== undefined) await fs.rm(scratch, { recursive: true, force: true });
 	}

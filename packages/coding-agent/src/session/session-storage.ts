@@ -1240,7 +1240,7 @@ export class FileSessionStorage implements SessionStorage {
 		let replaced = false;
 		this.#withPublishLock(fpath, () => {
 			if (!unchanged()) return;
-			fs.renameSync(replacement, fpath);
+			this.renameSync(replacement, fpath);
 			replaced = true;
 		});
 		return replaced;

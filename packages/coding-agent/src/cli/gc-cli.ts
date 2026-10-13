@@ -37,7 +37,6 @@ import {
 	compressCandidate,
 	compressFilesInPlace,
 	compressMethod,
-	dropCompressed,
 	sweepCompressScratch,
 } from "./gc-compress";
 import {
@@ -160,7 +159,7 @@ export interface CompressGcResult {
 	/** The filesystem's compression method when supported. */
 	method?: CompressMethod;
 	scanned: number;
-	/** Idle sessions a running process still owns. */
+	/** Idle sessions with files to compress that a running process still owns. */
 	skippedLive: number;
 	/** Sessions with at least one file still stored uncompressed. */
 	sessions: number;
@@ -168,9 +167,9 @@ export interface CompressGcResult {
 	compressed: number;
 	/** Logical bytes of the files selected for compression. */
 	bytes: number;
-	/** Bytes those files allocated on disk before compression. btrfs reports uncompressed blocks. */
+	/** Bytes those files allocated on disk before compression. */
 	allocatedBefore: number;
-	/** Bytes the selected files allocate on disk afterwards (`--apply` only); not measurable on btrfs. */
+	/** Bytes the selected files allocate on disk afterwards (`--apply` only). */
 	allocatedAfter: number;
 	/** Scratch directories a killed run left behind; removed with `--apply`. */
 	leftoverScratchDirs: number;
@@ -1660,16 +1659,19 @@ async function collectArchivedStatsSessions(
 	return sessions;
 }
 
+function statsDbPath(options: ResolvedGcOptions): string {
+	return path.resolve(options.agentDir) === path.resolve(getAgentDir())
+		? getStatsDbPath()
+		: path.join(options.agentDir, "stats.db");
+}
+
 async function cleanupStatsRowsForArchivedSessions(
 	options: ResolvedGcOptions,
 	archiveRoot: string,
 	newlyArchivedSessions: SessionInfo[],
 	result: ArchiveGcResult,
 ): Promise<void> {
-	const dbPath =
-		path.resolve(options.agentDir) === path.resolve(getAgentDir())
-			? getStatsDbPath()
-			: path.join(options.agentDir, "stats.db");
+	const dbPath = statsDbPath(options);
 	if (!(await pathExists(dbPath))) return;
 	const sessionsRoot = getSessionsDir(options.agentDir);
 
@@ -1942,8 +1944,20 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 	const sessions = await listActiveSessions(sessionsRoot);
 	result.scanned = sessions.length;
 	const cutoffMs = Date.now() - Math.max(options.compressAfterDays * DAY_MS, GC_WRITE_GRACE_MS);
+	const statsDb = statsDbPath(options);
 	for (const session of sessions) {
 		if (session.modified.getTime() > cutoffMs) continue;
+		const files = await collectSessionFiles(session);
+		const candidates: CompressCandidate[] = [];
+		for (const file of files) {
+			try {
+				const candidate = await compressCandidate(file);
+				if (candidate && candidate.mtimeMs <= cutoffMs) candidates.push(candidate);
+			} catch (error) {
+				if (codeOf(error) !== "ENOENT") result.errors.push(`${file}: ${errorMessage(error)}`);
+			}
+		}
+		if (candidates.length === 0) continue;
 		const lease = await tryAcquireSessionFileLease(session.path);
 		if (lease === null) {
 			result.skippedLive += 1;
@@ -1951,23 +1965,11 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 		}
 		let nested: FileLockHandle[] | null = [];
 		try {
-			const files = await collectSessionFiles(session);
 			nested = await tryAcquireNestedLeases(session, files);
 			if (nested === null) {
 				result.skippedLive += 1;
 				continue;
 			}
-			let candidates: CompressCandidate[] = [];
-			for (const file of files) {
-				try {
-					const candidate = await compressCandidate(file);
-					if (candidate && candidate.mtimeMs <= cutoffMs) candidates.push(candidate);
-				} catch (error) {
-					if (codeOf(error) !== "ENOENT") result.errors.push(`${file}: ${errorMessage(error)}`);
-				}
-			}
-			candidates = await dropCompressed(candidates, method);
-			if (candidates.length === 0) continue;
 			result.sessions += 1;
 			result.wouldCompress += candidates.length;
 			for (const candidate of candidates) {
@@ -1975,7 +1977,12 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 				result.allocatedBefore += candidate.allocated;
 			}
 			if (!options.apply) continue;
-			const batch = await compressFilesInPlace(candidates, method);
+			// The APFS scratch copies end in `.jsonl` like the originals; holding the
+			// stats sync lock keeps a concurrent sync from ingesting them.
+			const batch =
+				method === "apfs"
+					? await withStatsSyncLock(statsDb, () => compressFilesInPlace(candidates, method))
+					: await compressFilesInPlace(candidates, method);
 			result.compressed += batch.compressed;
 			result.allocatedAfter += batch.allocatedAfter;
 			result.errors.push(...batch.errors);
@@ -2254,16 +2261,11 @@ function renderText(result: GcResult): string {
 	if (result.compress) {
 		const compress = result.compress;
 		if (!compress.supported) {
-			lines.push("compress: unsupported on this filesystem (APFS, NTFS, or btrfs only)");
+			lines.push("compress: unsupported on this filesystem (APFS or NTFS only)");
 		} else {
-			// btrfs reports uncompressed blocks, so only the logical size is meaningful there.
 			const after = result.apply ? `, ${formatBytes(compress.allocatedAfter)} after` : "";
-			const size =
-				compress.method === "btrfs"
-					? formatBytes(compress.bytes)
-					: `${formatBytes(compress.allocatedBefore)} on disk before${after}`;
 			lines.push(
-				`compress: ${compress.compressed}/${compress.wouldCompress} files in ${compress.sessions} sessions, ${size}`,
+				`compress: ${compress.compressed}/${compress.wouldCompress} files in ${compress.sessions} sessions, ${formatBytes(compress.allocatedBefore)} on disk before${after}`,
 			);
 			if (compress.skippedLive > 0) lines.push(`compress skipped live: ${compress.skippedLive}`);
 			if (compress.leftoverScratchDirs > 0) {
