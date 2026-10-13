@@ -177,41 +177,6 @@ export function applyCatalogCorrections(
 	model: Pick<ModelSpec<Api>, "cost" | "contextWindow" | "maxTokens" | "input">,
 	catalog: Record<string, unknown>,
 ): void {
-	const longContext = objectPayload(catalog.longContext);
-	if (longContext !== undefined) {
-		const inputThreshold = numberField(longContext, "inputThreshold");
-		const inclusive = Reflect.get(longContext, "inputThresholdInclusive") === true;
-		const multiplier = numberField(longContext, "multiplier");
-		const outputMultiplier = numberField(longContext, "outputMultiplier") ?? multiplier;
-		const input = numberField(longContext, "input");
-		const output = numberField(longContext, "output");
-		const cacheRead = numberField(longContext, "cacheRead");
-		const cacheWrite = numberField(longContext, "cacheWrite");
-		const base = model.cost;
-		const hasTokenPrice = base.input !== 0 || base.output !== 0 || base.cacheRead !== 0 || base.cacheWrite !== 0;
-		if (inputThreshold !== undefined && multiplier !== undefined && outputMultiplier !== undefined && hasTokenPrice) {
-			// Multiplier form: tier rates derive from the row's live list price.
-			model.cost = {
-				...base,
-				longContext: {
-					inputThreshold,
-					...(inclusive && { inputThresholdInclusive: true }),
-					input: base.input * multiplier,
-					output: base.output * outputMultiplier,
-					cacheRead: base.cacheRead * multiplier,
-					cacheWrite: base.cacheWrite * multiplier,
-				},
-			};
-		} else if (
-			inputThreshold !== undefined &&
-			input !== undefined &&
-			output !== undefined &&
-			cacheRead !== undefined &&
-			cacheWrite !== undefined
-		) {
-			model.cost = { ...model.cost, longContext: { inputThreshold, input, output, cacheRead, cacheWrite } };
-		}
-	}
 	const patch = objectPayload(catalog.costPatch);
 	if (patch !== undefined) {
 		model.cost = { ...model.cost };
@@ -253,13 +218,14 @@ export function applyCatalogCorrections(
 		const inputThreshold = numberField(longContext, "inputThreshold");
 		const inclusive = Reflect.get(longContext, "inputThresholdInclusive") === true;
 		const multiplier = numberField(longContext, "multiplier");
+		const outputMultiplier = numberField(longContext, "outputMultiplier") ?? multiplier;
 		const input = numberField(longContext, "input");
 		const output = numberField(longContext, "output");
 		const cacheRead = numberField(longContext, "cacheRead");
 		const cacheWrite = numberField(longContext, "cacheWrite");
 		const base = model.cost;
 		const hasTokenPrice = base.input !== 0 || base.output !== 0 || base.cacheRead !== 0 || base.cacheWrite !== 0;
-		if (inputThreshold !== undefined && multiplier !== undefined && hasTokenPrice) {
+		if (inputThreshold !== undefined && multiplier !== undefined && outputMultiplier !== undefined && hasTokenPrice) {
 			// Multiplier form: tier rates derive from the row's final base card,
 			// after `cost-patch`/`cost-fallback` corrected the live list price.
 			model.cost = {
@@ -268,7 +234,7 @@ export function applyCatalogCorrections(
 					inputThreshold,
 					...(inclusive && { inputThresholdInclusive: true }),
 					input: base.input * multiplier,
-					output: base.output * multiplier,
+					output: base.output * outputMultiplier,
 					cacheRead: base.cacheRead * multiplier,
 					cacheWrite: base.cacheWrite * multiplier,
 				},

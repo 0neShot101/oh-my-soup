@@ -410,6 +410,7 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	 * reports cache-write tokens but no cache-write rate.
 	 */
 	"cache-write-rate": { key: "cacheWriteRate", set: "catalog", shape: "scalar" },
+	/**
 	 * How the model line bills a replayed signed thinking block as input:
 	 * `output` bills the reasoning its signature carries, at the size the turn
 	 * billed as output, and not the signature's bytes. Unassigned: estimated
