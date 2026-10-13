@@ -279,23 +279,25 @@ export function createFrameApi(frame: Frame, hooks: FrameApiHooks): BrowserFrame
 					await untilAborted(signal, () => frame.focus(hooks.normalizeSelector(options.selector!)));
 				await untilAborted(signal, () => pressKey(frame.page(), key));
 			}),
-		text: (selector = "body") =>
+		text: selector =>
 			hooks.op(
-				`frame.text(${JSON.stringify(selector)})`,
+				`frame.text(${JSON.stringify(selector ?? "body")})`,
 				hooks.quickOpMs,
 				signal =>
 					untilAborted(signal, () =>
-						frame.$eval(hooks.normalizeSelector(selector), element => element.textContent ?? ""),
+						frame.$eval(hooks.normalizeSelector(selector ?? "body"), element => element.textContent ?? ""),
 					),
-				selectorOptions(selector),
+				selectorOptions(selector ?? "body"),
 			),
-		html: (selector = "body") =>
+		html: selector =>
 			hooks.op(
-				`frame.html(${JSON.stringify(selector)})`,
+				`frame.html(${JSON.stringify(selector ?? "body")})`,
 				hooks.quickOpMs,
 				signal =>
-					untilAborted(signal, () => frame.$eval(hooks.normalizeSelector(selector), element => element.innerHTML)),
-				selectorOptions(selector),
+					untilAborted(signal, () =>
+						frame.$eval(hooks.normalizeSelector(selector ?? "body"), element => element.innerHTML),
+					),
+				selectorOptions(selector ?? "body"),
 			),
 		value: selector =>
 			hooks.op(
