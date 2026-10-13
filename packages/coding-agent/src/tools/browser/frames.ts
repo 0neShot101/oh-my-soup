@@ -188,6 +188,9 @@ export function createFrameApi(frame: Frame, hooks: FrameApiHooks): BrowserFrame
 		selector,
 		zeroMatchAfterMs: hooks.zeroMatchAfterMs,
 	});
+	// `text()`/`html()` read the frame's `<body>` when no selector is given; any value passed, `null` included, is
+	// still checked as a selector, as on the tab.
+	const bodyIfOmitted = (selector: string | undefined): string => (selector === undefined ? "body" : selector);
 	const waitForSelector = (selector: string, options?: FrameWaitOptions): Promise<boolean> => {
 		const deadline = hooks.waitMs(options?.timeout);
 		return hooks.op(
@@ -281,23 +284,23 @@ export function createFrameApi(frame: Frame, hooks: FrameApiHooks): BrowserFrame
 			}),
 		text: selector =>
 			hooks.op(
-				`frame.text(${JSON.stringify(selector ?? "body")})`,
+				`frame.text(${JSON.stringify(bodyIfOmitted(selector))})`,
 				hooks.quickOpMs,
 				signal =>
 					untilAborted(signal, () =>
-						frame.$eval(hooks.normalizeSelector(selector ?? "body"), element => element.textContent ?? ""),
+						frame.$eval(hooks.normalizeSelector(bodyIfOmitted(selector)), element => element.textContent ?? ""),
 					),
-				selectorOptions(selector ?? "body"),
+				selectorOptions(bodyIfOmitted(selector)),
 			),
 		html: selector =>
 			hooks.op(
-				`frame.html(${JSON.stringify(selector ?? "body")})`,
+				`frame.html(${JSON.stringify(bodyIfOmitted(selector))})`,
 				hooks.quickOpMs,
 				signal =>
 					untilAborted(signal, () =>
-						frame.$eval(hooks.normalizeSelector(selector ?? "body"), element => element.innerHTML),
+						frame.$eval(hooks.normalizeSelector(bodyIfOmitted(selector)), element => element.innerHTML),
 					),
-				selectorOptions(selector ?? "body"),
+				selectorOptions(bodyIfOmitted(selector)),
 			),
 		value: selector =>
 			hooks.op(
