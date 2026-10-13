@@ -592,6 +592,26 @@ describe("skill:// falls back to an MCP resource with the same URI", () => {
 		expect(text).not.toContain("L4");
 	});
 
+	it("reads an unloaded connected catalog despite another server's stalled connection", async () => {
+		const resources = new Map<string, { resources: MCPResource[]; templates: MCPResourceTemplate[] }>();
+		MCPManager.setInstance(
+			createMockManager({
+				servers: ["figma"],
+				resources,
+				ensureResources: async name => {
+					resources.set(name, { resources: [{ uri: skillUri, name: "figma-use" }], templates: [] });
+				},
+				waitForPendingConnections: () => Promise.withResolvers<void>().promise,
+				readResult: { contents: [{ uri: skillUri, text: mcpText }] },
+			}),
+		);
+
+		const reading = InternalUrlRouter.instance().resolve(skillUri, { skills: [] });
+		expect((await withTimeout(reading, 2_000, "connected catalog was blocked by another server")).content).toBe(
+			mcpText,
+		);
+	});
+
 	it("requires explicit MCP routing for skill URI templates", async () => {
 		const resources = new Map<string, { resources: MCPResource[]; templates: MCPResourceTemplate[] }>();
 		resources.set("figma", {

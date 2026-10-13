@@ -120,8 +120,10 @@ function formatAvailableResources(mcpManager: MCPManager): string {
 	return available || "  (none)";
 }
 
-/** Wait for pending connects (and the reconnects they arm), then load connected servers' resource catalogs. */
-async function settleCatalogs(mcpManager: MCPManager): Promise<void> {
+/** Load connected catalogs before waiting on unrelated servers; check again after pending connects settle. */
+async function settleCatalogs(mcpManager: MCPManager, uri: string, exact: boolean): Promise<void> {
+	await Promise.allSettled(mcpManager.getConnectedServers().map(name => mcpManager.ensureServerResources(name)));
+	if (resolveTargetServer(mcpManager, uri, exact)) return;
 	await mcpManager.waitForPendingConnections();
 	await Promise.allSettled(mcpManager.getConnectedServers().map(name => mcpManager.ensureServerResources(name)));
 }
@@ -142,12 +144,10 @@ export async function readMcpResource(
 	const uri = extractResourceUri(url);
 	let targetServer = resolveTargetServer(mcpManager, uri, exact);
 	if (!targetServer) {
-		// A configured server may still be handshaking when discovery returned
-		// (the `connectServers` startup race deliberately leaves slow servers in
-		// flight). This one-shot read must observe the final attached state
-		// rather than the mid-handshake snapshot, so wait for pending connects
-		// before loading catalogs and retrying.
-		const settling = settleCatalogs(mcpManager);
+		// A server may already be connected but have an unloaded catalog, while another is still
+		// handshaking after the startup race. Check connected catalogs first so unrelated pending
+		// work cannot delay an advertised resource; then wait for late servers and retry.
+		const settling = settleCatalogs(mcpManager, uri, exact);
 		// `settleCatalogs` never rejects, so the only rejection to swallow is the spent budget.
 		await untilAborted(
 			signal,
