@@ -544,4 +544,27 @@ describe("ExtensionUiController tool approval", () => {
 		expect(harness.editorContainer.children).toEqual([harness.editor]);
 		expect(harness.getFocused()).toBe(harness.editor);
 	});
+
+	it("attaches pasted images to the steer: clipboard and image-path pastes reach the composer, later keys wait", async () => {
+		const harness = makeHarness();
+		const clipboard = Promise.withResolvers<boolean>();
+		const onPasteImage = vi.fn(() => clipboard.promise);
+		const onPasteImagePath = vi.fn();
+		harness.editor.onPasteImage = onPasteImage;
+		harness.editor.onPasteImagePath = onPasteImagePath;
+		void harness.controller.showCollabAwareApproval(prompt);
+		// Image-only clipboard paste: the terminal sends an empty bracketed paste.
+		harness.handleInput("\x1b[200~\x1b[201~");
+		expect(onPasteImage).toHaveBeenCalledTimes(1);
+		// Typed while the clipboard read is pending: held until the image lands.
+		harness.handleInput("x");
+		expect(harness.editor.getText()).toBe("");
+		clipboard.resolve(true);
+		await clipboard.promise;
+		await Promise.resolve();
+		expect(harness.editor.getText()).toBe("x");
+		harness.handleInput("\x1b[200~/tmp/shot.png\x1b[201~");
+		await Promise.resolve();
+		expect(onPasteImagePath).toHaveBeenCalledWith("/tmp/shot.png");
+	});
 });
