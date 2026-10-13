@@ -385,23 +385,32 @@ export function formatApprovalPrompt(tool: ApprovalSubject, args: unknown, reaso
 	return lines.join("\n");
 }
 
+/** What a call's approval prompt says beyond the tool and its args. */
+export interface ApprovalRequestOptions {
+	/** Why the call needs approval. */
+	reason?: string;
+	/** Lines after the prompt on every surface (provider safety checks). */
+	appendix?: readonly string[];
+	/** The transcript call this approval gates; absent for calls the transcript never shows (eval preludes, bridged tools). */
+	toolCallId?: string;
+}
+
 /**
  * Ask the user to approve a call: the host's approval dialog when it has one (it gets the full
- * prompt and a compact one without the tool's details, and picks by whether the call shows in
- * the transcript beside it), else an Approve/Deny select with the full prompt (RPC, ACP,
- * extension hosts). `appendix` lines follow the prompt on both. True only for an explicit approval.
+ * prompt, a compact one without the tool's details, and the gated call's id, and shows the
+ * compact one only beside that call in the transcript), else an Approve/Deny select with the
+ * full prompt (RPC, ACP, extension hosts). True only for an explicit approval.
  */
 export async function requestApproval(
 	ui: Pick<ExtensionUIContext, "select" | "approve">,
 	tool: ApprovalSubject,
 	args: unknown,
-	reason?: string,
-	appendix: readonly string[] = [],
+	{ reason, appendix = [], toolCallId }: ApprovalRequestOptions = {},
 ): Promise<boolean> {
 	const full = [formatApprovalPrompt(tool, args, reason), ...appendix].join("\n");
 	if (ui.approve) {
 		const compact = [...approvalHeader(tool, reason), ...appendix].join("\n");
-		return (await ui.approve({ full, compact })) === true;
+		return (await ui.approve({ full, compact, toolCallId })) === true;
 	}
 	return (await ui.select(full, ["Approve", "Deny"])) === "Approve";
 }

@@ -130,11 +130,16 @@ export class ApprovalDialogComponent implements Component {
 			if (performance.now() >= this.#armedAt) this.#finish(true);
 			return;
 		}
+		const draft = this.options.draft;
+		// The composer's clear key (Ctrl+C, also a cancel key) clears a draft before it denies.
+		if (draft?.hasText() && getKeybindings().matches(keyData, "app.clear")) {
+			this.#editDraft(draft, keyData);
+			return;
+		}
 		if (matchesSelectCancel(keyData)) {
 			this.#finish(false);
 			return;
 		}
-		const draft = this.options.draft;
 		if (draft?.hasText()) {
 			this.#editDraft(draft, keyData);
 			return;

@@ -248,9 +248,8 @@ describe("MCP fallback and prompt formatting", () => {
 				return true;
 			},
 		};
-		expect(await requestApproval(ui, subject, {}, "Critical pattern", ["Provider safety checks:", "- check"])).toBe(
-			true,
-		);
+		const appendix = ["Provider safety checks:", "- check"];
+		expect(await requestApproval(ui, subject, {}, { reason: "Critical pattern", appendix })).toBe(true);
 		expect(shown?.compact.split("\n")).toEqual([
 			"Allow tool: mcp__server__write",
 			"Origin: MCP server tool",

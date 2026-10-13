@@ -654,7 +654,8 @@ export class ExtensionUiController {
 	/**
 	 * The tool-approval prompt in the composer's place; a collab guest answers it as an Approve/Deny
 	 * select over the full prompt. Locally the compact prompt, without the tool's details, shows
-	 * while tool activity shows the call in the transcript; hidden, the dialog wraps the full one.
+	 * only while the gated call's card is in the transcript; for hidden tool activity or a call the
+	 * transcript never shows (eval-bridged tools, preludes), the dialog wraps the full one.
 	 * The composer stays mounted beneath it and takes the typing: a user message queued as steering
 	 * while the call waits (sent here, from Tern, or by a collab guest) denies the call, so the
 	 * message tells the agent why instead of a bare denial.
@@ -670,7 +671,9 @@ export class ExtensionUiController {
 		};
 		const choice = await this.#raceCollabDialog(request, dialogOptions?.signal, signal =>
 			this.#presentDialog(signal, settle => {
-				const callHidden = this.ctx.hideToolActivity;
+				const toolCallId = prompt.toolCallId;
+				const callHidden =
+					this.ctx.hideToolActivity || toolCallId === undefined || !this.ctx.pendingTools.has(toolCallId);
 				const editor = this.ctx.editor;
 				const session = this.ctx.session;
 				let steeringBaseline = session.getQueuedMessages().steering.length;

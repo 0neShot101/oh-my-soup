@@ -290,12 +290,15 @@ describe("dialogs under a native surface", () => {
 		dialog.handleInput("o");
 		dialog.handleInput(UP);
 		dialog.handleInput(ENTER);
-		expect(routed).toEqual(["n", "o", UP, ENTER]);
+		// Ctrl+C is both a cancel key and the composer's clear key: with a draft it clears, never denies.
+		dialog.handleInput("\x03");
+		expect(routed).toEqual(["n", "o", UP, ENTER, "\x03"]);
+		expect(callbacks.onDeny).not.toHaveBeenCalled();
 		expect(stripVTControlCharacters(dialog.render(60).join("\n"))).not.toContain("Line 0");
 		// Esc stays the dialog's: it denies without touching the draft.
 		dialog.handleInput("\x1b");
 		expect(callbacks.onDeny).toHaveBeenCalledTimes(1);
-		expect(routed).toHaveLength(4);
+		expect(routed).toHaveLength(5);
 		expect(callbacks.onApprove).not.toHaveBeenCalled();
 	});
 
