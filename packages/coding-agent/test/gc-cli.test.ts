@@ -2702,7 +2702,8 @@ describe("runGcCommand session compression", () => {
 	test.skipIf(!supported)("leaves a session uncompressed while a nested transcript is live", async () => {
 		const parent = await writeIdleSession(Bun.randomUUIDv7());
 		const nestedId = Bun.randomUUIDv7();
-		const nested = path.join(path.dirname(parent.artifact), "0-subagent.jsonl");
+		// `--session` opens any path, so the transcript is found by its header, not its name.
+		const nested = path.join(path.dirname(parent.artifact), "0-subagent.log");
 		const header = JSON.stringify({
 			type: "session",
 			version: 3,

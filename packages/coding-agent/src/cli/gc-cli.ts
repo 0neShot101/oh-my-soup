@@ -5,6 +5,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGunzip, createGzip } from "node:zlib";
 import { withStatsSyncLock } from "@oh-my-pi/omp-stats/aggregator";
+import { isCompressScratchPath } from "@oh-my-pi/omp-stats/parser";
 import {
 	formatBytes,
 	getAgentDir,
@@ -33,7 +34,6 @@ import { FileSessionStorage, SESSION_STAGING_RE, tryAcquireSessionLease } from "
 import {
 	type CompressCandidate,
 	type CompressMethod,
-	COMPRESS_SCRATCH_PREFIX,
 	compressCandidate,
 	compressFilesInPlace,
 	compressMethod,
@@ -1877,7 +1877,7 @@ async function collectSessionFiles(session: SessionInfo): Promise<string[]> {
 	const files = [session.path];
 	try {
 		for await (const name of ANY_FILE_GLOB.scan({ cwd: artifactsDir, dot: true, onlyFiles: true })) {
-			if (name.split(/[\\/]/).some(part => part.startsWith(COMPRESS_SCRATCH_PREFIX))) continue;
+			if (isCompressScratchPath(name)) continue;
 			files.push(path.join(artifactsDir, name));
 		}
 	} catch (error) {
@@ -1888,21 +1888,29 @@ async function collectSessionFiles(session: SessionInfo): Promise<string[]> {
 
 /**
  * Leases of the transcripts nested in a session's artifact tree (subagent
- * sessions), which a process can open on their own. Null, with every lease
- * taken so far released, when any of them is live.
+ * sessions, or any file a process can open with `--session`), found by their
+ * session header rather than their name. Null, with every lease taken so far
+ * released, when any of them is live.
  */
-async function tryAcquireNestedLeases(session: SessionInfo, files: string[]): Promise<FileLockHandle[] | null> {
+async function tryAcquireNestedLeases(
+	session: SessionInfo,
+	files: string[],
+): Promise<{ leases: FileLockHandle[]; transcripts: Set<string> } | null> {
 	const leases: FileLockHandle[] = [];
+	const transcripts = new Set<string>([session.path]);
 	for (const file of files) {
-		if (file === session.path || !file.endsWith(".jsonl")) continue;
+		if (file === session.path) continue;
 		const lease = await tryAcquireSessionFileLease(file);
 		if (lease === null) {
 			for (const held of leases) held.release();
 			return null;
 		}
-		if (lease) leases.push(lease);
+		if (lease) {
+			leases.push(lease);
+			transcripts.add(file);
+		}
 	}
-	return leases;
+	return { leases, transcripts };
 }
 
 /**
@@ -1969,7 +1977,7 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 			result.skippedLive += 1;
 			continue;
 		}
-		let nested: FileLockHandle[] | null = [];
+		let nested: { leases: FileLockHandle[]; transcripts: Set<string> } | null = null;
 		try {
 			nested = await tryAcquireNestedLeases(session, files);
 			if (nested === null) {
@@ -1983,7 +1991,7 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 				result.allocatedBefore += candidate.allocated;
 			}
 			if (!options.apply) continue;
-			const batch = await compressFilesInPlace(candidates, method);
+			const batch = await compressFilesInPlace(candidates, method, nested.transcripts);
 			result.compressed += batch.compressed;
 			result.allocatedAfter += batch.allocatedAfter;
 			result.errors.push(...batch.errors);
@@ -1991,7 +1999,7 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 			result.errors.push(`${session.path}: ${errorMessage(error)}`);
 		} finally {
 			// Held through the rewrite so no omp process resumes the session mid-swap.
-			for (const held of nested ?? []) held.release();
+			for (const held of nested?.leases ?? []) held.release();
 			lease?.release();
 		}
 	}
