@@ -2212,7 +2212,45 @@ mod capture_tests {
 		}
 	}
 
-	fn worker_with(backend: impl Backend + 'static) -> Worker {
+	/// A worker that holds the ownership test lock for its test: input it is
+	/// sent takes the process's one input lease, which the ownership tests in
+	/// `control` assert on.
+	struct TestWorker {
+		worker:     Worker,
+		_ownership: parking_lot::MutexGuard<'static, ()>,
+	}
+
+	impl TestWorker {
+		fn serve(self, rx: &flume::Receiver<QueuedRequest>, grace: Duration) {
+			let Self { worker, _ownership } = self;
+			worker.serve(rx, grace);
+		}
+	}
+
+	impl std::ops::Deref for TestWorker {
+		type Target = Worker;
+
+		fn deref(&self) -> &Worker {
+			&self.worker
+		}
+	}
+
+	impl std::ops::DerefMut for TestWorker {
+		fn deref_mut(&mut self) -> &mut Worker {
+			&mut self.worker
+		}
+	}
+
+	fn worker_with(backend: impl Backend + 'static) -> TestWorker {
+		TestWorker {
+			_ownership: crate::desktop::control::OWNERSHIP_TEST.lock(),
+			worker:     unlocked_worker(backend),
+		}
+	}
+
+	/// A worker for tests that send it no input, so they don't wait for the
+	/// ownership tests.
+	fn unlocked_worker(backend: impl Backend + 'static) -> Worker {
 		Worker {
 			backend:       Ok(Box::new(backend)),
 			registry:      AxRegistry::default(),
@@ -2338,7 +2376,9 @@ mod capture_tests {
 		let (tx, rx) = flume::unbounded();
 		let (done_tx, done) = flume::bounded(1);
 		let join = thread::spawn(move || {
-			let mut worker = worker_with(backend);
+			// Only window listings are sent, and the calls' timeouts must not
+			// include a wait for the ownership tests.
+			let mut worker = unlocked_worker(backend);
 			worker.display_awake = display_awake;
 			worker.serve(&rx, Duration::from_secs(3600));
 			let _ = done_tx.send(());
