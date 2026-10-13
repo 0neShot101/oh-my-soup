@@ -169,6 +169,7 @@ if "__omp_prelude_loaded__" not in globals():
                 if not isinstance(file_path, str):
                     # An extension's replacement `read` may name no file: its own text for the selected lines is the answer.
                     return _read_through_tool(f"{path}:raw", offset, limit)
+                # Once located, the file is read like this session's artifacts and plain paths: read() is no read-tool policy gate.
                 p = Path(file_path)
         elif _should_delegate_read(path):
             return _read_through_tool(path, offset, limit)
