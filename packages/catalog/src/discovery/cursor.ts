@@ -6,6 +6,7 @@ import { resolveCatalogAxes, resolveModelPolicy } from "../compat/resolve";
 import { classifyModel } from "../compat/taxonomy";
 import { Effort, THINKING_EFFORTS } from "../effort";
 import { getBundledModels } from "../models";
+import { applyDueEffectiveRates } from "../pricing";
 import { toModelSpec } from "../provider-models/bundled-references";
 import type { CursorModelRoute, Model, ModelSpec, TokenCost } from "../types";
 import {
@@ -525,7 +526,9 @@ function resolveCursorCardAxes(slug: string): { patch?: TokenCost; fallback?: To
 		const input = field("input");
 		const output = field("output");
 		if (input === undefined || output === undefined) return undefined;
-		return { input, output, cacheRead: field("cacheRead") ?? 0, cacheWrite: field("cacheWrite") ?? 0 };
+		const rates = { input, output, cacheRead: field("cacheRead") ?? 0, cacheWrite: field("cacheWrite") ?? 0 };
+		applyDueEffectiveRates(rates, Reflect.get(payload, "effectiveRates"));
+		return rates;
 	};
 	return { patch: card(axes.costPatch), fallback: card(axes.costFallback) };
 }

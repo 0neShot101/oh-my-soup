@@ -10,7 +10,7 @@
 import { resolveDiscoveryApi, resolveModelPolicy } from "./compat/resolve";
 import type { ModelIdentity } from "./compat/types";
 import { resolveModelTokenizer } from "./model-tokenizer";
-import { materializeTimeBasedCost } from "./pricing";
+import { applyDueEffectiveRates, materializeTimeBasedCost } from "./pricing";
 import { type Api, MODEL_KINDS, type Model, type ModelSpec } from "./types";
 import { cleanModelName } from "./utils";
 
@@ -22,41 +22,6 @@ function numberField(source: object, key: string): number | undefined {
 /** Narrow an unknown compiled-axis payload to an object payload. */
 function objectPayload(value: unknown): object | undefined {
 	return typeof value === "object" && value !== null && !Array.isArray(value) ? value : undefined;
-}
-
-/**
- * Overwrite seeded fallback rates with the latest dated card whose
- * `effectiveFrom` is already due. Leaves the seed unchanged when no card
- * has started, and never attaches a `timeBased` tariff.
- */
-function applyEffectiveFallbackRates(
-	cost: { input: number; output: number; cacheRead: number; cacheWrite: number },
-	effectiveRates: unknown,
-	now = Date.now(),
-): void {
-	const rates = objectPayload(effectiveRates);
-	if (rates === undefined) return;
-	let latestFrom = Number.NEGATIVE_INFINITY;
-	let latest: object | undefined;
-	for (const entry of Object.values(rates)) {
-		const payload = objectPayload(entry);
-		if (payload === undefined) continue;
-		const date = Reflect.get(payload, "effectiveFrom");
-		if (typeof date !== "string") continue;
-		const from = Date.parse(date);
-		if (!Number.isFinite(from) || from > now || from < latestFrom) continue;
-		latestFrom = from;
-		latest = payload;
-	}
-	if (latest === undefined) return;
-	const input = numberField(latest, "input");
-	if (input !== undefined) cost.input = input;
-	const output = numberField(latest, "output");
-	if (output !== undefined) cost.output = output;
-	const cacheRead = numberField(latest, "cacheRead");
-	if (cacheRead !== undefined) cost.cacheRead = cacheRead;
-	const cacheWrite = numberField(latest, "cacheWrite");
-	if (cacheWrite !== undefined) cost.cacheWrite = cacheWrite;
 }
 
 /** Narrow a compiled `input-modalities` axis value to the model input union. */
@@ -188,6 +153,9 @@ export function applyCatalogCorrections(
 		if (cacheRead !== undefined) model.cost.cacheRead = cacheRead;
 		const cacheWrite = numberField(patch, "cacheWrite");
 		if (cacheWrite !== undefined) model.cost.cacheWrite = cacheWrite;
+		// A dated card overwrites the patched (or upstream) legs once due, so
+		// rows built after a scheduled list-price change carry the new card.
+		applyDueEffectiveRates(model.cost, Reflect.get(patch, "effectiveRates"));
 	}
 	const fallback = objectPayload(catalog.costFallback);
 	if (fallback !== undefined) {
@@ -207,10 +175,8 @@ export function applyCatalogCorrections(
 			const cacheWrite = numberField(fallback, "cacheWrite");
 			if (cacheWrite !== undefined) model.cost.cacheWrite = cacheWrite;
 			// Dated fallback rates overwrite the seeded numbers when they have
-			// already taken effect. They are not a recurring tariff: wrapping
-			// them in `timeBased` with empty peak windows would report
-			// permanent off-peak and never wake at the dated boundary.
-			applyEffectiveFallbackRates(model.cost, Reflect.get(fallback, "effectiveRates"));
+			// already taken effect.
+			applyDueEffectiveRates(model.cost, Reflect.get(fallback, "effectiveRates"));
 		}
 	}
 	const longContext = objectPayload(catalog.longContext);
