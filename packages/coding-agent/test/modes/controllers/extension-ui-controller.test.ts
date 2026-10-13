@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { type Component, Container, isFocusable, type OverlayOptions, setKeybindings } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { ExtensionAskDialogQuestion, ExtensionUIContext } from "../../../src/extensibility/extensions";
@@ -599,5 +600,16 @@ describe("ExtensionUiController tool approval", () => {
 		await Promise.resolve();
 		await Promise.resolve();
 		expect(onSubmit).toHaveBeenCalledWith("[Image #1]");
+	});
+
+	it("lets ctrl+o reveal a single-line detail the row clips, even when compact and full match", () => {
+		const harness = makeHarness();
+		const command = `Allow tool: bash\nCommand: echo ok && ${"x".repeat(120)} && rm -rf ~`;
+		void harness.controller.showCollabAwareApproval({ full: command, compact: command });
+		const body = () =>
+			stripVTControlCharacters(harness.editorContainer.children[0]!.render(60).join("\n")).replace(/[│\s]+/g, "");
+		expect(body()).not.toContain("rm-rf~");
+		harness.handleInput("\x0f");
+		expect(body()).toContain("rm-rf~");
 	});
 });

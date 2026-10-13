@@ -1175,8 +1175,10 @@ describe("InputController global tool-output expand (ctrl+o)", () => {
 		expect(dispatchInput(listeners, CTRL_O)).toEqual({ consume: true });
 		expect(ctx.toolOutputExpanded).toBe(false);
 		expect(summarized.render(80).join("\n")).toContain("rm -rf dist");
+		// The image-paste chord is left to the dialog, which hands it to the composer's tracked paste.
+		expect(dispatchInput(listeners, "\x16")).toBeUndefined();
 
-		// Nothing summarized: the key keeps toggling tool previews (#7837).
+		// Without a full prompt to show, the key keeps toggling tool previews (#7837).
 		setFocused(new ApprovalDialogComponent("Allow tool: bash\nCommand: ls", callbacks));
 		expect(dispatchInput(listeners, CTRL_O)).toEqual({ consume: true });
 		expect(ctx.toolOutputExpanded).toBe(true);
