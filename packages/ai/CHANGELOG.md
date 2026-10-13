@@ -14,6 +14,9 @@
 ### Fixed
 
 - Fixed Codex cybersecurity policy errors incorrectly retrying without Daybreak and disabling it for subsequent requests, while preserving retries without Daybreak when access is rejected ([#15472](https://github.com/can1357/oh-my-pi/pull/15472) by [@taibenvenuti](https://github.com/taibenvenuti))
+### Fixed
+
+- Fixed automatic recovery from gateway-reported WebSocket closures before response completion when no replay-unsafe output has been committed.
 
 ### Removed
 
