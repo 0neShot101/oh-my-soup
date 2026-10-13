@@ -1213,10 +1213,12 @@ impl SessionCore {
 	}
 
 	fn close(&self) -> CoreResult<()> {
-		self.cancellation.cancel();
-		self.display_awake.release();
+		// Closed before cancelling, so no request gets a token from after the
+		// cancel and starts behind it, holding the display past this release.
 		let mut lifecycle = self.lifecycle.lock();
 		lifecycle.closed = true;
+		self.cancellation.cancel();
+		self.display_awake.release();
 		let Some(tx) = lifecycle.tx.take() else {
 			return Ok(());
 		};
@@ -2377,6 +2379,39 @@ mod capture_tests {
 		let join = core.lifecycle.lock().join.take().unwrap();
 		join.join().unwrap();
 		assert_eq!(*awake.lock(), [true, false], "the late return neither holds nor releases again");
+	}
+
+	#[test]
+	fn no_request_starts_once_close_has_begun() {
+		let backend = FakeWaylandBackend::new();
+		let awake = Arc::clone(&backend.awake);
+		let core = session_serving(backend);
+		let before = core.cancellation.token();
+		// Holding the display lock parks close() at its release, past its cancel.
+		let held = core.display_awake.0.lock();
+		let closing = thread::spawn({
+			let core = Arc::clone(&core);
+			move || core.close()
+		});
+		let deadline = Instant::now() + Duration::from_secs(5);
+		while before.check().is_ok() {
+			assert!(Instant::now() < deadline, "close never cancelled");
+			thread::yield_now();
+		}
+		let caller = thread::spawn({
+			let core = Arc::clone(&core);
+			move || core.call(core.cancellation.token(), |reply| Request::ListWindows { reply })
+		});
+		thread::sleep(Duration::from_millis(200));
+		drop(held);
+		closing.join().unwrap().unwrap();
+		let error = caller
+			.join()
+			.unwrap()
+			.err()
+			.expect("a request started after close began");
+		assert_eq!(error.code, ErrorCode::Closed);
+		assert!(awake.lock().is_empty(), "nothing held the display after close began");
 	}
 
 	#[test]
