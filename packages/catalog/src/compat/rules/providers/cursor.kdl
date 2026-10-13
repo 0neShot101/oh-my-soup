@@ -450,6 +450,15 @@ provider "cursor" {
 			cache-write 0
 		}
 	}
+	// Gemini 4 Argon: $2/$10, cache read $0.10.
+	models "gemini-4-argon" {
+		cost-patch {
+			input 2.0
+			output 10.0
+			cache-read 0.1
+			cache-write 0
+		}
+	}
 	// GLM 5.2: $1.40/$4.40, cache read $0.26.
 	models "glm-5.2" {
 		cost-patch {
