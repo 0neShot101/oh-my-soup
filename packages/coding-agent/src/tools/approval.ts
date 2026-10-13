@@ -6,13 +6,13 @@
  * - compare a tool capability tier against the active approval mode,
  * - format the generic approval prompt body.
  */
-import type { AgentTool, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, ApprovalDetailsOptions, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
 import type { Settings } from "../config/settings";
 import type { ExtensionUIContext } from "../extensibility/extensions/types";
 
 import { cfgToolsApproval, cfgToolsApprovalMode } from "./settings";
 
-export type { ToolApproval, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
+export type { ApprovalDetailsOptions, ToolApproval, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
 
 export type ApprovalPolicy = "allow" | "deny" | "prompt";
 export type ApprovalMode = "always-ask" | "write" | "yolo";
@@ -355,16 +355,18 @@ export function requiresApproval(
 	return { required: false };
 }
 
-/**
- * Cleared while a compact prompt formats its details, so line counts come from the whole value
- * rather than the {@link truncateForPrompt} preview; the compacted rows are truncated after.
- */
-let promptTruncation = true;
-
 export function truncateForPrompt(value: string, maxChars = DEFAULT_PROMPT_TRUNCATE_CHARS): string {
-	if (!promptTruncation || value.length <= maxChars) return value;
+	if (value.length <= maxChars) return value;
 	const omitted = value.length - maxChars;
 	return `${value.slice(0, maxChars)}[…${omitted}ch elided…]`;
+}
+
+/**
+ * A `formatApprovalDetails` value as the prompt needs it: whole for a compact prompt (which
+ * counts its lines and truncates the row it keeps), else {@link truncateForPrompt}ed.
+ */
+export function truncateApprovalDetail(value: string, options?: ApprovalDetailsOptions): string {
+	return options?.compact ? value : truncateForPrompt(value);
 }
 
 /**
@@ -376,7 +378,7 @@ export function formatApprovalPrompt(
 	tool: ApprovalSubject,
 	args: unknown,
 	reason?: string,
-	options?: { compact?: boolean },
+	options?: ApprovalDetailsOptions,
 ): string {
 	const lines = [`Allow tool: ${tool.name}`];
 
@@ -388,20 +390,11 @@ export function formatApprovalPrompt(
 		lines.push(`Reason: ${reason}`);
 	}
 
-	let details: string | string[] | undefined;
-	if (options?.compact) {
-		promptTruncation = false;
-		try {
-			details = tool.formatApprovalDetails?.(args);
-		} finally {
-			promptTruncation = true;
-		}
-	} else {
-		details = tool.formatApprovalDetails?.(args);
-	}
+	const compact = options?.compact === true;
+	const details = tool.formatApprovalDetails?.(args, { compact });
 	for (const detail of typeof details === "string" ? [details] : (details ?? [])) {
 		if (detail.length === 0) continue;
-		lines.push(options?.compact ? compactApprovalDetail(detail) : detail);
+		lines.push(compact ? compactApprovalDetail(detail) : detail);
 	}
 
 	return lines.join("\n");

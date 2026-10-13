@@ -247,14 +247,14 @@ describe("MCP fallback and prompt formatting", () => {
 		]);
 	});
 
-	it("compact prompts count every line of a detail the formatter truncates", () => {
-		const content = Array.from({ length: 1000 }, (_, i) => `line ${i}`).join("\n");
-		const subject = tool("write", "write", () => [`Content:\n${truncateForPrompt(content)}`]);
-		expect(formatApprovalPrompt(subject, {}, undefined, { compact: true })).toBe(
-			"Allow tool: write\nContent: 1000 lines in the tool call",
+	it("compact prompts count every line of a detail the formatter would truncate", () => {
+		const command = Array.from({ length: 1000 }, (_, i) => `echo ${i}`).join("\n");
+		const bash = createBashTool();
+		expect(formatApprovalPrompt(bash, { command }, undefined, { compact: true })).toBe(
+			"Allow tool: bash\nCommand: echo 0 … +999 lines in the tool call",
 		);
 		// The full prompt keeps the formatter's truncation.
-		expect(formatApprovalPrompt(subject, {})).toContain("ch elided…]");
+		expect(formatApprovalPrompt(bash, { command })).toContain("ch elided…]");
 	});
 
 	it("does not add MCP origin for annotated MCP tools", () => {
