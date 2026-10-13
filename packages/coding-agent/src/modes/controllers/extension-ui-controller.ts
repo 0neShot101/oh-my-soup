@@ -669,7 +669,12 @@ export class ExtensionUiController {
 				const dialog = new ApprovalDialogComponent(
 					callHidden ? prompt.full : prompt.compact,
 					{ onApprove: () => settle(APPROVE_OPTION), onDeny: () => settle(DENY_OPTION) },
-					{ tui: this.ctx.ui, wrapDetails: callHidden },
+					{
+						tui: this.ctx.ui,
+						wrapDetails: callHidden,
+						timeout: dialogOptions?.timeout,
+						onTimeout: dialogOptions?.onTimeout,
+					},
 				);
 				this.ctx.editorContainer.clear();
 				this.ctx.editorContainer.addChild(dialog);

@@ -355,8 +355,14 @@ export function requiresApproval(
 	return { required: false };
 }
 
+/**
+ * Cleared while a compact prompt formats its details, so line counts come from the whole value
+ * rather than the {@link truncateForPrompt} preview; the compacted rows are truncated after.
+ */
+let promptTruncation = true;
+
 export function truncateForPrompt(value: string, maxChars = DEFAULT_PROMPT_TRUNCATE_CHARS): string {
-	if (value.length <= maxChars) return value;
+	if (!promptTruncation || value.length <= maxChars) return value;
 	const omitted = value.length - maxChars;
 	return `${value.slice(0, maxChars)}[…${omitted}ch elided…]`;
 }
@@ -382,7 +388,17 @@ export function formatApprovalPrompt(
 		lines.push(`Reason: ${reason}`);
 	}
 
-	const details = tool.formatApprovalDetails?.(args);
+	let details: string | string[] | undefined;
+	if (options?.compact) {
+		promptTruncation = false;
+		try {
+			details = tool.formatApprovalDetails?.(args);
+		} finally {
+			promptTruncation = true;
+		}
+	} else {
+		details = tool.formatApprovalDetails?.(args);
+	}
 	for (const detail of typeof details === "string" ? [details] : (details ?? [])) {
 		if (detail.length === 0) continue;
 		lines.push(options?.compact ? compactApprovalDetail(detail) : detail);
@@ -394,8 +410,8 @@ export function formatApprovalPrompt(
 /** `Content:\n<40 lines>` → `Content: 40 lines in the tool call`; `Command: a\nb` → `Command: a … +1 line in the tool call`. */
 function compactApprovalDetail(detail: string): string {
 	const newline = detail.indexOf("\n");
-	if (newline < 0) return detail;
-	const head = detail.slice(0, newline).trimEnd();
+	if (newline < 0) return truncateForPrompt(detail);
+	const head = truncateForPrompt(detail.slice(0, newline).trimEnd());
 	const rest = detail.slice(newline + 1).split("\n").length;
 	const count = `${rest} line${rest === 1 ? "" : "s"} in the tool call`;
 	return head.endsWith(":") ? `${head} ${count}` : `${head} … +${count}`;
