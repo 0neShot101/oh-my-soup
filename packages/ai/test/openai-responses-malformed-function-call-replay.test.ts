@@ -70,3 +70,21 @@ it("replays a truncated function call with parseable diagnostic arguments so its
 	expect(input.at(-1)).toMatchObject({ type: "function_call_output", call_id: "call_bad", output: "durable result" });
 	expect(JSON.stringify(input)).not.toContain("Orphan");
 });
+
+it("replays frozen caller-owned function calls without mutating them", () => {
+	const items = [
+		Object.freeze({ type: "function_call", id: "fc_ok", call_id: "call_ok", name: "bash", arguments: '{"a":1}' }),
+		Object.freeze({ type: "function_call", id: "fc_bad", call_id: "call_bad", name: "bash", arguments: '{"a":' }),
+		Object.freeze({ type: "function_call_output", call_id: "call_ok", output: "ok" }),
+		Object.freeze({ type: "function_call_output", call_id: "call_bad", output: "bad" }),
+	];
+	const previous = assistantWithNativeHistory(items);
+
+	const input = buildParams(model, { messages: [previous] }, undefined, undefined).params.input as unknown as Array<
+		Record<string, unknown>
+	>;
+
+	expect(input).toContainEqual(expect.objectContaining({ call_id: "call_ok", arguments: '{"a":1}' }));
+	const badCall = input.find(item => item.type === "function_call" && item.call_id === "call_bad");
+	expect(JSON.parse(String(badCall?.arguments))).toMatchObject({ __rawJson: '{"a":' });
+});

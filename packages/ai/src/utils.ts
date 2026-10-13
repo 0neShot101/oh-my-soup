@@ -565,6 +565,7 @@ export function dropMalformedOpenAIResponsesToolCalls<
  * Replay history is immutable and re-sanitized on every request, so each item
  * remembers the replay `arguments` derived from its stored value instead of
  * re-parsing every historical call (large write/edit payloads) per request.
+ * Frozen/sealed caller-owned items are never mutated; they re-parse instead.
  */
 const kReplayArguments = Symbol("openaiResponses.replayArguments");
 
@@ -595,7 +596,9 @@ function replayFunctionCallArguments(item: FunctionCallReplayItem): string {
 		}
 	}
 	// Non-enumerable: the sanitizer's object rest copy must not carry the cache onto wire items.
-	Object.defineProperty(item, kReplayArguments, { value: { raw, replay }, writable: true });
+	if (Object.isExtensible(item)) {
+		Object.defineProperty(item, kReplayArguments, { value: { raw, replay }, writable: true });
+	}
 	return replay;
 }
 
