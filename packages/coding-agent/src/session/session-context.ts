@@ -261,10 +261,11 @@ export function buildSessionContext(
 			mode: "none",
 		};
 	}
-	let leaf = resolvedLeafId ? byId.get(resolvedLeafId) : undefined;
-	if (!leaf) {
-		// Fallback to last entry when an explicitly requested leaf is unavailable.
-		leaf = entries[entries.length - 1];
+	let leaf = byId.get(resolvedLeafId);
+	if (!leaf && leafId !== undefined) {
+		// An explicitly requested leaf is unavailable: use the replayed leaf, never a trailing usage marker.
+		const replayedLeafId = resolveSessionLeafId(entries);
+		leaf = replayedLeafId === null ? undefined : byId.get(replayedLeafId);
 	}
 	if (!leaf) {
 		return {

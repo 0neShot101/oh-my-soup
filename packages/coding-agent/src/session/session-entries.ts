@@ -331,11 +331,25 @@ export function sessionEntryLeafId(entry: SessionEntry): string | null {
 	return entry.type === "model_usage" && entry.activeLeafId !== undefined ? entry.activeLeafId : entry.id;
 }
 
-/** Active leaf after replaying entries in file order; an empty or cleared session has no leaf. */
+/** Newest entry that selects itself on replay; skips late-usage markers. */
+export function lastSelfSelectedLeafId(entries: readonly SessionEntry[]): string | null {
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index];
+		if (sessionEntryLeafId(entry) === entry.id) return entry.id;
+	}
+	return null;
+}
+
+/**
+ * Active leaf after replaying entries in file order; an empty or cleared session has no leaf.
+ * A captured leaf that no longer exists (rollback, rewrite) falls back to the newest self-selecting entry.
+ */
 export function resolveSessionLeafId(entries: readonly SessionEntry[]): string | null {
-	let leafId: string | null = null;
-	for (const entry of entries) leafId = sessionEntryLeafId(entry);
-	return leafId;
+	const last = entries.at(-1);
+	if (!last) return null;
+	const leafId = sessionEntryLeafId(last);
+	if (leafId === null || leafId === last.id || entries.some(entry => entry.id === leafId)) return leafId;
+	return lastSelfSelectedLeafId(entries);
 }
 
 /** Raw logical file entry after loaders strip any fixed-width title slot. */

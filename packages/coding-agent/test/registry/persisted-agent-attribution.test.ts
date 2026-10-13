@@ -341,4 +341,19 @@ describe("persisted agent model attribution", () => {
 		expect(history?.directCost).toBeCloseTo(0.6);
 		expect(history?.metrics).toBeUndefined();
 	});
+
+	it("falls back to the newest real entry when a late usage record's active leaf is gone", async () => {
+		using tempDir = TempDir.createSync("@omp-dangling-active-leaf-");
+		const registry = await historyFor(tempDir.path(), "Branching", [
+			...transcriptHead(),
+			assistant("old-owner", "si", SONNET, "stop", [{ type: "text", text: "older branch" }], 0.2),
+			modelChange("m2", "si", "openai-codex/gpt-5.6-sol", "task", false),
+			assistant("active-leaf", "m2", SOL, "stop", [{ type: "text", text: "active branch" }], 0.3),
+			modelUsage("late-usage", "old-owner", 0.1, "2026-08-07T11:30:00.000Z", "rolled-back"),
+		]);
+
+		const history = registry.get("Branching")?.history;
+		expect(history?.metrics?.requests).toBe(1);
+		expect(history?.metrics?.cost).toBeCloseTo(0.3);
+	});
 });

@@ -151,7 +151,9 @@ async function readPersistedAgentHistory(
 	const parents = new Map<string, string | undefined>();
 	const assistantById = new Map<string, AssistantMetrics>();
 	const modelChangeById = new Map<string, { model: string; role?: string; resolvedModelIsFallback: boolean }>();
+	// Raw-record copy of `sessionEntryLeafId`/`resolveSessionLeafId` (session-entries.ts); keep them in sync.
 	let leafId: string | undefined;
+	let selfSelectedLeafId: string | undefined;
 	let leafTimestamp: number | undefined;
 	let directCost = 0;
 	// Direct cost mirrors lifetime SessionManager usage; legacy metrics below stay leaf-scoped.
@@ -176,9 +178,12 @@ async function readPersistedAgentHistory(
 						leafId = record.activeLeafId;
 					} else if (record.activeLeafId === null) {
 						leafId = undefined;
+					} else {
+						selfSelectedLeafId = id;
 					}
 					return;
 				}
+				selfSelectedLeafId = id;
 				if (record.type === "model_change" && typeof record.model === "string") {
 					modelChangeById.set(id, {
 						model: record.model,
@@ -216,6 +221,7 @@ async function readPersistedAgentHistory(
 		return {};
 	}
 
+	if (leafId !== undefined && !parents.has(leafId)) leafId = selfSelectedLeafId;
 	const metrics: AgentMetricsSummary = {
 		tokens: 0,
 		requests: 0,
