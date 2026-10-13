@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -749,6 +749,30 @@ describe("skill:// falls back to an MCP resource with the same URI", () => {
 		});
 		const reading = readMcpResource(manager, parseInternalUrl("skill://nope"), { exact: true, waitMs: 20 });
 		expect(await withTimeout(reading, 2_000, "bounded wait never ended")).toBeUndefined();
+	});
+
+	it("gives up on a deferred MCP startup that never returns once the wait budget is spent", async () => {
+		vi.useFakeTimers();
+		try {
+			const started = Promise.withResolvers<void>();
+			// `omp read` with a zero startup window: the loader awaits a handshake that never settles.
+			MCPManager.setDeferredInstance(() => {
+				started.resolve();
+				return Promise.withResolvers<MCPManager>().promise;
+			});
+			// Settle into a value: Bun's `expect(...).rejects` blocks until settlement, before timers advance.
+			const outcome = InternalUrlRouter.instance()
+				.resolve("skill://nope", { skills: [] })
+				.then(
+					() => "resolved",
+					(error: unknown) => (error instanceof Error ? error.message : String(error)),
+				);
+			await started.promise;
+			vi.advanceTimersByTime(5_000);
+			expect(await outcome).toContain("Unknown skill: nope");
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("runs the deferred MCP loader once and installs its manager for later reads", async () => {
