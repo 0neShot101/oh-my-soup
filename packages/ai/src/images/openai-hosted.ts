@@ -143,6 +143,22 @@ async function parseSse(response: Response, signal?: AbortSignal): Promise<Image
 	return collectResponse(completed?.output?.length ? completed : { ...completed, output: fallbackOutput });
 }
 
+/**
+ * The Codex backend runs its image tool with `size: "auto"`, ignoring the requested `size`, and
+ * shapes the canvas from the prompt alone. Spell the requested shape out so it is honored.
+ */
+function withCodexFormatDirective(request: ImageGenerationRequest): string {
+	const dimensions = request.imageSize?.match(/^(\d+)x(\d+)$/);
+	const ratio = dimensions ? undefined : request.aspectRatio?.match(/^(\d+):(\d+)$/);
+	const match = dimensions ?? ratio;
+	if (!match) return request.prompt;
+	const width = Number(match[1]);
+	const height = Number(match[2]);
+	const shape = width === height ? "square" : width > height ? "landscape" : "portrait";
+	const measure = dimensions ? `${width}x${height} pixels` : `${width}:${height} aspect ratio`;
+	return `${request.prompt}\n\nOutput format: ${shape} image, ${measure}.`;
+}
+
 export async function generateHostedImage(
 	model: Model,
 	request: ImageGenerationRequest,
@@ -154,7 +170,8 @@ export async function generateHostedImage(
 		throw new AIError.ValidationError(`Hosted image carrier API ${carrier.api} is unsupported`);
 	}
 	const stream = carrier.api === "openai-codex-responses";
-	const content: Array<Record<string, unknown>> = [{ type: "input_text", text: request.prompt }];
+	const prompt = stream ? withCodexFormatDirective(request) : request.prompt;
+	const content: Array<Record<string, unknown>> = [{ type: "input_text", text: prompt }];
 	for (const image of request.inputImages ?? []) {
 		content.push({ type: "input_image", detail: "auto", image_url: toDataUrl(image) });
 	}
