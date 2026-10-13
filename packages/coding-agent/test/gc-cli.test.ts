@@ -2540,6 +2540,12 @@ describe("runGcCommand session compression", () => {
 			400,
 		);
 
+	/** Ages `file` to a timestamp with sub-millisecond digits, which a `Date` cannot carry. */
+	async function agePathSubMs(file: string, ageDays: number): Promise<void> {
+		const seconds = Math.floor((Date.now() - ageDays * 86_400_000) / 1000) + 0.123456;
+		await fs.utimes(file, seconds, seconds);
+	}
+
 	/** An idle session with a compressible transcript and one artifact; filler precedes its final turn. */
 	async function writeIdleSession(id: string, status: "complete" | "pending" = "complete", ageDays = 30) {
 		const file = await writeSession(root, "project", id, status);
@@ -2549,8 +2555,8 @@ describe("runGcCommand session compression", () => {
 		const artifact = path.join(file.slice(0, -".jsonl".length), "1.bash.log");
 		await fs.mkdir(path.dirname(artifact), { recursive: true });
 		await Bun.write(artifact, filler);
-		await agePath(artifact, ageDays);
-		await agePath(file, ageDays);
+		await agePathSubMs(artifact, ageDays);
+		await agePathSubMs(file, ageDays);
 		return { file, artifact };
 	}
 
@@ -2558,7 +2564,7 @@ describe("runGcCommand session compression", () => {
 		const stat = await fs.stat(file);
 		return {
 			bytes: await Bun.file(file).text(),
-			mtimeMs: stat.mtimeMs,
+			mtimeNs: (await fs.stat(file, { bigint: true })).mtimeNs,
 			allocated: stat.blocks * 512,
 			size: stat.size,
 		};
@@ -2591,7 +2597,7 @@ describe("runGcCommand session compression", () => {
 		for (const [index, target] of [file, artifact].entries()) {
 			const after = await snapshot(target);
 			expect(after.bytes).toBe(before[index].bytes);
-			expect(after.mtimeMs).toBe(before[index].mtimeMs);
+			expect(after.mtimeNs).toBe(before[index].mtimeNs);
 			expect(after.allocated).toBeLessThan(after.size);
 		}
 		expect(await fs.readdir(path.dirname(file))).not.toContain(".omp-gc-compress.tmp");
@@ -2608,6 +2614,43 @@ describe("runGcCommand session compression", () => {
 
 		expect(result.compress).toMatchObject({ sessions: 1, wouldCompress: 2, compressed: 0 });
 		expect(await snapshot(file)).toEqual(before);
+	});
+
+	test.skipIf(!onApfs)("--apply removes scratch dirs a killed run left behind", async () => {
+		const { file } = await writeIdleSession(Bun.randomUUIDv7());
+		const inSessions = path.join(path.dirname(file), ".omp-gc-compress.tmp");
+		const inArchive = path.join(root, "archive", "sessions", "project", "x", ".omp-gc-compress.tmp");
+		for (const dir of [inSessions, inArchive]) {
+			await fs.mkdir(dir, { recursive: true });
+			await Bun.write(path.join(dir, "copy.jsonl"), filler);
+		}
+
+		const dryRun = await runGcCommand({ flags: { agentDir: root, compress: true } });
+		expect(dryRun.compress?.leftoverScratchDirs).toBe(2);
+		expect(await Bun.file(path.join(inSessions, "copy.jsonl")).exists()).toBe(true);
+
+		const applied = await runGcCommand({ flags: { agentDir: root, compress: true, apply: true } });
+		expect(applied.compress).toMatchObject({ leftoverScratchDirs: 2, compressed: 2, errors: [] });
+		for (const dir of [inSessions, inArchive]) expect(await fs.exists(dir)).toBe(false);
+	});
+
+	test.skipIf(!onApfs)("a failed batch still counts its files as allocated afterwards", async () => {
+		const { file, artifact } = await writeIdleSession(Bun.randomUUIDv7());
+		const artifactBefore = await snapshot(artifact);
+		// A read-only artifact dir cannot hold the scratch copy, so only the transcript compresses.
+		await fs.chmod(path.dirname(artifact), 0o555);
+		let result: GcResult;
+		try {
+			result = await runGcCommand({ flags: { agentDir: root, compress: true, apply: true } });
+		} finally {
+			await fs.chmod(path.dirname(artifact), 0o755);
+		}
+
+		expect(result.compress).toMatchObject({ wouldCompress: 2, compressed: 1 });
+		expect(result.compress?.errors).toHaveLength(1);
+		const transcriptAfter = (await fs.stat(file)).blocks * 512;
+		expect(result.compress?.allocatedAfter).toBe(transcriptAfter + artifactBefore.allocated);
+		expect(await snapshot(artifact)).toEqual(artifactBefore);
 	});
 
 	test.skipIf(!onApfs)("leaves recent and leased sessions uncompressed", async () => {

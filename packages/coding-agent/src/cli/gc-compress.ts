@@ -10,9 +10,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { $ } from "bun";
+import { sha256File } from "../utils/file-hash";
 
-/** Scratch directory created beside the files of one batch; a leftover is a crashed run's. */
+/**
+ * Scratch directory created beside the files of one batch. A crashed run can
+ * leave one behind; the next `omp gc --compress` removes it.
+ */
 export const COMPRESS_SCRATCH_DIR = ".omp-gc-compress.tmp";
+const SCRATCH_GLOB = new Bun.Glob(`**/${COMPRESS_SCRATCH_DIR}`);
 
 /** Formats whose bytes are already compressed; APFS would store them as-is. */
 const INCOMPRESSIBLE_EXTENSIONS: Record<string, true> = {
@@ -63,10 +68,33 @@ export async function compressCandidate(file: string): Promise<CompressCandidate
 	return { path: file, bytes: stat.size, allocated, mtimeMs: stat.mtimeMs };
 }
 
-async function sha256File(file: string): Promise<string> {
-	const hasher = new Bun.CryptoHasher("sha256");
-	for await (const chunk of Bun.file(file).stream()) hasher.update(chunk);
-	return hasher.digest("hex");
+/**
+ * Count, and with `apply` remove, scratch directories under `roots`. Only a
+ * killed run leaves one behind; the caller's gc lock rules out a live one.
+ */
+export async function sweepCompressScratch(roots: string[], apply: boolean, errors: string[]): Promise<number> {
+	let found = 0;
+	for (const root of roots) {
+		const dirs: string[] = [];
+		try {
+			for await (const name of SCRATCH_GLOB.scan({ cwd: root, dot: true, onlyFiles: false })) {
+				dirs.push(path.join(root, name));
+			}
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") errors.push(`${root}: ${String(error)}`);
+			continue;
+		}
+		for (const dir of dirs) {
+			found += 1;
+			if (!apply) continue;
+			try {
+				await fs.rm(dir, { recursive: true, force: true });
+			} catch (error) {
+				errors.push(`${dir}: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+	}
+	return found;
 }
 
 /**
@@ -94,6 +122,9 @@ export async function compressFilesInPlace(candidates: CompressCandidate[]): Pro
 }
 
 async function compressBatch(dir: string, batch: CompressCandidate[], result: CompressBatchResult): Promise<void> {
+	// Every candidate counts at its current allocation until its compressed copy replaces it,
+	// so failed and skipped files are still reported as occupying disk.
+	for (const candidate of batch) result.allocatedAfter += candidate.allocated;
 	const scratch = path.join(dir, COMPRESS_SCRATCH_DIR);
 	try {
 		await fs.rm(scratch, { recursive: true, force: true });
@@ -116,15 +147,12 @@ async function compressBatch(dir: string, batch: CompressCandidate[], result: Co
 					result.errors.push(`${candidate.path}: compressed copy does not match the original`);
 					continue;
 				}
-				if (copied.blocks * 512 >= candidate.allocated) {
-					// Incompressible: APFS stored the copy uncompressed, so the original stays.
-					result.allocatedAfter += candidate.allocated;
-					continue;
-				}
-				await fs.utimes(copyPath, current.atime, current.mtime);
+				// Incompressible: APFS stored the copy uncompressed, so the original stays.
+				if (copied.blocks * 512 >= candidate.allocated) continue;
+				// ditto already copied the nanosecond atime and mtime; the rename keeps them.
 				await fs.rename(copyPath, candidate.path);
 				result.compressed += 1;
-				result.allocatedAfter += copied.blocks * 512;
+				result.allocatedAfter += copied.blocks * 512 - candidate.allocated;
 			} catch (error) {
 				result.errors.push(`${candidate.path}: ${error instanceof Error ? error.message : String(error)}`);
 			}

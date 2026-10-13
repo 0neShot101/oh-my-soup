@@ -35,6 +35,7 @@ import {
 	COMPRESS_SCRATCH_DIR,
 	compressCandidate,
 	compressFilesInPlace,
+	sweepCompressScratch,
 	transparentCompressionSupported,
 } from "./gc-compress";
 import {
@@ -167,6 +168,8 @@ export interface CompressGcResult {
 	allocatedBefore: number;
 	/** Bytes the selected files allocate on disk afterwards (`--apply` only). */
 	allocatedAfter: number;
+	/** Scratch directories a killed run left behind; removed with `--apply`. */
+	leftoverScratchDirs: number;
 	errors: string[];
 }
 
@@ -1882,9 +1885,10 @@ async function collectSessionFiles(session: SessionInfo): Promise<string[]> {
  * transcript is `compressAfterDays` old and no running process holds its
  * ownership lease; files written more recently than that are left alone.
  * Unlike archiving, an interrupted last turn does not exclude a session:
- * paths, bytes, history, and stats rows are untouched, so it stays resumable.
+ * paths, bytes, mtimes, and history and stats rows are untouched, so it stays
+ * resumable. Leftover scratch directories from a killed run are removed first.
  */
-async function runCompressGc(options: ResolvedGcOptions): Promise<CompressGcResult> {
+async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): Promise<CompressGcResult> {
 	const result: CompressGcResult = {
 		supported: transparentCompressionSupported(),
 		scanned: 0,
@@ -1895,11 +1899,15 @@ async function runCompressGc(options: ResolvedGcOptions): Promise<CompressGcResu
 		bytes: 0,
 		allocatedBefore: 0,
 		allocatedAfter: 0,
+		leftoverScratchDirs: 0,
 		errors: [],
 	};
 	if (!result.supported) return result;
 
-	const sessions = await listActiveSessions(getSessionsDir(options.agentDir));
+	const sessionsRoot = getSessionsDir(options.agentDir);
+	// Archiving can carry a leftover inside an artifact tree into the archive root.
+	result.leftoverScratchDirs = await sweepCompressScratch([sessionsRoot, archiveRoot], options.apply, result.errors);
+	const sessions = await listActiveSessions(sessionsRoot);
 	result.scanned = sessions.length;
 	const cutoffMs = Date.now() - Math.max(options.compressAfterDays * DAY_MS, GC_WRITE_GRACE_MS);
 	for (const session of sessions) {
@@ -2212,6 +2220,10 @@ function renderText(result: GcResult): string {
 				`compress: ${compress.compressed}/${compress.wouldCompress} files in ${compress.sessions} sessions, ${formatBytes(compress.allocatedBefore)} on disk before${after}`,
 			);
 			if (compress.skippedLive > 0) lines.push(`compress skipped live: ${compress.skippedLive}`);
+			if (compress.leftoverScratchDirs > 0) {
+				const verb = result.apply ? "removed" : "found";
+				lines.push(`compress leftover scratch dirs ${verb}: ${compress.leftoverScratchDirs}`);
+			}
 			if (compress.errors.length > 0) lines.push(`compress errors: ${compress.errors.length}`);
 		}
 	}
@@ -2235,7 +2247,7 @@ export async function runGcCommand(args: GcCommandArgs): Promise<GcResult> {
 		if (options.runStale) next.stale = await runStaleGc(options);
 		if (options.runBlobs) next.blobs = await runBlobGc(options, archiveRoot);
 		if (options.runArchive) next.archive = await runArchiveGc(options, archiveRoot, registeredSessionPaths);
-		if (options.runCompress) next.compress = await runCompressGc(options);
+		if (options.runCompress) next.compress = await runCompressGc(options, archiveRoot);
 		if (options.runWal) next.wal = await runWalGc(options);
 		return next;
 	});
