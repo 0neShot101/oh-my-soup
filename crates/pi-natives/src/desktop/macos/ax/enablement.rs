@@ -112,21 +112,23 @@ pub(super) fn before_first_read(
 /// Waits for web content where `family` builds it, through `wait` (whether it
 /// appeared in time). An Electron window that showed none is switched on
 /// through `enable` and waited for once more, unless the call was cancelled
-/// meanwhile: the flag outlives the call.
+/// meanwhile: the flag outlives the call. A cancel during a wait's last
+/// request ends it empty rather than cancelled, so the call checks once more
+/// before the app counts as read.
 fn await_web_content(
 	family: Family,
 	mut wait: impl FnMut() -> CoreResult<bool>,
 	enable: impl FnOnce(),
 ) -> CoreResult<()> {
-	if family == Family::Other || wait()? {
+	if family == Family::Other {
 		return Ok(());
 	}
-	if family == Family::Electron {
+	if !wait()? && family == Family::Electron {
 		control::check()?;
 		enable();
 		wait()?;
 	}
-	Ok(())
+	control::check()
 }
 
 /// Sets `AXManualAccessibility`. Electron before 23 answers the write with an
@@ -266,5 +268,21 @@ mod tests {
 		});
 		assert_eq!(result.map_err(|error| error.code), Err(ErrorCode::Cancelled));
 		assert_eq!(writes.get(), 0);
+	}
+
+	#[test]
+	fn a_chromium_wait_cancelled_as_it_ran_out_fails_so_the_next_read_waits() {
+		let source = CancellationSource::default();
+		let result = control::with_token_for_test(&source.token(), || {
+			await_web_content(
+				Family::Chromium,
+				|| {
+					source.cancel();
+					Ok(false)
+				},
+				|| panic!("Chrome is never written to"),
+			)
+		});
+		assert_eq!(result.map_err(|error| error.code), Err(ErrorCode::Cancelled));
 	}
 }
