@@ -657,6 +657,12 @@ export interface ToolCallContext {
 	/** Provider-native metadata for the current call, when present. */
 	providerMetadata?: ToolCallProviderMetadata;
 	/**
+	 * The arguments hosts display for this call (`tool_execution_start.args`): the validated,
+	 * hook-revised arguments before `transformToolCallArguments`, which may differ from the ones
+	 * `execute` receives.
+	 */
+	transcriptArgs?: Record<string, unknown>;
+	/**
 	 * Cooperative steering signal: aborted when a queued user/steering message
 	 * (or an interrupting peer IRC) is detected while this tool batch runs.
 	 * Unlike the hard abort signal it NEVER kills the tool — long-running

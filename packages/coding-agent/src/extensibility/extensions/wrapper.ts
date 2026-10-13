@@ -14,6 +14,7 @@ import { sanitizeText, untilAborted } from "@oh-my-pi/pi-utils";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import {
 	denyError,
+	formatApprovalPrompt,
 	requestApproval,
 	resolveApproval,
 	resolveApprovalFromContext,
@@ -354,10 +355,17 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			if (ownCard) {
 				await untilAborted(signal, () => this.runner.waitForToolApprovalPreview(toolCallId));
 			}
-			// The card renders the tool-call block. A `tool_call` handler can make the approved input
-			// differ from it (a replacement here, or an in-place edit of the loop's validated copy),
-			// so with any registered the dialog shows the details itself.
-			const cardShowsArgs = ownCard && !this.runner.hasHandlers("tool_call");
+			// The card renders `transcriptArgs`. Lean on it only when it shows the details being
+			// approved: an argument transform (secret deobfuscation) or a `tool_call` replacement here
+			// changes the input after the card rendered. Handlers run here may also edit the input in
+			// place after the card rendered it, so they rule the card out too.
+			const transcriptArgs = context?.toolCall?.transcriptArgs;
+			const cardShowsArgs =
+				ownCard &&
+				transcriptArgs !== undefined &&
+				(loopEmittedToolCall || !this.runner.hasHandlers("tool_call")) &&
+				formatApprovalPrompt(this.tool, approvalArgs(transcriptArgs, context)) ===
+					formatApprovalPrompt(this.tool, resolvedArgs);
 
 			const hasApprovalHandlers =
 				this.runner.hasHandlers("tool_approval_requested") || this.runner.hasHandlers("tool_approval_resolved");

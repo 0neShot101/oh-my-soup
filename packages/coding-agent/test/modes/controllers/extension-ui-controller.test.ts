@@ -548,6 +548,18 @@ describe("ExtensionUiController tool approval", () => {
 		expect(harness.getFocused()).toBe(harness.editor);
 	});
 
+	it("one steer denies every approval of the batch, including those queued behind the shown one", async () => {
+		const harness = makeHarness();
+		harness.editor.onSubmit = text => harness.queueSteer(text);
+		const first = harness.controller.showCollabAwareApproval(prompt);
+		const second = harness.controller.showCollabAwareApproval({ ...prompt, full: "Allow tool: write" });
+		for (const key of "stop") harness.handleInput(key);
+		harness.handleInput("\r");
+		expect(await first).toBe(false);
+		expect(await second).toBe(false);
+		expect(harness.editorContainer.children).toEqual([harness.editor]);
+	});
+
 	it("attaches pasted images to the steer: clipboard and image-path pastes reach the composer, later keys wait", async () => {
 		const harness = makeHarness();
 		const clipboard = Promise.withResolvers<boolean>();

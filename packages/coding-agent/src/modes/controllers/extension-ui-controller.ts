@@ -658,7 +658,8 @@ export class ExtensionUiController {
 	 * transcript never shows (eval-bridged tools, preludes), the dialog wraps the full one.
 	 * The composer stays mounted beneath it and takes the typing: a user message queued as steering
 	 * while the call waits (sent here, from Tern, or by a collab guest) denies the call, so the
-	 * message tells the agent why instead of a bare denial.
+	 * message tells the agent why instead of a bare denial. The watch starts with the request, so
+	 * approvals still queued behind another dialog are denied by the same message.
 	 */
 	async showCollabAwareApproval(
 		prompt: ExtensionApprovalPrompt,
@@ -669,54 +670,59 @@ export class ExtensionUiController {
 			title: prompt.full,
 			options: [APPROVE_OPTION, DENY_OPTION],
 		};
-		const choice = await this.#raceCollabDialog(request, dialogOptions?.signal, signal =>
-			this.#presentDialog(signal, settle => {
-				const toolCallId = prompt.toolCallId;
-				const callHidden =
-					this.ctx.hideToolActivity || toolCallId === undefined || !this.ctx.pendingTools.has(toolCallId);
-				const editor = this.ctx.editor;
-				const session = this.ctx.session;
-				let steeringBaseline = session.getQueuedMessages().steering.length;
-				const unsubscribe = session.subscribe(event => {
-					if (event.type !== "queue_update") return;
-					if (event.steering.length > steeringBaseline) settle(DENY_OPTION);
-					else steeringBaseline = event.steering.length;
-				});
-				const dialog = new ApprovalDialogComponent(
-					callHidden ? prompt.full : prompt.compact,
-					{ onApprove: () => settle(APPROVE_OPTION), onDeny: () => settle(DENY_OPTION) },
-					{
-						tui: this.ctx.ui,
-						wrapDetails: callHidden,
-						timeout: dialogOptions?.timeout,
-						onTimeout: dialogOptions?.onTimeout,
-						onTimeoutStart: dialogOptions?.onTimeoutStart,
-						onTimeoutReset: dialogOptions?.onTimeoutReset,
-						draft: {
-							hasDraft: () =>
-								editor.getText().length > 0 || editor.pendingImages.length > 0 || editor.pasteInFlight,
-							handleInput: keyData => editor.handleDraftEdit(keyData),
+		const session = this.ctx.session;
+		const steered = new AbortController();
+		let steeringBaseline = session.getQueuedMessages().steering.length;
+		const unsubscribe = session.subscribe(event => {
+			if (event.type !== "queue_update") return;
+			if (event.steering.length > steeringBaseline) steered.abort();
+			else steeringBaseline = event.steering.length;
+		});
+		const signal = dialogOptions?.signal ? AbortSignal.any([dialogOptions.signal, steered.signal]) : steered.signal;
+		try {
+			const choice = await this.#raceCollabDialog(request, signal, localSignal =>
+				this.#presentDialog(localSignal, settle => {
+					const toolCallId = prompt.toolCallId;
+					const callHidden =
+						this.ctx.hideToolActivity || toolCallId === undefined || !this.ctx.pendingTools.has(toolCallId);
+					const editor = this.ctx.editor;
+					const dialog = new ApprovalDialogComponent(
+						callHidden ? prompt.full : prompt.compact,
+						{ onApprove: () => settle(APPROVE_OPTION), onDeny: () => settle(DENY_OPTION) },
+						{
+							tui: this.ctx.ui,
+							wrapDetails: callHidden,
+							timeout: dialogOptions?.timeout,
+							onTimeout: dialogOptions?.onTimeout,
+							onTimeoutStart: dialogOptions?.onTimeoutStart,
+							onTimeoutReset: dialogOptions?.onTimeoutReset,
+							draft: {
+								hasDraft: () =>
+									editor.getText().length > 0 || editor.pendingImages.length > 0 || editor.pasteInFlight,
+								handleInput: keyData => editor.handleDraftEdit(keyData),
+							},
 						},
-					},
-				);
-				this.ctx.editorContainer.clear();
-				this.ctx.editorContainer.addChild(dialog);
-				this.ctx.editorContainer.addChild(editor);
-				this.ctx.ui.setFocus(dialog);
-				// The dialog owns focus but forwards typing: keep the composer's cursor visible.
-				editor.focused = true;
-				this.ctx.ui.requestRender();
-				return () => {
-					unsubscribe();
-					dialog.dispose();
+					);
 					this.ctx.editorContainer.clear();
+					this.ctx.editorContainer.addChild(dialog);
 					this.ctx.editorContainer.addChild(editor);
-					this.ctx.ui.setFocus(editor);
+					this.ctx.ui.setFocus(dialog);
+					// The dialog owns focus but forwards typing: keep the composer's cursor visible.
+					editor.focused = true;
 					this.ctx.ui.requestRender();
-				};
-			}),
-		);
-		return choice === APPROVE_OPTION;
+					return () => {
+						dialog.dispose();
+						this.ctx.editorContainer.clear();
+						this.ctx.editorContainer.addChild(editor);
+						this.ctx.ui.setFocus(editor);
+						this.ctx.ui.requestRender();
+					};
+				}),
+			);
+			return choice === APPROVE_OPTION;
+		} finally {
+			unsubscribe();
+		}
 	}
 
 	async showAskDialog(

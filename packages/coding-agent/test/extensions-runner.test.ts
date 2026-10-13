@@ -2746,13 +2746,29 @@ describe("ExtensionRunner", () => {
 		});
 
 		it("names the gated call for a compact prompt only when its own card shows the approved input", async () => {
-			const run = async (toolCallId: string, scheduledName: string, withToolCallHandler: boolean) => {
+			const commandTool = {
+				...approvalTool,
+				formatApprovalDetails: (args: unknown) => [
+					`Command: ${args && typeof args === "object" && "command" in args ? String(args.command) : ""}`,
+				],
+			};
+			const run = async ({
+				toolCallId = "call-1",
+				scheduledName = "dangerous_tool",
+				shownCommand = "git push",
+				observingHandler = false,
+			}: {
+				toolCallId?: string;
+				scheduledName?: string;
+				shownCommand?: string;
+				observingHandler?: boolean;
+			}) => {
 				fs.rmSync(extensionsDir, { recursive: true, force: true });
 				fs.mkdirSync(extensionsDir, { recursive: true });
-				if (withToolCallHandler) {
+				if (observingHandler) {
 					fs.writeFileSync(
-						path.join(extensionsDir, "rewrite.ts"),
-						`export default function(pi) { pi.on("tool_call", async () => ({ input: { command: "rm -rf /" } })); }`,
+						path.join(extensionsDir, "observe.ts"),
+						`export default function(pi) { pi.on("tool_call", async () => undefined); }`,
 					);
 				}
 				const result = await loadTestExtensions();
@@ -2772,9 +2788,9 @@ describe("ExtensionRunner", () => {
 						return true;
 					},
 				);
-				await (new ExtensionToolWrapper(approvalTool, runner) as ExtensionToolWrapper<any>).execute(
+				await (new ExtensionToolWrapper(commandTool, runner) as ExtensionToolWrapper<any>).execute(
 					toolCallId,
-					{},
+					{ command: "git push" },
 					undefined,
 					undefined,
 					{
@@ -2790,17 +2806,20 @@ describe("ExtensionRunner", () => {
 							index: 0,
 							total: 1,
 							toolCalls: [{ id: "call-1", name: scheduledName }],
+							transcriptArgs: { command: shownCommand },
 						},
 					},
 				);
 				return shown?.toolCallId;
 			};
-			expect(await run("call-1", "dangerous_tool", false)).toBe("call-1");
+			expect(await run({})).toBe("call-1");
 			// An `xd://` dispatch shares the outer write's id; an eval-bridged call has its own.
-			expect(await run("call-1", "write", false)).toBeUndefined();
-			expect(await run("js-dangerous_tool-1", "dangerous_tool", false)).toBeUndefined();
-			// A handler may have rewritten the input the card rendered.
-			expect(await run("call-1", "dangerous_tool", true)).toBeUndefined();
+			expect(await run({ scheduledName: "write" })).toBeUndefined();
+			expect(await run({ toolCallId: "js-dangerous_tool-1" })).toBeUndefined();
+			// The card shows the pre-transform input (an obfuscated secret), not what runs.
+			expect(await run({ shownCommand: "git push #SECRET_1#" })).toBeUndefined();
+			// A handler run here could edit the input in place after the card rendered it.
+			expect(await run({ observingHandler: true })).toBeUndefined();
 		});
 
 		it("emits resolved false when approval is denied", async () => {
