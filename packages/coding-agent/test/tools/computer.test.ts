@@ -387,6 +387,43 @@ afterAll(async () => {
 	await disposeAllKernelSessions();
 });
 
+describe("screen-state notice", () => {
+	// The worker and the round-trip tests below both build their notice with
+	// screenStateNotice, so this is the one place that pins which state each
+	// flag names and what the model is told it means.
+	const locked = /\bscreen is locked\b/;
+	const asleep = /\bdisplay is asleep\b/;
+	// Locked: input through accessibility fails, and the lock lasts until someone unlocks the Mac.
+	const lockedMeaning = [/\baccessibility\b/, /\bunlocks?\b/];
+	// Asleep: nothing on that display can be captured until it wakes.
+	const asleepMeaning = [/\bcaptured\b/, /\bwakes\b/];
+
+	it("names each state that holds and says what it means, and nothing for the other", () => {
+		const cases = [
+			{ screenLocked: true, displayAsleep: false },
+			{ screenLocked: false, displayAsleep: true },
+			{ screenLocked: true, displayAsleep: true },
+		];
+		for (const state of cases) {
+			const notice = screenStateNotice(state);
+			expect(notice).toBeString();
+			for (const pattern of [locked, ...lockedMeaning]) {
+				if (state.screenLocked) expect(notice).toMatch(pattern);
+				else expect(notice).not.toMatch(pattern);
+			}
+			for (const pattern of [asleep, ...asleepMeaning]) {
+				if (state.displayAsleep) expect(notice).toMatch(pattern);
+				else expect(notice).not.toMatch(pattern);
+			}
+		}
+	});
+
+	it("gives no notice for an unlocked, awake screen or unknown state", () => {
+		expect(screenStateNotice({ screenLocked: false, displayAsleep: false })).toBeUndefined();
+		expect(screenStateNotice(undefined)).toBeUndefined();
+	});
+});
+
 describe("computer prelude", () => {
 	it("validates action shapes and maps explicitly read-only runs to read approval", async () => {
 		const prelude = createComputerPrelude(toolSession(), () => ({
