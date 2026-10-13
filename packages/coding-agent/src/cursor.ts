@@ -35,6 +35,7 @@ import {
 } from "@oh-my-pi/pi-ai/providers/cursor-pi-args";
 import { readImageMetadata, sanitizeText } from "@oh-my-pi/pi-utils";
 import { cursorMcpPrefersReplaceEdit, normalizeCursorReplaceArgs } from "./cursor-bridge-tools";
+import { InternalUrlRouter } from "./internal-urls";
 import type { MCPResourceReadResult } from "./mcp/types";
 import { resolveApproval, resolveApprovalFromContext } from "./tools/approval";
 import {
@@ -464,10 +465,12 @@ async function resolveCursorReadOffset(
  * selector so `read` reports the failure itself.
  */
 async function cursorReadToolPath(options: CursorExecBridgeOptions, readPath: string): Promise<string> {
+	// Routed URLs are not filesystem paths; let ReadTool resolve their selectors.
+	if (InternalUrlRouter.instance().canResolve(readPath)) return readPath;
 	const cwd = options.getCwd?.() ?? options.cwd;
-	const { path: filePath, sel } = await splitPathAndSelPreferringLiteral(readPath, cwd);
-	if (sel === undefined) return readPath;
 	try {
+		const { path: filePath, sel } = await splitPathAndSelPreferringLiteral(readPath, cwd);
+		if (sel === undefined) return readPath;
 		const image = await readImageMetadata(await resolveReadPathAsync(filePath, cwd), IMAGE_SNIFF_BYTES);
 		return image ? filePath : readPath;
 	} catch {

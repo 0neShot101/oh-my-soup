@@ -26,6 +26,7 @@ import {
 import { create, fromBinary } from "@oh-my-pi/pi-catalog/discovery/protobuf";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { CursorExecHandlers } from "@oh-my-pi/pi-coding-agent/cursor";
+import { registerArtifactsDir } from "@oh-my-pi/pi-coding-agent/internal-urls/registry-helpers";
 import {
 	bridgeToolMap,
 	createBridgeEditTool,
@@ -2252,6 +2253,27 @@ describe("CursorExecHandlers Pi frame translation", () => {
 		for (const result of [results[0], modern]) {
 			expect(result?.isError).toBe(false);
 			expect(result?.content.some(part => part.type === "image")).toBe(true);
+		}
+	});
+
+	it("routes internal artifact reads through both Cursor frames", async () => {
+		const artifacts = path.join(cwd, "artifacts");
+		await fs.mkdir(artifacts);
+		await Bun.write(path.join(artifacts, "0.read.log"), "cursor-artifact-content\n");
+		const unregister = registerArtifactsDir(artifacts);
+		try {
+			const handlers = new CursorExecHandlers({
+				cwd,
+				tools: new Map<string, Tool>([["read", new ReadTool(createTestSession(cwd))]]),
+			});
+			const legacy = await handlers.read(create(ReadArgsSchema, { path: "artifact://0:raw" }));
+			const modern = await handlers.piRead({ toolCallId: "artifact-read", args: { path: "artifact://0" } });
+			for (const result of [legacy, modern]) {
+				expect(result.isError).toBe(false);
+				expect(result.content).toEqual([{ type: "text", text: "cursor-artifact-content\n" }]);
+			}
+		} finally {
+			unregister();
 		}
 	});
 
