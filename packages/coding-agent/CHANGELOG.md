@@ -39,6 +39,7 @@
 - Fixed extension `agent_end` events reporting a background-job wait as a scheduled continuation; they now carry `awaitingAsyncWork: true` alongside `willContinue` ([#15348](https://github.com/can1357/oh-my-pi/issues/15348))
 - Fixed auto-compaction waiting out provider retry delays longer than `retry.maxDelayMs` (e.g. a 16-hour `retry-after`); it now tries the next configured method or reports the failure ([#15311](https://github.com/can1357/oh-my-pi/issues/15311))
 - Preserved optional `text` in the model-facing `context_notes` schema so reading saved notes does not require supplying an empty string, which explicitly clears the notebook.
+- Preserved optional `text` in the model-facing `context_notes` schema so reading saved notes does not require supplying an empty string, which explicitly clears the notebook. ([#15748](https://github.com/can1357/oh-my-pi/pull/15748) by [@Komzpa](https://github.com/Komzpa))
 
 ## [18.10.4] - 2026-10-13
 
