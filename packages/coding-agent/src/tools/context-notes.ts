@@ -83,7 +83,10 @@ export class ContextNotesTool implements AgentTool<typeof contextNotesSchema, Co
 	readonly label = "Context Notes";
 	readonly description = contextNotesDescription;
 	readonly parameters = contextNotesSchema;
-	readonly strict = true;
+	// Strict-mode providers mark every property required, so an optional `text`
+	// would force models to send `""` (a clear) just to read. Stay non-strict
+	// so omitted `text` keeps meaning "read" while an explicit empty string clears.
+	readonly strict = false;
 	readonly loadMode = "essential" as const;
 	readonly summary = "Read or replace persistent experimental context notes";
 
