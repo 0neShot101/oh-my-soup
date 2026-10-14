@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed an unhandled rejection when ttachSignal was called with an already-aborted signal by ensuring #exited is caught before aborting ([#15706](https://github.com/can1357/oh-my-pi/issues/15706)).
+
 ## [18.10.0] - 2026-10-12
 
 ### Added
