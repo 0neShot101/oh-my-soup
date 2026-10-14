@@ -2914,9 +2914,9 @@ export class TUI extends Container {
 			this.#inputRenderGraceUntilMs = this.#renderScheduler.now() + TUI.#INPUT_RENDER_GRACE_MS;
 		}
 
-		// A focused input owner can reserve its gesture before TUI-wide listeners
+		// The effective input owner can reserve its gesture before TUI-wide listeners
 		// and debug shortcuts see the key, then handle the raw event exactly once.
-		const focusedForCapture = this.#focusedComponent;
+		const focusedForCapture = this.#inputTarget();
 		if (
 			focusedForCapture?.handleInput &&
 			(!isKeyRelease(data) || focusedForCapture.wantsKeyRelease) &&
@@ -2955,13 +2955,7 @@ export class TUI extends Container {
 			return;
 		}
 
-		// An input-less overlay leaves keyboard input with the focus it displaced.
-		// Ordinary focused components and overlays with handlers keep their own input.
-		let target = this.#focusedComponent;
-		if (!target?.handleInput) {
-			const holder = this.#getKeyHolderOverlay();
-			target = holder?.component === target ? holder.preFocus : null;
-		}
+		const target = this.#inputTarget();
 		if (target?.handleInput) {
 			// Filter out key release events unless component opts in
 			if (isKeyRelease(data) && !target.wantsKeyRelease) {
@@ -2970,6 +2964,17 @@ export class TUI extends Container {
 			target.handleInput(data);
 			this.requestRender();
 		}
+	}
+
+	/**
+	 * Component that receives keyboard input. An input-less key-holding overlay
+	 * leaves input with the focus it displaced; other focus owners keep their input.
+	 */
+	#inputTarget(): Component | null {
+		const focused = this.#focusedComponent;
+		if (focused?.handleInput) return focused;
+		const holder = this.#getKeyHolderOverlay();
+		return holder?.component === focused ? holder.preFocus : null;
 	}
 
 	/**

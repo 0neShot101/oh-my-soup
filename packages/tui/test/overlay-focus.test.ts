@@ -95,6 +95,19 @@ class OwningOverlay extends FocusRecorder implements OverlayFocusOwner {
 	}
 }
 
+class CapturingRecorder extends FocusRecorder {
+	constructor(
+		label: string,
+		readonly captured: string,
+	) {
+		super(label);
+	}
+
+	capturesInput(data: string): boolean {
+		return data === this.captured;
+	}
+}
+
 describe("TUI overlay focus", () => {
 	it("delivers keys to the displaced editor beneath a paint-only overlay", () => {
 		const terminal = new MinimalTerminal();
@@ -112,6 +125,32 @@ describe("TUI overlay focus", () => {
 
 			expect(tui.getFocused()).toBe(sidebar);
 			expect(editor.inputs).toEqual(["hello"]);
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("lets the displaced editor reserve captured keys before input listeners", () => {
+		const terminal = new MinimalTerminal();
+		const tui = new TUI(terminal);
+		const editor = new CapturingRecorder("editor", "\x00");
+		const sidebar: Component = { render: () => ["sidebar"] };
+		const listenerInputs: string[] = [];
+
+		tui.addChild(editor);
+		tui.setFocus(editor);
+		tui.addInputListener(data => {
+			listenerInputs.push(data);
+			return { consume: true };
+		});
+
+		try {
+			tui.start();
+			tui.showOverlay(sidebar);
+			terminal.sendInput("\x00");
+
+			expect(editor.inputs).toEqual(["\x00"]);
+			expect(listenerInputs).toEqual([]);
 		} finally {
 			tui.stop();
 		}
