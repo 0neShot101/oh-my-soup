@@ -1,1 +1,1 @@
-`agent://<id>`: latest completed output (status + progress while unpublished); a newer running turn marks the previous output as superseded. Nested IDs dotted, `/key/index` JSON path into the latest published result; write = message, `agent://all` broadcast only. `history://<id>` reads the transcript across turns.
+`agent://<id>`: latest completed output (status + progress while unpublished); nested IDs dotted, `/key/index` JSON path; write = message, `agent://all` broadcast only.

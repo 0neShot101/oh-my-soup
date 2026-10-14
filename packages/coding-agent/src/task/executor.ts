@@ -2733,10 +2733,10 @@ interface FinalizeRunArgs {
 	/**
 	 * This finalize is a revival/wake or explicit follow-up turn, not the initial
 	 * run. Structured turns only republish a real `yield`; message-result turns
-	 * republish a successful, non-empty final report. A conversational wake of a
-	 * structured agent cannot replace its accepted result with a missing-yield warning.
+	 * republish successful, non-empty reports only when requested by the parent.
 	 */
 	followUpTurn?: boolean;
+	publishMessageResult?: boolean;
 	sessionFile?: string;
 	startTime: number;
 }
@@ -2807,11 +2807,18 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 	//
 	// Structured follow-ups need a real yield so conversational wakes cannot
 	// replace the accepted artifact with a missing-yield warning (issue #9518).
-	// Message-result agents have no yield tool: their successful final report
-	// is the new result, just as it is on the initial run.
+	// Message-result agents publish successful parent-requested reports, not
+	// conversational replies to peers or cancelled follow-ups.
 	let outputMeta: { lineCount: number; charCount: number } | undefined;
 	let outputPath: string | undefined;
-	const hasMessageResult = !structured && exitCode === 0 && rawOutput.trim().length > 0;
+	const hasMessageResult =
+		args.publishMessageResult &&
+		!structured &&
+		exitCode === 0 &&
+		!done.aborted &&
+		!signal?.aborted &&
+		!monitor.runtimeLimitExceeded() &&
+		rawOutput.trim().length > 0;
 	if (args.artifactsDir && (!args.followUpTurn || hasYield || hasMessageResult)) {
 		const candidatePath = path.join(args.artifactsDir, `${id}.md`);
 		try {
@@ -3243,7 +3250,8 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 
 		turnMonitor.setActiveSession(session);
 		const unsubscribeTurn = turnMonitor.attach(session);
-		if (wakeSources(records, id).some(source => source.from === ownerId)) registerWakeJob();
+		const ownerWoken = wakeSources(records, id).some(source => source.from === ownerId);
+		if (ownerWoken) registerWakeJob();
 		return async turnError => {
 			unsubscribeTurn();
 			const activeSession = turnMonitor.takeActiveSession();
@@ -3310,6 +3318,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					parentToolCallId: options.parentToolCallId,
 					detached: true,
 					followUpTurn: true,
+					publishMessageResult: ownerWoken,
 					sessionFile,
 					startTime: turnStartTime,
 				});
@@ -3529,9 +3538,9 @@ export interface FollowUpTurnOptions {
 	subagentEventBus?: EventBus;
 	parentToolCallId?: string;
 	/**
-	 * When set, a turn that produces a `yield` result (re)writes `<artifactsDir>/<id>.md`
-	 * so `agent://<id>` tracks the latest completion. A yield-less turn (e.g. a peer-message
-	 * wake answering a message) leaves the existing artifact intact (issue #9518).
+	 * When set, a turn that yields or completes a successful, non-empty message
+	 * result (re)writes `<artifactsDir>/<id>.md` so `agent://<id>` tracks the latest
+	 * completion. Structured turns without a yield leave the existing artifact intact.
 	 */
 	artifactsDir?: string;
 	/** Wall-clock cap in ms for this turn; 0 disables. */
@@ -3708,6 +3717,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		parentToolCallId: options.parentToolCallId,
 		detached: true,
 		followUpTurn: true,
+		publishMessageResult: true,
 		sessionFile,
 		startTime,
 	});

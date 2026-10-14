@@ -368,7 +368,14 @@ describe("runSubprocess result acceptance", () => {
 		const artifactsDir = tempDir.path();
 		const harness = createHarness();
 		harness.session.sessionManager.getArtifactsDir = () => artifactsDir;
-		registerRunning(harness.session);
+		AgentRegistry.global().register({
+			id: AGENT_ID,
+			displayName: AGENT_ID,
+			kind: "sub",
+			parentId: "Parent",
+			session: harness.session,
+			status: "idle",
+		});
 		attachIrcWakeTurnMonitor(harness.session, {
 			id: AGENT_ID,
 			agent: baseAgent,
@@ -396,6 +403,7 @@ describe("runSubprocess result acceptance", () => {
 					customType: "irc:incoming",
 					content: "review the revised patch",
 					display: false,
+					details: { id: "msg-revised", from: "Parent", message: "review the revised patch" },
 					attribution: "agent",
 					timestamp: Date.now(),
 				} as unknown as AgentMessage,
@@ -421,22 +429,72 @@ describe("runSubprocess result acceptance", () => {
 		}
 	});
 
-	it("preserves the completed structured result when a wake answers without yielding", async () => {
-		const tempDir = TempDir.createSync("@omp-structured-agent-result-");
+	it("preserves the accepted message result and sidecar when a peer wakes the agent", async () => {
+		const tempDir = TempDir.createSync("@omp-peer-agent-result-");
 		const artifactsDir = tempDir.path();
 		const harness = createHarness();
 		harness.session.sessionManager.getArtifactsDir = () => artifactsDir;
-		registerRunning(harness.session);
-		attachIrcWakeTurnMonitor(harness.session, { id: AGENT_ID, agent: baseAgent, artifactsDir });
+		AgentRegistry.global().register({
+			id: AGENT_ID,
+			displayName: AGENT_ID,
+			kind: "sub",
+			parentId: "Parent",
+			session: harness.session,
+			status: "idle",
+		});
+		attachIrcWakeTurnMonitor(harness.session, { id: AGENT_ID, agent: baseAgent, structured: false, artifactsDir });
 		const observer = harness.wakeObserver();
 		if (!observer) throw new Error("wake-turn observer was not registered");
+		const accepted = '{"report":"accepted verdict"}';
 
 		try {
-			await Bun.write(path.join(artifactsDir, `${AGENT_ID}.md`), "accepted structured result");
-			const finish = observer([]);
-			harness.emitAssistantText("acknowledged");
+			await Bun.write(path.join(artifactsDir, `${AGENT_ID}.md`), accepted);
+			await Bun.write(path.join(artifactsDir, `${AGENT_ID}.json`), accepted);
+			const finish = observer([
+				{
+					role: "custom",
+					customType: "irc:incoming",
+					content: "is line 42 fine?",
+					display: false,
+					details: { id: "msg-peer", from: "OtherAgent", message: "is line 42 fine?" },
+					attribution: "agent",
+					timestamp: Date.now(),
+				} as unknown as AgentMessage,
+			]);
+			harness.emitAssistantText("line 42 is fine");
 			await finish?.(undefined);
-			expect(await Bun.file(path.join(artifactsDir, `${AGENT_ID}.md`)).text()).toBe("accepted structured result");
+			expect(await Bun.file(path.join(artifactsDir, `${AGENT_ID}.md`)).text()).toBe(accepted);
+			expect(await Bun.file(path.join(artifactsDir, `${AGENT_ID}.json`)).text()).toBe(accepted);
+		} finally {
+			tempDir.removeSync();
+		}
+	});
+
+	it("keeps the accepted artifact and sidecar when an unstructured follow-up starts aborted", async () => {
+		const tempDir = TempDir.createSync("@omp-aborted-agent-result-");
+		const artifactsDir = tempDir.path();
+		const harness = createHarness();
+		registerRunning(harness.session);
+		vi.spyOn(harness.session, "prompt").mockImplementation(async () => {
+			harness.emitAssistantText("cancelled replacement");
+			return true;
+		});
+		const accepted = '{"report":"accepted verdict"}';
+
+		try {
+			await Bun.write(path.join(artifactsDir, `${AGENT_ID}.md`), accepted);
+			await Bun.write(path.join(artifactsDir, `${AGENT_ID}.json`), accepted);
+			const result = await runSubagentFollowUpTurn({
+				id: AGENT_ID,
+				agent: baseAgent,
+				message: "continue",
+				structured: false,
+				artifactsDir,
+				signal: AbortSignal.abort("cancelled"),
+			});
+			expect(result.aborted).toBe(true);
+			expect(await Bun.file(path.join(artifactsDir, `${AGENT_ID}.md`)).text()).toBe(accepted);
+			expect(await Bun.file(path.join(artifactsDir, `${AGENT_ID}.json`)).text()).toBe(accepted);
 		} finally {
 			tempDir.removeSync();
 		}
