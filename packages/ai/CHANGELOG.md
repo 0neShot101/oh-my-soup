@@ -5,6 +5,10 @@
 ### Fixed
 
 - Fixed parallel tool calls failing with "Tool call arguments are not valid JSON" on some OpenAI-compatible gateways, such as Gemini ([#15682](https://github.com/can1357/oh-my-pi/pull/15682) by [@Zzz141592653](https://github.com/Zzz141592653))
+- Fixed Anthropic fallback-credit redemption stepping down or dropping its credit token on errors that only mention `400` in their text, such as an overload message ([#13157](https://github.com/can1357/oh-my-pi/pull/13157))
+- Fixed Anthropic fallback-credit redemption adding the `fallback-credit-2026-06-01` beta beside a newer `fallback-credit-*` beta the refused request already sent ([#13157](https://github.com/can1357/oh-my-pi/pull/13157))
+- Fixed turns after an Anthropic fallback-credit redemption replaying the refused model's signed thinking, which the fallback model could reject without the credit token; the echoed thinking is now kept unsigned and refused-model redacted thinking is dropped ([#13157](https://github.com/can1357/oh-my-pi/pull/13157))
+- Fixed the Anthropic fallback-credit continuation sending unsigned thinking blocks in the echoed refusal prefix, which the API rejects ([#13157](https://github.com/can1357/oh-my-pi/pull/13157))
 
 ## [18.10.4] - 2026-10-13
 
