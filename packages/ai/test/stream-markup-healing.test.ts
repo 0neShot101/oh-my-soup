@@ -1294,4 +1294,38 @@ describe("OpenAI completions provider DSML envelope healing", () => {
 		expect(toolCalls.map(call => call.arguments)).toEqual([{ path: "a.ts" }, { path: "b.ts" }]);
 		expect(result.stopReason).toBe("toolUse");
 	});
+
+	it("keeps parallel tool calls isolated when separate chunks reuse index 0 with distinct IDs", async () => {
+		const model = getBundledModel<"openai-completions">("nanogpt", "deepseek/deepseek-v4-pro");
+		const fetchMock = mockFetch([
+			chunk(model.id, {
+				tool_calls: [
+					{ index: 0, id: "call_a", type: "function", function: { name: "read", arguments: '{"path":"a.ts"}' } },
+				],
+			}),
+			chunk(model.id, {
+				tool_calls: [
+					{ index: 0, id: "call_b", type: "function", function: { name: "read", arguments: '{"path":' } },
+				],
+			}),
+			chunk(model.id, {
+				tool_calls: [{ index: 0, function: { arguments: '"b.ts"}' } }],
+			}),
+			chunk(model.id, {}, "tool_calls"),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(
+			model,
+			{ messages: [{ role: "user", content: "Read a.ts and b.ts", timestamp: Date.now() }], tools: [readTool] },
+			{ apiKey: "test-key", reasoning: "high", fetch: fetchMock },
+		).result();
+
+		const toolCalls = result.content.filter((b): b is ToolCall => b.type === "toolCall");
+		expect(toolCalls).toHaveLength(2);
+		expect(toolCalls.map(call => call.id)).toEqual(["call_a", "call_b"]);
+		expect(toolCalls.map(call => call.name)).toEqual(["read", "read"]);
+		expect(toolCalls.map(call => call.arguments)).toEqual([{ path: "a.ts" }, { path: "b.ts" }]);
+		expect(result.stopReason).toBe("toolUse");
+	});
 });
