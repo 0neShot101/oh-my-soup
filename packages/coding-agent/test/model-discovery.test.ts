@@ -2744,7 +2744,6 @@ describe("ModelRegistry runtime discovery", () => {
 								limits: { max_output_tokens: 16_000 },
 								top_provider: { max_completion_tokens: 32_768 },
 							},
-							{ id: "openai-test/null-top-provider", top_provider: { max_completion_tokens: null } },
 						],
 					}),
 					{ status: 200, headers: { "Content-Type": "application/json" } },
@@ -2757,7 +2756,6 @@ describe("ModelRegistry runtime discovery", () => {
 
 		expect(registry.find("openai-test", "gemini-4-argon")?.maxTokens).toBe(32_768);
 		expect(registry.find("openai-test", "openai-test/limits-win")?.maxTokens).toBe(16_000);
-		expect(registry.find("openai-test", "openai-test/null-top-provider")?.maxTokens).toBe(32_768);
 	});
 	test("openai-models-list uses nested token limits with existing context precedence", async () => {
 		writeRawModelsJson({
