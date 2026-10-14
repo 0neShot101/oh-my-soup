@@ -328,8 +328,8 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 		return null;
 	}
 
-	let tools =
-		Array.isArray(frontmatter.tools) && frontmatter.tools.length === 0 ? [] : parseArrayOrCSV(frontmatter.tools);
+	// Only absent or null tools select defaults; malformed restrictions must not widen access.
+	let tools = frontmatter.tools == null ? undefined : (parseArrayOrCSV(frontmatter.tools) ?? []);
 	if (tools) tools = normalizeToolNames(tools);
 
 	// Parse spawns field (array, "*", or CSV)
