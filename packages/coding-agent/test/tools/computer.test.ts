@@ -13,7 +13,6 @@ import {
 	type ComputerWorkerOutbound,
 	type ComputerWorkerTransport,
 	SCREEN_LOCKED_CAPTURE_NOTE,
-	screenStateNotice,
 } from "@oh-my-pi/pi-coding-agent/tools/computer/protocol";
 import {
 	type ComputerController,
@@ -353,13 +352,6 @@ function toolSession(): ToolSession {
 	};
 }
 
-/** The run-ended notice the model gets for a locked screen or a sleeping display. */
-function runNotice(state: DesktopScreenState): string {
-	const notice = screenStateNotice(state);
-	if (!notice) throw new Error("an unlocked, awake screen has no run notice");
-	return notice;
-}
-
 /** Exercise the shipped host approval/call rendering and worker, with only native OS work substituted. */
 function workerPrelude(session: ToolSession, native: NativeDesktopSession): EvalPreludeDefinition {
 	const transport = new MemoryTransport();
@@ -385,43 +377,6 @@ function workerPrelude(session: ToolSession, native: NativeDesktopSession): Eval
 
 afterAll(async () => {
 	await disposeAllKernelSessions();
-});
-
-describe("screen-state notice", () => {
-	// The worker and the round-trip tests below both build their notice with
-	// screenStateNotice, so this is the one place that pins which state each
-	// flag names and what the model is told it means.
-	const locked = /\bscreen is locked\b/;
-	const asleep = /\bdisplay is asleep\b/;
-	// Locked: input through accessibility fails, and the lock lasts until someone unlocks the Mac.
-	const lockedMeaning = [/\baccessibility\b/, /\bunlocks?\b/];
-	// Asleep: nothing on that display can be captured until it wakes.
-	const asleepMeaning = [/\bcaptured\b/, /\bwakes\b/];
-
-	it("names each state that holds and says what it means, and nothing for the other", () => {
-		const cases = [
-			{ screenLocked: true, displayAsleep: false },
-			{ screenLocked: false, displayAsleep: true },
-			{ screenLocked: true, displayAsleep: true },
-		];
-		for (const state of cases) {
-			const notice = screenStateNotice(state);
-			expect(notice).toBeString();
-			for (const pattern of [locked, ...lockedMeaning]) {
-				if (state.screenLocked) expect(notice).toMatch(pattern);
-				else expect(notice).not.toMatch(pattern);
-			}
-			for (const pattern of [asleep, ...asleepMeaning]) {
-				if (state.displayAsleep) expect(notice).toMatch(pattern);
-				else expect(notice).not.toMatch(pattern);
-			}
-		}
-	});
-
-	it("gives no notice for an unlocked, awake screen or unknown state", () => {
-		expect(screenStateNotice({ screenLocked: false, displayAsleep: false })).toBeUndefined();
-		expect(screenStateNotice(undefined)).toBeUndefined();
-	});
 });
 
 describe("computer prelude", () => {
@@ -1374,12 +1329,14 @@ describe("computer worker round trips", () => {
 				{ session, toolCallId: `locked-run-${locked}`, signal: new AbortController().signal },
 			);
 			expect(native.clickCount).toBe(1);
+			const notes = result.content.filter(block => block.type === "text" && block.text.startsWith("Note: "));
 			if (locked) {
-				expect(result.content).toEqual([
-					{ type: "text", text: runNotice({ screenLocked: true, displayAsleep: false }) },
-				]);
+				expect(result.content[0]).toMatchObject({
+					type: "text",
+					text: expect.stringMatching(/^Note: when this run ended the screen is locked\. /),
+				});
 			} else {
-				expect(result.content).toEqual([]);
+				expect(notes).toEqual([]);
 			}
 		}
 	});
@@ -1400,7 +1357,7 @@ describe("computer worker round trips", () => {
 			if (result.ok) return;
 			const [first, ...rest] = result.error.message.split("\n");
 			expect(first).toBe("verification failed");
-			if (locked) expect(rest.join("\n")).toBe(runNotice({ screenLocked: true, displayAsleep: false }));
+			if (locked) expect(rest.join("\n")).toMatch(/^Note: when this run ended the screen is locked\. /);
 			else expect(rest).toEqual([]);
 		}
 	});
@@ -1416,7 +1373,9 @@ describe("computer worker round trips", () => {
 		);
 		const [note] = result.content;
 		const text = note?.type === "text" ? note.text : "";
-		expect(text).toBe(runNotice({ screenLocked: false, displayAsleep: true }));
+		expect(text).toMatch(/^Note: when this run ended the session's display is asleep\. /);
+		expect(text).toContain("Nothing on that display can be captured or clicked until it wakes.");
+		expect(text).toContain("`computer.display`");
 	});
 
 	it("adds the lock state to a run timed out by a hung native call without reading capabilities", async () => {
@@ -1448,7 +1407,7 @@ describe("computer worker round trips", () => {
 		if (result.ok) return;
 		const [first, ...rest] = result.error.message.split("\n");
 		expect(first).toBe("Computer code execution timed out after 50ms");
-		expect(rest.join("\n")).toBe(runNotice({ screenLocked: true, displayAsleep: false }));
+		expect(rest.join("\n")).toMatch(/^Note: when this run ended the screen is locked\. /);
 		expect(native.blockingReads).toBe(0);
 	});
 

@@ -42,11 +42,7 @@ pub use types::*;
 
 use crate::task;
 
-#[cfg(not(test))]
 const OPERATION_TIMEOUT: Duration = Duration::from_mins(3);
-/// Short enough for a test to wait out a hung request.
-#[cfg(test)]
-const OPERATION_TIMEOUT: Duration = Duration::from_secs(1);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 /// How long the display stays awake after the last desktop request. Releasing
 /// the assertion restarts the OS display-sleep countdown, so the display can
@@ -1146,16 +1142,22 @@ struct Lifecycle {
 	closed: bool,
 }
 struct SessionCore {
-	selector:      DisplaySelector,
-	lifecycle:     Mutex<Lifecycle>,
-	capabilities:  Arc<Mutex<Option<DesktopCapabilities>>>,
-	display_awake: Arc<DisplayAwake>,
+	selector:          DisplaySelector,
+	lifecycle:         Mutex<Lifecycle>,
+	capabilities:      Arc<Mutex<Option<DesktopCapabilities>>>,
+	display_awake:     Arc<DisplayAwake>,
 	/// `call`s sent to the worker that have not returned yet.
-	in_flight:     AtomicUsize,
-	cancellation:  CancellationSource,
+	in_flight:         AtomicUsize,
+	cancellation:      CancellationSource,
+	/// How long `call` waits for the worker's reply before giving up.
+	operation_timeout: Duration,
 }
 impl SessionCore {
 	fn new(selector: DisplaySelector) -> Arc<Self> {
+		Self::with_operation_timeout(selector, OPERATION_TIMEOUT)
+	}
+
+	fn with_operation_timeout(selector: DisplaySelector, operation_timeout: Duration) -> Arc<Self> {
 		Arc::new(Self {
 			selector,
 			lifecycle: Mutex::new(Lifecycle {
@@ -1168,6 +1170,7 @@ impl SessionCore {
 			display_awake: Arc::default(),
 			in_flight: AtomicUsize::new(0),
 			cancellation: CancellationSource::default(),
+			operation_timeout,
 		})
 	}
 
@@ -1214,7 +1217,7 @@ impl SessionCore {
 			.send(QueuedRequest { request: make(txr), token })
 			.map_err(|_| DesktopError::internal("native desktop worker stopped unexpectedly"))
 			.and_then(|()| {
-				rxr.recv_timeout(OPERATION_TIMEOUT).map_err(|e| {
+				rxr.recv_timeout(self.operation_timeout).map_err(|e| {
 					self.display_awake.cancel_and_release(&self.cancellation);
 					DesktopError::timeout(format!("native desktop operation did not complete: {e}"))
 				})
@@ -2323,10 +2326,14 @@ mod capture_tests {
 		(backend, entered, unblock)
 	}
 
+	/// How long a test session waits for a hung request before its call gives
+	/// up.
+	const HUNG_CALL_TIMEOUT: Duration = Duration::from_secs(1);
+
 	/// A session serving `backend` with an hour's grace, so while a request
 	/// hangs only the session giving up can release the display.
 	fn session_serving(backend: FakeWaylandBackend) -> Arc<SessionCore> {
-		let core = SessionCore::new(DisplaySelector::Active);
+		let core = SessionCore::with_operation_timeout(DisplaySelector::Active, HUNG_CALL_TIMEOUT);
 		let display_awake = Arc::clone(&core.display_awake);
 		let (tx, rx) = flume::unbounded();
 		let (done_tx, done) = flume::bounded(1);
@@ -2389,7 +2396,7 @@ mod capture_tests {
 		// The hung request already holds the display; holding the hold's lock
 		// parks the caller's timeout at it.
 		let held = core.display_awake.0.lock();
-		thread::sleep(OPERATION_TIMEOUT + Duration::from_millis(500));
+		thread::sleep(HUNG_CALL_TIMEOUT + Duration::from_millis(500));
 		assert!(before.check().is_ok(), "the timeout cancelled outside the hold's lock");
 		drop(held);
 		assert_eq!(caller.join().unwrap().err().unwrap().code, ErrorCode::Timeout);
