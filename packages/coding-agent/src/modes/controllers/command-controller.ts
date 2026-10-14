@@ -127,6 +127,9 @@ const TERN_FORK_TIMEOUT_MS = 10_000;
 /** Fork failures after which Tern may still open the pane, so `/fork` must not also fork in place. */
 const TERN_FORK_UNCONFIRMED: Partial<Record<TernErrorKind, true>> = { closed: true, timeout: true, protocol: true };
 
+/** Rows `/session` spends on the builds that wrote the session, including the elision row. */
+const MAX_LISTED_BUILDS = 5;
+
 function formatCreditValue(value: number): string {
 	return value.toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
@@ -562,9 +565,17 @@ export class CommandController {
 		info += `${theme.fg("dim", "ID:")} ${stats.sessionId}\n`;
 		const builds = runtimeIdentityHistory(this.ctx.session.sessionManager.getEntries());
 		const running = currentRuntimeIdentity();
+		// A source checkout's diff hash changes with each edit, so a long-lived session can collect
+		// many builds: keep the first and the latest few. Every row is keyed so the overlay never
+		// mistakes a colourless continuation row for a section heading.
+		const hidden = builds.length > MAX_LISTED_BUILDS ? builds.length - MAX_LISTED_BUILDS + 1 : 0;
 		for (const [index, build] of builds.entries()) {
-			const prefix = index === 0 ? theme.fg("dim", "Build:") : theme.fg("dim", "     →");
-			info += `${prefix} ${replaceTabs(sanitizeText(formatRuntimeIdentity(build)))}\n`;
+			if (hidden > 0 && index > 0 && index <= hidden) {
+				if (index === 1) info += `${theme.fg("dim", `Builds 2–${hidden + 1}:`)} ${hidden} more\n`;
+				continue;
+			}
+			const key = builds.length === 1 ? "Build:" : `Build ${index + 1}:`;
+			info += `${theme.fg("dim", key)} ${replaceTabs(sanitizeText(formatRuntimeIdentity(build)))}\n`;
 		}
 		if (!sameRuntimeIdentity(builds[builds.length - 1], running)) {
 			info += `${theme.fg("dim", "Running:")} ${replaceTabs(sanitizeText(formatRuntimeIdentity(running)))}\n`;

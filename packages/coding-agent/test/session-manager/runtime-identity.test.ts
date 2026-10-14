@@ -66,4 +66,24 @@ describe("session runtime identity", () => {
 
 		expect(writers(guest.getEntries())).toEqual(["will/a", "beef"]);
 	});
+
+	it("lists a run that wrote before its diff was read under the diff it read, once", () => {
+		const pending: runtimeIdentity.RuntimeIdentity = { ...BUILD_A, diff: "unknown" };
+		const session = SessionManager.inMemory();
+		for (const build of [pending, BUILD_B, pending, BUILD_A]) {
+			runAs(build);
+			session.appendMessage({ role: "user", content: "turn", timestamp: 1 });
+		}
+		// The second `unknown` run cannot be told apart from BUILD_B; BUILD_A (clean) is a new build.
+		expect(runtimeIdentity.runtimeIdentityHistory(session.getEntries())).toEqual([BUILD_B, BUILD_A]);
+	});
+
+	it("treats a malformed stamp read from disk as unstamped", () => {
+		runAs(BUILD_A);
+		const session = SessionManager.inMemory();
+		session.appendMessage({ role: "user", content: "turn", timestamp: 1 });
+		const [entry] = session.getEntries();
+		const malformed = { ...entry, runtime: { version: "1.0.0", commit: 42 } } as unknown as SessionEntry;
+		expect(runtimeIdentity.runtimeIdentityHistory([malformed, entry])).toEqual([null, BUILD_A]);
+	});
 });
