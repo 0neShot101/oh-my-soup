@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `MessageCountOptions.latestTurn`: counts a message as the transcript's latest assistant turn, which an Anthropic Messages replay keeps byte-for-byte
+
+### Fixed
+
+- Fixed compaction keeping more recent history than `keepRecentTokens` when the latest Claude turn on the Anthropic Messages API ended its tool calls on `stop` or `length`: the replay keeps that turn's signed reasoning, but the cut point counted only its visible blocks
+
 ## [18.11.0] - 2026-10-14
 
 ### Breaking Changes
