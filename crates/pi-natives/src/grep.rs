@@ -3355,6 +3355,7 @@ mod tests {
 				&["backend/auth/a.ts", "frontend/src/deep/x.tsx", "frontend/src/main.tsx"][..],
 			),
 			("frontend/sr?", &["frontend/src/deep/x.tsx", "frontend/src/main.tsx"][..]),
+			("frontend/sr**", &["frontend/src/deep/x.tsx", "frontend/src/main.tsx"][..]),
 			("frontend/src/{main.tsx,App.tsx}", &["frontend/src/main.tsx"][..]),
 		] {
 			let mut config = base_grep_config(root.path());

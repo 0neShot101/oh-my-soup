@@ -97,7 +97,7 @@ pub fn walk_depth_bound(pattern: &str) -> usize {
 /// `*.ts`.
 pub fn search_scope_patterns(pattern: String) -> Vec<String> {
 	let base = pattern.trim_end_matches('/');
-	if base.ends_with("**") {
+	if base == "**" || base.ends_with("/**") {
 		return vec![pattern];
 	}
 	let descendants = format!("{base}/**");
