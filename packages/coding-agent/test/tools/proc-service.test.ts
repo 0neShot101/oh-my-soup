@@ -585,6 +585,70 @@ describe("bash services via proc://", () => {
 		}
 	});
 
+	it("keeps the settled service result when a steer arrives during log retrieval", async () => {
+		const now = Date.now();
+		const daemon: DaemonSnapshot = {
+			name: "ready-service",
+			id: "ready-service-id",
+			state: "ready",
+			pid: 12345,
+			owner: "Main",
+			createdAt: now,
+			startedAt: now,
+			readyAt: now,
+			restartCount: 0,
+			outputBytes: 0,
+			persist: false,
+			detached: false,
+		};
+		const logsRequested = Promise.withResolvers<void>();
+		const logs = Promise.withResolvers<DaemonRpcResult>();
+		const client = {
+			projectDir: process.cwd(),
+			onCompletion: () => () => {},
+			close() {},
+			async request(operation: DaemonOperation): Promise<DaemonRpcResult> {
+				if (operation.op === "start") return { op: "start", daemon, readyTimedOut: false };
+				if (operation.op === "logs") {
+					logsRequested.resolve();
+					return logs.promise;
+				}
+				throw new Error(`Unexpected broker op ${operation.op}`);
+			},
+		} as unknown as DaemonBrokerClient;
+		const spy = vi.spyOn(daemonClient, "daemonClientForProject").mockResolvedValue(client);
+		const steering = new AbortController();
+		try {
+			const pending = new BashTool(toolSession(process.cwd())).execute(
+				"ready-service",
+				{ command: "printf 'READY\n'", name: "ready-service", ready: { log: "READY", timeout: 300 } },
+				undefined,
+				undefined,
+				steeringContext(steering.signal),
+			);
+			await logsRequested.promise;
+			steering.abort();
+			logs.resolve({
+				op: "logs",
+				name: "ready-service",
+				text: "READY\n",
+				cursor: 6,
+				timedOut: false,
+				state: "ready",
+			});
+			const result = await pending;
+			expect(result.details?.service).toMatchObject({
+				name: "ready-service",
+				state: "ready",
+				ready: true,
+				pid: 12345,
+			});
+			expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("READY");
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
 	it("keeps empty or default optional fields out of service-mode selection", async () => {
 		const bash = new BashTool(toolSession(process.cwd()));
 		const textOf = (result: { content: Array<{ type: string; text?: string }> }): string =>

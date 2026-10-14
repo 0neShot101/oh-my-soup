@@ -200,6 +200,7 @@ export async function serviceLogs(session: ToolSession, name: string, signal?: A
 	return (await serviceLogsWithRows(session, name, signal)).text;
 }
 
+/** Start a session-owned daemon and wait for its requested readiness condition. */
 export async function startService(
 	session: ToolSession,
 	params: ServiceStart,
@@ -207,7 +208,6 @@ export async function startService(
 ): Promise<{
 	daemon: DaemonSnapshot;
 	readyTimedOut: boolean;
-	log: string;
 }> {
 	if (!cfgLaunchEnabled.get(session.settings)) throw new ToolError("Service launch is disabled in this session.");
 	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/.test(params.name))
@@ -249,11 +249,7 @@ export async function startService(
 		signal,
 	);
 	if (result.op !== "start") throw new Error("Unexpected daemon start response");
-	return {
-		daemon: result.daemon,
-		readyTimedOut: result.readyTimedOut,
-		log: await serviceLogs(session, params.name, signal),
-	};
+	return { daemon: result.daemon, readyTimedOut: result.readyTimedOut };
 }
 
 export async function sendService(
