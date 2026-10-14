@@ -7177,6 +7177,14 @@ const OPENCODE_ZEN_API_RESOLUTION = createOpenCodeApiResolution("https://opencod
 const OPENCODE_GO_BASE_PATH = "https://opencode.ai/inference/go";
 const OPENCODE_GO_API_RESOLUTION = createOpenCodeApiResolution(OPENCODE_GO_BASE_PATH, "opencode-go");
 
+/**
+ * OpenCode Go endpoint for one request API. The model generator re-bases
+ * previous-snapshot rows with it so retained rows follow endpoint moves.
+ */
+export function openCodeGoBaseUrlForApi(api: Api): string {
+	return openCodeBaseUrlForApi(api, OPENCODE_GO_BASE_PATH);
+}
+
 const COPILOT_BASE_URL = "https://api.githubcopilot.com";
 
 const ZAI_ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic";
