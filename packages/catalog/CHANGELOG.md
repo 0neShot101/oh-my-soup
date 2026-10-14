@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the Antigravity model selector offering roster rows the backend marks disabled (`disabled: true`, e.g. `gemini-4-argon-disabled` on accounts without Argon access), which answered `Cloud Code Assist API error (404): Requested entity was not found.`; discovery now skips them the way it already skips `isInternal` rows ([#15684](https://github.com/can1357/oh-my-pi/pull/15684) by [@CharleoYang](https://github.com/CharleoYang))
+
 ## [18.10.4] - 2026-10-13
 
 ### Added
