@@ -258,10 +258,12 @@ export class SkillDescriptionStore {
 		this.#upsert.run(key, description);
 	}
 
+	/** Whether closing has begun and no new compression work is admitted. */
 	get isClosing(): boolean {
 		return this.#closeCall !== undefined;
 	}
 
+	/** Whether the database is closed and late replies are discarded; false while draining. */
 	get isClosed(): boolean {
 		return this.#closed;
 	}
@@ -281,14 +283,10 @@ export class SkillDescriptionStore {
 	}
 
 	async #closeAfterPending(pending: Promise<void>[]): Promise<void> {
-		let timer: ReturnType<typeof setTimeout> | undefined;
+		const deadline = Promise.withResolvers<void>();
+		const timer = setTimeout(deadline.resolve, STORE_CLOSE_GRACE_MS);
 		try {
-			await Promise.race([
-				Promise.all(pending),
-				new Promise<void>(resolve => {
-					timer = setTimeout(resolve, STORE_CLOSE_GRACE_MS);
-				}),
-			]);
+			await Promise.race([Promise.all(pending), deadline.promise]);
 		} finally {
 			clearTimeout(timer);
 			this.#closeDatabase();
@@ -303,6 +301,7 @@ export class SkillDescriptionStore {
 		this.#db.close();
 	}
 
+	/** Start bounded closure on disposal; await close() to wait for pending writes. */
 	[Symbol.dispose](): void {
 		void this.close();
 	}
