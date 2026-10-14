@@ -398,44 +398,48 @@ export class JudgmentBatch {
 	async #judgeItem(judge: ChainJudge, input: BatchInput, signal: AbortSignal): Promise<JudgmentBatchItem> {
 		if (signal.aborted) return { key: input.key, error: "cancelled" };
 		if (input.imageSourceError) return { key: input.key, error: input.imageSourceError };
-		let images: ImageContent[] | undefined;
 		try {
-			images = await loadEvalJudgmentImages(input.imageSources, this.#session.cwd);
-		} catch (error) {
-			return { key: input.key, error: error instanceof Error ? error.message : String(error) };
+			await evalRequestSlots.acquire(signal);
+		} catch {
+			return { key: input.key, error: "cancelled" };
 		}
-
-		let lastError: unknown;
-		for (let attempt = 0; attempt <= this.#options.retries; attempt++) {
+		try {
 			if (signal.aborted) return { key: input.key, error: "cancelled" };
+
+			let images: ImageContent[] | undefined;
 			try {
-				await evalRequestSlots.acquire(signal);
-			} catch {
-				return { key: input.key, error: "cancelled" };
-			}
-			try {
-				const result = toEvalJudgmentResult(
-					await judge.judge(
-						{
-							state: input.state,
-							questions: this.#questions,
-							...(images === undefined ? {} : { images }),
-						},
-						{ signal },
-					),
-				);
-				return { key: input.key, answers: result.answers, model: result.model };
+				images = await loadEvalJudgmentImages(input.imageSources, this.#session.cwd);
 			} catch (error) {
-				lastError = error;
-			} finally {
-				evalRequestSlots.release();
+				return { key: input.key, error: error instanceof Error ? error.message : String(error) };
 			}
+
+			let lastError: unknown;
+			for (let attempt = 0; attempt <= this.#options.retries; attempt++) {
+				if (signal.aborted) return { key: input.key, error: "cancelled" };
+				try {
+					const result = toEvalJudgmentResult(
+						await judge.judge(
+							{
+								state: input.state,
+								questions: this.#questions,
+								...(images === undefined ? {} : { images }),
+							},
+							{ signal },
+						),
+					);
+					return { key: input.key, answers: result.answers, model: result.model };
+				} catch (error) {
+					lastError = error;
+				}
+			}
+			if (signal.aborted) return { key: input.key, error: "cancelled" };
+			return {
+				key: input.key,
+				error: lastError instanceof Error ? lastError.message : String(lastError),
+			};
+		} finally {
+			evalRequestSlots.release();
 		}
-		if (signal.aborted) return { key: input.key, error: "cancelled" };
-		return {
-			key: input.key,
-			error: lastError instanceof Error ? lastError.message : String(lastError),
-		};
 	}
 
 	#lastError(): string | undefined {

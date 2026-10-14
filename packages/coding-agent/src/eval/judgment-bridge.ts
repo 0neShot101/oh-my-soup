@@ -281,12 +281,14 @@ export async function runEvalJudgment(
 	if (!isRecord(args)) throw invalid("expected { state, questions }");
 	const state = parseState(args.state);
 	const questions = parseQuestions(args.questions);
-	const images = await loadEvalJudgmentImages(args.images, options.session.cwd);
 	const judge = sessionJudge(options, "judge");
 	const signal = options.signal;
 	return withBridgeTimeoutPause(options.emitStatus, async () => {
 		await evalRequestSlots.acquire(signal);
 		try {
+			signal?.throwIfAborted();
+			const images = await loadEvalJudgmentImages(args.images, options.session.cwd);
+			signal?.throwIfAborted();
 			return toEvalJudgmentResult(
 				await judge.judge({ state, questions, ...(images === undefined ? {} : { images }) }, { signal }),
 			);

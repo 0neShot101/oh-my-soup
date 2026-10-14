@@ -7,6 +7,7 @@ import { $ } from "bun";
 import { AsyncJobManager } from "../../src/async";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
+import { EVAL_HANDLE_CONCURRENCY, evalRequestSlots } from "../../src/eval/completion-bridge";
 import { disposeAllVmContexts } from "../../src/eval/js/context-manager";
 import { executeJs } from "../../src/eval/js/executor";
 import {
@@ -343,6 +344,111 @@ describe("judge_batch bridge", () => {
 		}
 	});
 
+	it("waits for shared admission before loading images and releases after loader failure", async () => {
+		let held = 0;
+		const { session } = makeSession({ jobs: false });
+		try {
+			while (held < EVAL_HANDLE_CONCURRENCY) {
+				await evalRequestSlots.acquire();
+				held++;
+			}
+			let loaderStarted = false;
+			const imageSources: unknown[] = [];
+			Object.defineProperty(imageSources, "0", {
+				get: () => {
+					loaderStarted = true;
+					return "";
+				},
+			});
+			const created = (await runEvalJudgmentBatch(
+				{
+					op: "create",
+					items: [{ key: "broken", state: "state-broken", images: imageSources }],
+					questions: QUESTIONS,
+					concurrency: 1,
+					retries: 0,
+				},
+				{ session },
+			)) as JudgmentBatchStatus;
+			expect(await status(session, created.id)).toMatchObject({ done: 0, running: true });
+			expect(await drain(session, created.id, 0)).toEqual([]);
+			expect(loaderStarted).toBe(false);
+
+			evalRequestSlots.release();
+			held--;
+			const [item] = await drain(session, created.id, 5_000);
+			expect(loaderStarted).toBe(true);
+			expect(item?.error).toContain("images[0] path must not be empty");
+
+			const controller = new AbortController();
+			const admission = evalRequestSlots.acquire(controller.signal).then(
+				() => true,
+				() => false,
+			);
+			controller.abort();
+			const acquired = await admission;
+			if (acquired) evalRequestSlots.release();
+			expect(acquired).toBe(true);
+		} finally {
+			while (held > 0) {
+				evalRequestSlots.release();
+				held--;
+			}
+		}
+	});
+
+	it("cancels a batch item waiting for shared admission before image loading", async () => {
+		let held = 0;
+		const { session } = makeSession({ jobs: false });
+		try {
+			while (held < EVAL_HANDLE_CONCURRENCY) {
+				await evalRequestSlots.acquire();
+				held++;
+			}
+			let loaderStarted = false;
+			const imageSources: unknown[] = [];
+			Object.defineProperty(imageSources, "0", {
+				get: () => {
+					loaderStarted = true;
+					return "";
+				},
+			});
+			const created = (await runEvalJudgmentBatch(
+				{
+					op: "create",
+					items: [{ key: "cancelled", state: "state-cancelled", images: imageSources }],
+					questions: QUESTIONS,
+					concurrency: 1,
+					retries: 0,
+				},
+				{ session },
+			)) as JudgmentBatchStatus;
+			expect(await status(session, created.id)).toMatchObject({ done: 0, running: true });
+			expect(await runEvalJudgmentBatch({ op: "cancel", id: created.id }, { session })).toEqual({
+				cancelled: true,
+			});
+			expect(await drain(session, created.id, 5_000)).toEqual([{ key: "cancelled", error: "cancelled" }]);
+			expect(loaderStarted).toBe(false);
+
+			evalRequestSlots.release();
+			held--;
+			const controller = new AbortController();
+			const admission = evalRequestSlots.acquire(controller.signal).then(
+				() => true,
+				() => false,
+			);
+			controller.abort();
+			const acquired = await admission;
+			if (acquired) evalRequestSlots.release();
+			expect(acquired).toBe(true);
+		} finally {
+			while (held > 0) {
+				evalRequestSlots.release();
+				held--;
+			}
+		}
+	});
+
 	it("drains settled items through a cursor, records failures per item, and settles the job", async () => {
 		const gate = Promise.withResolvers<string>();
 		mockJudge({
@@ -405,18 +511,30 @@ describe("judge_batch bridge", () => {
 		expect(job?.resultText).toMatch(/^judged 3\/3 · 1 failed · \$0\.0050 · p\/smol · [\d.]+s$/);
 	});
 
-	it("retries an item once before recording its failure", async () => {
+	it("retries an image-backed item once and preserves its prepared image for the answer", async () => {
 		let attempts = 0;
-		vi.spyOn(ai, "completeSimple").mockImplementation(async () => {
+		const imageAttempts: unknown[][] = [];
+		vi.spyOn(ai, "completeSimple").mockImplementation(async (_model, context) => {
 			attempts++;
+			const user = context.messages.find(message => message.role === "user");
+			const content = user?.content;
+			imageAttempts.push(Array.isArray(content) ? content.filter(block => block.type === "image") : []);
 			return reply(attempts <= 3 ? "I cannot decide." : "tests: yes");
 		});
-		const { session } = makeSession();
-		const created = await create(session, ["state-a"]);
+		const { session } = makeSession({ vision: true });
+		const created = (await runEvalJudgmentBatch(
+			{
+				op: "create",
+				items: [{ key: "retry", state: "state-a", images: [IMAGE_ONE] }],
+				questions: QUESTIONS,
+			},
+			{ session },
+		)) as JudgmentBatchStatus;
 		const [item] = await drain(session, created.id, 5_000);
 		expect(item?.answers).toEqual({ tests: { type: "bool", bool: 1 } });
 		// Three off-format turns exhaust the first judgment; the retry answers on its first turn.
 		expect(attempts).toBe(4);
+		expect(imageAttempts).toEqual([[IMAGE_ONE], [IMAGE_ONE], [IMAGE_ONE], [IMAGE_ONE]]);
 	});
 
 	it("raises from drain only after the cursor is exhausted when min_ok is unmet", async () => {

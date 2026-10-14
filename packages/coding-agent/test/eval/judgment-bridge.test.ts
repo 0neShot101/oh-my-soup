@@ -6,6 +6,7 @@ import type { Api, AssistantMessage, ImageContent, Model } from "@oh-my-pi/pi-ai
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { runEvalJudgment } from "../../src/eval/judgment-bridge";
+import { EVAL_HANDLE_CONCURRENCY, evalRequestSlots } from "../../src/eval/completion-bridge";
 import { JAVASCRIPT_PRELUDE_SOURCE } from "../../src/eval/js/shared/prelude";
 import type { ToolSession } from "../../src/tools";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
@@ -262,6 +263,67 @@ describe("eval judge() bridge", () => {
 		} finally {
 			tempDir.removeSync();
 		}
+	});
+
+	it("pauses the watchdog before image loading and waits for a shared request slot", async () => {
+		let held = 0;
+		try {
+			while (held < EVAL_HANDLE_CONCURRENCY) {
+				await evalRequestSlots.acquire();
+				held++;
+			}
+			const events: unknown[] = [];
+			let loaderStarted = false;
+			const imageSources: unknown[] = [];
+			Object.defineProperty(imageSources, "0", {
+				get: () => {
+					loaderStarted = true;
+					events.push({ op: "image-load" });
+					return "";
+				},
+			});
+			const request = runEvalJudgment(
+				{ state: "x", questions: { tests: QUESTIONS.tests }, images: imageSources },
+				{ session: makeSession(), emitStatus: event => events.push(event) },
+			);
+			expect(events).toEqual([{ op: "timeout-pause" }]);
+			expect(loaderStarted).toBe(false);
+
+			evalRequestSlots.release();
+			held--;
+			await expect(request).rejects.toThrow("images[0] path must not be empty");
+			expect(loaderStarted).toBe(true);
+			expect(events).toEqual([{ op: "timeout-pause" }, { op: "image-load" }, { op: "timeout-resume" }]);
+
+			const controller = new AbortController();
+			const admission = evalRequestSlots.acquire(controller.signal).then(
+				() => true,
+				() => false,
+			);
+			controller.abort();
+			const acquired = await admission;
+			if (acquired) evalRequestSlots.release();
+			expect(acquired).toBe(true);
+		} finally {
+			while (held > 0) {
+				evalRequestSlots.release();
+				held--;
+			}
+		}
+	});
+
+	it("honors a pre-aborted caller before loading images or contacting a judge", async () => {
+		const complete = vi.spyOn(ai, "completeSimple");
+		const controller = new AbortController();
+		controller.abort(new Error("caller cancelled"));
+
+		await expect(
+			runEvalJudgment(
+				{ state: "x", questions: { tests: QUESTIONS.tests }, images: "not an image list" },
+				{ session: makeSession(), signal: controller.signal },
+			),
+		).rejects.toThrow("caller cancelled");
+		expect(complete).not.toHaveBeenCalled();
 	});
 
 	it("keeps image-shaped judgment state as text when no attachments are supplied", async () => {
