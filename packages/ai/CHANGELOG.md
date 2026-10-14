@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.11.0] - 2026-10-14
+
 ### Fixed
 
 - Fixed parallel tool calls failing with "Tool call arguments are not valid JSON" on some OpenAI-compatible gateways, such as Gemini ([#15682](https://github.com/can1357/oh-my-pi/pull/15682) by [@Zzz141592653](https://github.com/Zzz141592653))
