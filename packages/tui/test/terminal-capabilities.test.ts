@@ -160,15 +160,16 @@ describe("detectTerminalId", () => {
 });
 
 describe("tmux client terminal resolution", () => {
-	it.skipIf(process.platform === "win32")("uses the attached client's terminal profile", async () => {
-		const replies = { "display-message -p #{client_termtype}": "WezTerm 20260905-175422-0f4b5596" };
-		const stdout = await withFakeTmux(replies, async binDir => {
+	const CLIENT_QUERY = "display-message -p #{client_termtype}\t#{client_termname}";
+
+	async function resolveInsideFakeTmux(clientReport: string): Promise<string> {
+		return withFakeTmux({ [CLIENT_QUERY]: clientReport }, async binDir => {
 			const proc = Bun.spawn({
 				cmd: [
 					process.execPath,
 					"--eval",
 					`import { TERMINAL, TERMINAL_ID } from "@oh-my-pi/pi-tui/terminal-capabilities";
-console.log(JSON.stringify({ id: TERMINAL_ID, notifyProtocol: TERMINAL.notifyProtocol }));`,
+console.log(JSON.stringify({ id: TERMINAL_ID, notifyProtocol: TERMINAL.notifyProtocol, imageProtocol: TERMINAL.imageProtocol }));`,
 				],
 				env: subprocessEnv({
 					PI_TEST_RUNTIME: undefined,
@@ -195,9 +196,24 @@ console.log(JSON.stringify({ id: TERMINAL_ID, notifyProtocol: TERMINAL.notifyPro
 			expect(exitCode).toBe(0);
 			return stdout;
 		});
+	}
 
-		expect(stdout).toBe('{"id":"wezterm","notifyProtocol":"\\u001b]9;"}\n');
+	it.skipIf(process.platform === "win32")("uses the attached client's terminal profile", async () => {
+		const stdout = await resolveInsideFakeTmux("WezTerm 20260905-175422-0f4b5596\ttmux-256color");
+		expect(JSON.parse(stdout)).toMatchObject({ id: "wezterm", notifyProtocol: "\u001b]9;" });
 	});
+
+	// The pane TERM no longer implies Kitty, so a Kitty client must be named by
+	// tmux. Its terminal-type reply can name something else entirely (a nested
+	// tmux answers `tmux 3.4`, and tmux < 3.4 records nothing); the client's
+	// TERM still identifies the emulator. Report captured from tmux 3.4.
+	it.skipIf(process.platform === "win32")(
+		"falls back to the client's TERM when the terminal type is unknown",
+		async () => {
+			const stdout = await resolveInsideFakeTmux("tmux 3.4\txterm-kitty");
+			expect(JSON.parse(stdout)).toMatchObject({ id: "kitty", imageProtocol: ImageProtocol.Kitty });
+		},
+	);
 });
 
 describe("synchronizedOutputUserOverride", () => {

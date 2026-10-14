@@ -16,7 +16,7 @@ import {
 	terminalMultiplexerForTerm,
 	terminalMultiplexerSessions,
 } from "./terminal-multiplexer";
-import { resolveTmuxClientTerminalName, wrapTmuxPassthroughIfNeeded } from "./tmux";
+import { resolveTmuxClientTerminalNames, wrapTmuxPassthroughIfNeeded } from "./tmux";
 import type { HangulCompatibilityJamoWidth } from "./utils";
 
 export * from "./terminal-multiplexer";
@@ -662,9 +662,11 @@ export function detectTerminalId(env: NodeJS.ProcessEnv = Bun.env): TerminalId {
 	if (programId) return programId;
 
 	// tmux >= 3.2 replaces the pane's identity with `TERM_PROGRAM=tmux`.
-	// Its server still holds the attached client's terminal-type reply.
-	const clientProgramId = fromProgram(resolveTmuxClientTerminalName(env) ?? undefined);
-	if (clientProgramId) return clientProgramId;
+	// Its server still holds the attached client's terminal-type reply and TERM.
+	for (const clientProgram of resolveTmuxClientTerminalNames(env)) {
+		const clientProgramId = fromProgram(clientProgram);
+		if (clientProgramId) return clientProgramId;
+	}
 
 	if (TERM?.toLowerCase().includes("ghostty")) return "ghostty";
 	if (TERM && caseEq(TERM, "monstar")) return "monstar";
