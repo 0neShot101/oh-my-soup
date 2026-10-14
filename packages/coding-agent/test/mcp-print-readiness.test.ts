@@ -77,6 +77,7 @@ function printSession(manager: MCPManager, refreshGate?: Promise<void>, onRefres
 		getLastAssistantMessage: () => undefined,
 		disableStopTimeTodoReminders: () => {},
 		prepareForHeadlessAdvisorDrain: () => {},
+		waitForIdle: async () => {},
 		setTextOutputCommitted: () => {},
 		waitForAdvisorCatchup: async () => true,
 		dispose: async () => {
