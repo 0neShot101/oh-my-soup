@@ -404,7 +404,10 @@ export async function ensureTool(tool: ToolName, silentOrOptions?: EnsureToolOpt
 		notify?.(`Installing ${pythonConfig.name}…`);
 		const tracker = trackDownload(pythonConfig.name, { detail: "installing" });
 		const success = await installPythonPackage(pythonConfig.package, signal);
-		if (signal?.aborted) return undefined;
+		if (signal?.aborted) {
+			tracker.done();
+			return undefined;
+		}
 		if (success) {
 			// Re-check for the command after installation
 			const path = $which(pythonConfig.binaryName);

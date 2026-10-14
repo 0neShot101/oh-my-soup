@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed an unhandled rejection when ttachSignal was called with an already-aborted signal by ensuring #exited is caught before aborting ([#15706](https://github.com/can1357/oh-my-pi/issues/15706)).
+- Fixed an unhandled rejection when a subprocess is spawned with an already-aborted signal, ensuring cancelled commands no longer crash the agent session ([#15750](https://github.com/can1357/oh-my-pi/pull/15750) by [@harshaygadekar](https://github.com/harshaygadekar)).
 
 ## [18.10.0] - 2026-10-12
 
