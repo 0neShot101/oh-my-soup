@@ -77,7 +77,6 @@ interface PageShadowRoot {
 
 interface PageElement {
 	readonly tagName: string;
-	readonly localName: string;
 	id: string;
 	readonly isConnected: boolean;
 	type: string;
@@ -90,19 +89,9 @@ interface PageElement {
 	readonly dataset: Record<string, string>;
 	readonly style: Record<string, string>;
 	parentElement: PageElement | null;
-	/** The slot a light-DOM child renders in, or null when unslotted or inside a closed shadow root. */
-	readonly assignedSlot?: PageElement | null;
 	shadowRoot: PageShadowRoot | null;
-	/** Child nodes, text included; each slotted one names the slot it renders in. */
-	readonly childNodes?: ArrayLike<{ readonly assignedSlot?: PageElement | null }>;
 	getBoundingClientRect(): PageRect;
 	getClientRects(): ArrayLike<PageRect>;
-	readonly offsetWidth?: number;
-	readonly offsetHeight?: number;
-	readonly clientLeft?: number;
-	readonly clientTop?: number;
-	readonly clientWidth?: number;
-	readonly clientHeight?: number;
 	getRootNode(): PageRoot;
 	contains(other: PageElement): boolean;
 	getAttribute(name: string): string | null;
@@ -184,36 +173,6 @@ function checkClickActionable(
 		return { ok: false as const, reason: `visibility:${style.visibility}` };
 	}
 	if (style.pointerEvents === "none") return { ok: false as const, reason: "pointer-events:none" };
-	// The browser drops a click on a disabled control, inside a disabled button (also through a slot, as when a
-	// custom element's shadow root wraps the content it slots in one), or under an inert subtree, though
-	// hit-testing finds it.
-	const flatParent = (node: PageElement): PageElement | null =>
-		node.assignedSlot ?? node.parentElement ?? node.getRootNode().host ?? null;
-	const isModal = (node: PageElement): boolean => {
-		try {
-			return node.matches(":modal");
-		} catch {
-			return false;
-		}
-	};
-	const refused = (target: PageElement): "disabled" | "inert" | undefined => {
-		if (target.matches(":disabled")) return "disabled";
-		for (let node: PageElement | null = target; node; node = flatParent(node)) {
-			if (node.inert) return "inert";
-			if (node.matches("button:disabled")) return "disabled";
-			// A modal dialog escapes the inertness and controls of everything around it.
-			if (isModal(node)) break;
-		}
-		// A hit retargeted to a host stands for the content the host slots into its shadow root.
-		for (const child of Array.from(target.childNodes ?? [])) {
-			for (let node = child.assignedSlot ?? null; node && node !== target; node = flatParent(node)) {
-				if (node.matches("button:disabled")) return "disabled";
-			}
-		}
-		return undefined;
-	};
-	const refusedTarget = refused(element);
-	if (refusedTarget) return { ok: false as const, reason: refusedTarget };
 	// A custom checkbox or radio keeps its real control at opacity:0 under the box it draws; the hit test below decides.
 	if (
 		Number(style.opacity) === 0 &&
@@ -275,9 +234,6 @@ function checkClickActionable(
 			.join("");
 		return { ok: false as const, reason: "covered", coveredBy: `<${tag}${id}${classes}>` };
 	}
-	// The hit may be a disabled control inside the target's shadow root, which takes the click instead.
-	const refusedHit = refused(topElement);
-	if (refusedHit) return { ok: false as const, reason: refusedHit };
 	return { ok: true as const, x: x - rect.left, y: y - rect.top };
 }
 
@@ -343,7 +299,12 @@ async function actionableClickPoint(
 	}
 }
 
-/** Click an element only after verifying the dispatched point is not occluded. */
+/**
+ * Click an element only after verifying the dispatched point is not occluded, then confirm the browser
+ * delivered the click to it. A disabled control, an inert subtree, and anything else the browser refuses
+ * receive no `mousedown` (a label's forwarded `click` counts for its control), so a click the page never
+ * saw fails instead of reporting success.
+ */
 export async function clickElement(
 	handle: ElementHandle,
 	label: string,
@@ -351,12 +312,59 @@ export async function clickElement(
 	options: ClickAtOptions = {},
 ): Promise<void> {
 	const point = await actionableClickPoint(handle, label, signal, options);
-	await untilAborted(signal, () =>
-		handle.frame.page().mouse.click(point.x, point.y, {
-			button: options.button,
-			count: options.clickCount,
+	const watch = await untilAborted(signal, () =>
+		handle.evaluateHandle(el => {
+			const page = globalThis as unknown as {
+				addEventListener(
+					type: string,
+					listener: (event: { composedPath(): unknown[] }) => void,
+					capture: boolean,
+				): void;
+				removeEventListener(
+					type: string,
+					listener: (event: { composedPath(): unknown[] }) => void,
+					capture: boolean,
+				): void;
+			};
+			const state = { delivered: false, stop: () => {} };
+			const seen = (event: { composedPath(): unknown[] }) => {
+				if (event.composedPath().includes(el)) state.delivered = true;
+			};
+			page.addEventListener("mousedown", seen, true);
+			page.addEventListener("click", seen, true);
+			state.stop = () => {
+				page.removeEventListener("mousedown", seen, true);
+				page.removeEventListener("click", seen, true);
+			};
+			return state;
 		}),
 	);
+	try {
+		await untilAborted(signal, () =>
+			handle.frame.page().mouse.click(point.x, point.y, {
+				button: options.button,
+				count: options.clickCount,
+			}),
+		);
+	} catch (error) {
+		// The page may be stuck; tidy up without waiting on it.
+		void watch
+			.evaluate(state => state.stop())
+			.catch(() => undefined)
+			.finally(() => watch.dispose().catch(() => undefined));
+		throw error;
+	}
+	// A click that navigated away took the page's record with it; it reached the page.
+	const delivered = await untilAborted(signal, () =>
+		watch.evaluate(state => {
+			state.stop();
+			return state.delivered;
+		}),
+	).catch(() => true);
+	await watch.dispose().catch(() => undefined);
+	if (!delivered) {
+		throw new ToolError(`${label}: the browser did not deliver the click to the element (disabled or inert)`);
+	}
 }
 
 /**
@@ -458,145 +466,59 @@ interface MeasuredBox {
 }
 
 /**
- * Runs in the page: the element's document position, whether it has a box, whether any of it shows
- * through the viewport and its clipping ancestors.
+ * Runs in the page: the element's document position, whether it has a box, and whether the browser shows
+ * it anywhere in the viewport. Visibility is the renderer's own hit test at a few points of each on-screen
+ * fragment, landing on the element or inside it, so every clip, transform, top layer and containment rule
+ * is the browser's. An element hit testing cannot see by design (`pointer-events: none`, `visibility:
+ * hidden`) is ranked by geometry, and the click's actionability check reports why it cannot be clicked.
  * Self-contained, since Puppeteer serializes it.
  */
 function measureBoxInPage(el: unknown): MeasuredBox {
 	const element = el as unknown as PageElement;
-	type Style = Record<
-		| "position"
-		| "display"
-		| "overflowX"
-		| "overflowY"
-		| "transform"
-		| "translate"
-		| "rotate"
-		| "scale"
-		| "perspective"
-		| "filter"
-		| "backdropFilter"
-		| "contain"
-		| "containerType"
-		| "contentVisibility"
-		| "willChange",
-		string
-	>;
-	const page = globalThis as unknown as {
-		innerWidth: number;
-		innerHeight: number;
-		scrollX: number;
-		scrollY: number;
-		getComputedStyle(element: PageElement): Style;
-	};
-	// Flat-tree parent: a slotted node renders inside its slot (which may itself be slotted).
-	const flatParent = (node: PageElement): PageElement | null =>
-		node.assignedSlot ?? node.parentElement ?? node.getRootNode().host ?? null;
-	// Boxes that become the containing block of fixed descendants (and so of absolute ones too).
-	const containsFixed = (style: Style): boolean =>
-		style.transform !== "none" ||
-		style.translate !== "none" ||
-		style.rotate !== "none" ||
-		style.scale !== "none" ||
-		style.perspective !== "none" ||
-		style.filter !== "none" ||
-		(style.backdropFilter ?? "none") !== "none" ||
-		/paint|layout|strict|content/.test(style.contain) ||
-		/size/.test(style.containerType ?? "") ||
-		(style.contentVisibility ?? "visible") !== "visible" ||
-		/transform|perspective|filter|translate|rotate|scale/.test(style.willChange);
-	// A top-layer box (modal dialog, open popover, fullscreen element) renders outside every ancestor's clip.
-	const inTopLayer = (node: PageElement): boolean => {
-		try {
-			return node.matches(":modal, :popover-open, :fullscreen");
-		} catch {
-			return false;
-		}
-	};
-	// Descendants are clipped at the padding edge, so a border never shows them.
-	const paddingBox = (node: PageElement) => {
-		const box = node.getBoundingClientRect();
-		// An SVG viewport has no offset size; its client size is the same untransformed basis.
-		const width = node.offsetWidth || node.clientWidth;
-		const height = node.offsetHeight || node.clientHeight;
-		const scaleX = width ? box.width / width : 1;
-		const scaleY = height ? box.height / height : 1;
-		const left = box.left + (node.clientLeft ?? 0) * scaleX;
-		const top = box.top + (node.clientTop ?? 0) * scaleY;
-		return {
-			left,
-			top,
-			right: node.clientWidth === undefined ? box.right : left + node.clientWidth * scaleX,
-			bottom: node.clientHeight === undefined ? box.bottom : top + node.clientHeight * scaleY,
-		};
-	};
+	const page = globalThis as unknown as PageGlobals & { scrollX: number; scrollY: number };
 	const rect = element.getBoundingClientRect();
-	const view = { left: 0, top: 0, right: page.innerWidth, bottom: page.innerHeight };
-	// An overflow box clips only descendants whose containing block lies inside it: an absolute
-	// box escapes static ancestors, a fixed one every ancestor up to one that contains fixed boxes.
-	let position = page.getComputedStyle(element).position;
-	for (let node = inTopLayer(element) ? null : flatParent(element); node; node = flatParent(node)) {
-		// <html> and <body> overflow normally applies to the viewport, which is already the starting clip.
-		if (node.tagName === "BODY" || node.tagName === "HTML") break;
-		const style = page.getComputedStyle(node);
-		// Nothing above a top-layer box clips it, whichever box contains the match.
-		const topLayer = inTopLayer(node);
-		// A display:contents node (e.g. a default <slot>) has no box to clip or contain anything.
-		const skip =
-			style.display === "contents" ||
-			(position === "fixed" && !containsFixed(style)) ||
-			(position === "absolute" && style.position === "static" && !containsFixed(style));
-		if (skip) {
-			if (topLayer) break;
-			continue;
+	const inViewport = (r: PageRect) => ({
+		left: Math.max(0, r.left),
+		top: Math.max(0, r.top),
+		right: Math.min(page.innerWidth, r.right),
+		bottom: Math.min(page.innerHeight, r.bottom),
+	});
+	const shown = Array.from(element.getClientRects())
+		.map(inViewport)
+		.filter(r => r.right - r.left >= 1 && r.bottom - r.top >= 1);
+	const style = page.getComputedStyle(element);
+	const hitTestable =
+		style.pointerEvents !== "none" && style.visibility !== "hidden" && style.visibility !== "collapse";
+	const hitsElement = (x: number, y: number): boolean => {
+		let hit = page.document.elementFromPoint(x, y);
+		for (let depth = 0; hit?.shadowRoot && depth < 16; depth++) {
+			const nested = hit.shadowRoot.elementFromPoint(x, y);
+			if (!nested || nested === hit) break;
+			hit = nested;
 		}
-		position = style.position;
-		// `content-visibility: hidden` paints none of its content, wherever it lies.
-		if (style.contentVisibility === "hidden") {
-			view.right = view.left;
-			break;
+		for (let node = hit; node; node = node.parentElement ?? node.getRootNode().host ?? null) {
+			if (node === element) return true;
 		}
-		// Overflow does not apply to a non-replaced inline box; paint containment (explicit, or implied by
-		// `content-visibility`) clips like overflow.
-		const paintClip =
-			/paint|strict|content/.test(style.contain) || (style.contentVisibility ?? "visible") !== "visible";
-		// An inline `<svg>` still clips at its viewport, unlike a non-replaced inline box.
-		const overflowApplies = style.display !== "inline" || node.localName === "svg";
-		const clipX = paintClip || (style.overflowX !== "visible" && overflowApplies);
-		const clipY = paintClip || (style.overflowY !== "visible" && overflowApplies);
-		if (clipX || clipY) {
-			const clip = paddingBox(node);
-			if (clipX) {
-				view.left = Math.max(view.left, clip.left);
-				view.right = Math.min(view.right, clip.right);
-			}
-			if (clipY) {
-				view.top = Math.max(view.top, clip.top);
-				view.bottom = Math.min(view.bottom, clip.bottom);
-			}
-		}
-		if (topLayer) break;
-	}
+		return false;
+	};
+	const onScreen = shown.some(r => {
+		if (!hitTestable) return true;
+		const xs = [0.5, 0.15, 0.85].map(f => r.left + (r.right - r.left) * f);
+		const ys = [0.5, 0.15, 0.85].map(f => r.top + (r.bottom - r.top) * f);
+		return xs.some(x => ys.some(y => hitsElement(x, y)));
+	});
 	return {
 		x: rect.left + page.scrollX,
 		y: rect.top + page.scrollY,
 		sized: rect.width >= 1 && rect.height >= 1,
-		onScreen:
-			view.right > view.left &&
-			view.bottom > view.top &&
-			rect.right > view.left &&
-			rect.bottom > view.top &&
-			rect.left < view.right &&
-			rect.top < view.bottom,
+		onScreen,
 	};
 }
 
 /**
  * Lift a text match to its clickable ancestor and measure it, or return null for a match with no box.
- * Geometry comes from `getBoundingClientRect`, clipped by the viewport and by the `overflow` boxes an
- * `IntersectionObserver` would clip it with: the flat-tree ancestors (through slots and shadow hosts)
- * that hold its containing block. `isIntersectingViewport` waits on an observer callback that
- * background tabs never deliver.
+ * `isIntersectingViewport` waits on an `IntersectionObserver` callback that background tabs never
+ * deliver, so visibility comes from {@link measureBoxInPage}'s synchronous hit test instead.
  */
 async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal): Promise<QueryCandidate | null> {
 	let candidate = handle;
@@ -624,10 +546,14 @@ async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal
 }
 
 /**
- * Scroll an off-screen match into view and report whether a click could reach it (or names what covers it).
- * Hit-testing alone accepts a clipping ancestor, so the match must also show once scrolled to.
+ * Scroll an off-screen match into view: `shown` when the browser's hit test finds it there, `reachable`
+ * when the actionability check would let a click go at it (it also accepts a hit on an ancestor, which is
+ * what a clipped or inert match yields) or names what covers it.
  */
-async function scrollToClickable(handle: ElementHandle, signal?: AbortSignal): Promise<boolean> {
+async function probeOffScreen(
+	handle: ElementHandle,
+	signal?: AbortSignal,
+): Promise<{ shown: boolean; reachable: boolean }> {
 	try {
 		await untilAborted(signal, () =>
 			handle.evaluate(el => {
@@ -635,20 +561,21 @@ async function scrollToClickable(handle: ElementHandle, signal?: AbortSignal): P
 				element.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
 			}),
 		);
-		const box = await untilAborted(signal, () => handle.evaluate(measureBoxInPage));
-		if (!box.onScreen) return false;
 		const actionable = await isClickActionable(handle, signal);
-		return actionable.ok || actionable.coveredBy !== undefined;
+		const reachable = actionable.ok || actionable.coveredBy !== undefined;
+		if (!actionable.ok) return { shown: false, reachable };
+		const box = await untilAborted(signal, () => handle.evaluate(measureBoxInPage));
+		return { shown: box.onScreen, reachable };
 	} catch (error) {
 		if (signal?.aborted) throw error;
-		return false;
+		return { shown: false, reachable: false };
 	}
 }
 
 /**
- * Resolve text-query matches to the first on-screen candidate in document order. When no match is on
- * screen, off-screen matches are scrolled into view in document order and the first one a click can
- * reach wins.
+ * Resolve text-query matches to the first match the browser shows on screen, in document order. When none
+ * is on screen, off-screen matches are scrolled into view in document order and the first one shown wins;
+ * failing that, the first one a click could be aimed at, so the click itself reports what stops it.
  */
 export async function resolveActionableQueryHandlerClickTarget(
 	handles: ElementHandle[],
@@ -664,12 +591,16 @@ export async function resolveActionableQueryHandlerClickTarget(
 		candidates.sort((a, b) => a.y - b.y || a.x - b.x);
 		winner = candidates.find(candidate => candidate.onScreen);
 		if (!winner) {
+			let reachable: QueryCandidate | undefined;
 			for (const candidate of candidates) {
-				if (await scrollToClickable(candidate.handle, signal)) {
+				const probe = await probeOffScreen(candidate.handle, signal);
+				if (probe.shown) {
 					winner = candidate;
 					break;
 				}
+				if (probe.reachable) reachable ??= candidate;
 			}
+			winner ??= reachable;
 		}
 	} catch (error) {
 		await disposeOwned(candidates);

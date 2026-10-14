@@ -7,8 +7,8 @@ import { disposeAllVmContexts } from "@oh-my-pi/pi-coding-agent/eval/js/context-
 import { createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
 import { CmuxTab } from "@oh-my-pi/pi-coding-agent/tools/browser/cmux/cmux-tab";
 import {
+	clickElement,
 	clickQueryHandlerText,
-	isClickActionable,
 	resolveActionableQueryHandlerClickTarget,
 } from "@oh-my-pi/pi-coding-agent/tools/browser/interactions";
 import { acquireBrowser, releaseBrowser } from "@oh-my-pi/pi-coding-agent/tools/browser/registry";
@@ -131,9 +131,9 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser click timeouts", () => {
 			// Text queries keep the first on-screen match even when it is refused, and report why.
 			expect(await attempt(`tab.click("text/Faded")`)).toContain("last check: opacity:0");
 			expect(await attempt(`tab.click("text/Twin")`)).toContain("last check: pointer-events:none");
-			// The browser drops these clicks, so they are refused rather than reported as done.
-			expect(await attempt(`tab.click("#off")`)).toContain("last check: disabled");
-			expect(await attempt(`tab.click("text/Asleep")`)).toContain("last check: inert");
+			// The browser drops these clicks, so they fail rather than report success.
+			expect(await attempt(`tab.click("#off")`)).toContain("did not deliver the click");
+			expect(await attempt(`tab.click("text/Asleep")`)).toContain("did not deliver the click");
 			// The count tells the caller the first of several matches is the hidden one.
 			const multi = await attempt(`tab.dblclick(".multi")`);
 			expect(multi).toContain("last check: display:none");
@@ -875,71 +875,75 @@ return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.e
 		}
 	}, 30_000);
 
-	test("clicks a modal dialog's button though the dialog sits in an inert shell", async () => {
+	test("fails a click the browser does not deliver and completes the rest", async () => {
 		const browserHandle = await acquireBrowser({ kind: "headless", headless: true }, { cwd: process.cwd() });
 		if (!("browser" in browserHandle)) throw new Error("Expected a Puppeteer browser");
 		const page = await browserHandle.browser.newPage();
-		try {
-			await page.setContent(`<div inert><button id="shell">Shell</button><dialog id="dlg"><button id="ok">OK</button></dialog></div>
-<script>document.getElementById("dlg").showModal();</script>`);
-			const reasons = [];
-			for (const selector of ["#ok", "#shell"]) {
-				const handle = await page.$(selector);
-				if (!handle) throw new Error(`Expected ${selector}`);
-				const result = await isClickActionable(handle);
-				reasons.push(result.ok ? "ok" : result.reason);
+		const outcomes = async (ids: string[]): Promise<Record<string, string>> => {
+			const result: Record<string, string> = {};
+			for (const id of ids) {
+				const handle = await page.$(`#${id}`);
+				if (!handle) throw new Error(`Expected #${id}`);
+				result[id] = await clickElement(handle, `click #${id}`).then(
+					() => "clicked",
+					error =>
+						String(error).includes("did not deliver the click")
+							? "refused"
+							: String(error).includes("covered by")
+								? "covered"
+								: String(error),
+				);
 				await handle.dispose();
 			}
-			expect(reasons).toEqual(["ok", "inert"]);
+			return result;
+		};
+		try {
+			// Shadow roots hold a disabled button around the host's content, or around an alternate slot only.
+			await page.setContent(`<button id="enabled">Enabled</button>
+<button id="disabled" disabled>Disabled</button>
+<div inert><button id="inert">Inert</button></div>
+<div style="interactivity: inert"><button id="styled-inert">Styled inert</button></div>
+<span id="shadowed">Shadowed</span>
+<span id="actions">Go<span slot="alt" hidden>Alt</span></span>
+<script>
+document.getElementById("shadowed").attachShadow({ mode: "open" }).innerHTML = "<button disabled><slot></slot></button>";
+document.getElementById("actions").attachShadow({ mode: "open" }).innerHTML =
+	'<button disabled><slot name="alt"></slot></button><button><slot></slot></button>';
+</script>`);
+			expect(await outcomes(["enabled", "disabled", "inert", "styled-inert", "shadowed", "actions"])).toEqual({
+				enabled: "clicked",
+				disabled: "refused",
+				inert: "refused",
+				"styled-inert": "refused",
+				shadowed: "refused",
+				actions: "clicked",
+			});
+			// A modal dialog escapes the inert shell it sits in; the shell lies under its backdrop.
+			await page.setContent(`<div inert><button id="shell">Shell</button><dialog id="dlg"><button id="ok">OK</button></dialog></div>
+<script>document.getElementById("dlg").showModal();</script>`);
+			expect(await outcomes(["ok", "shell"])).toEqual({ ok: "clicked", shell: "covered" });
 		} finally {
 			await page.close().catch(() => undefined);
 			if (browserHandle.browser.connected) await releaseBrowser(browserHandle, { kill: true });
 		}
 	}, 30_000);
 
-	test("skips off-screen text matches that are disabled, inert, disabled inside their shadow root or stay clipped once scrolled to", async () => {
+	test("skips an off-screen text match that stays clipped once scrolled to", async () => {
 		const browserHandle = await acquireBrowser({ kind: "headless", headless: true }, { cwd: process.cwd() });
 		if (!("browser" in browserHandle)) throw new Error("Expected a Puppeteer browser");
 		const page = await browserHandle.browser.newPage();
 		try {
-			await page.setContent(`<div style="height: 3000px"></div><button id="disabled" disabled>Far</button>
-<div style="height: 3000px"></div><div style="overflow: hidden; height: 0"><button id="clipped">Far</button></div>
-<div style="height: 3000px"></div><div inert><button id="inert">Far</button></div>
-<div style="height: 3000px"></div><x-button id="shadowed">Far</x-button>
-<div style="height: 3000px"></div><button id="enabled">Far</button>
-<x-actions id="actions">Go</x-actions>
-<script>
-customElements.define("x-button", class extends HTMLElement {
-	constructor() {
-		super();
-		this.attachShadow({ mode: "open" }).innerHTML = "<button disabled><slot></slot></button>";
-	}
-});
-// A disabled alternate action whose slot holds nothing does not stand for the host's content.
-customElements.define("x-actions", class extends HTMLElement {
-	constructor() {
-		super();
-		this.attachShadow({ mode: "open" }).innerHTML = '<button disabled><slot name="alt"></slot></button><button><slot></slot></button>';
-	}
-});
-</script>`);
-			const winnerId = async (selector: string): Promise<string | undefined> => {
-				const handles = await page.$$(selector);
-				const winner = await resolveActionableQueryHandlerClickTarget(handles);
-				const id = await winner?.evaluate(el => {
-					// Puppeteer's page callback type cannot name DOM globals in this test environment.
-					const element = el as unknown as { id: string };
-					return element.id;
-				});
-				await Promise.all([winner, ...handles].map(handle => handle?.dispose()));
-				return id;
-			};
-			expect(await winnerId("text/Far")).toBe("enabled");
-			// A host whose shadow root renders a disabled button takes no click either.
-			await page.evaluate("scrollTo(0, 0)");
-			expect(await winnerId("#shadowed, #enabled")).toBe("enabled");
-			await page.evaluate("scrollTo(0, 0)");
-			expect(await winnerId("#actions")).toBe("actions");
+			await page.setContent(`<div style="height: 3000px"></div><div style="overflow: hidden; height: 0"><button id="clipped">Far</button></div>
+<div style="height: 3000px"></div><button id="enabled">Far</button>`);
+			const handles = await page.$$("text/Far");
+			const winner = await resolveActionableQueryHandlerClickTarget(handles);
+			const winnerId = await winner?.evaluate(el => {
+				// Puppeteer's page callback type cannot name DOM globals in this test environment.
+				const element = el as unknown as { id: string };
+				return element.id;
+			});
+			expect(winnerId).toBe("enabled");
+			await Promise.all([winner, ...handles].map(handle => handle?.dispose()));
 		} finally {
 			await page.close().catch(() => undefined);
 			if (browserHandle.browser.connected) await releaseBrowser(browserHandle, { kill: true });
