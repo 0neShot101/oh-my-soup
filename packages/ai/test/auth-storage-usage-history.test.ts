@@ -230,7 +230,7 @@ describe("OpenCode Go usage via the upstream endpoint", () => {
 		const reports = await storage.usage.reports();
 
 		expect(fetchCalls).toHaveLength(1);
-		expect(fetchCalls[0]?.url).toBe("https://opencode.ai/zen/go/v1/usage");
+		expect(fetchCalls[0]?.url).toBe("https://opencode.ai/inference/go/v1/usage");
 		expect(fetchCalls[0]?.headers.authorization).toBe("Bearer opencode-go-key");
 
 		const report = reports?.find(candidate => candidate.provider === "opencode-go");

@@ -3,9 +3,9 @@ import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import { USER_AGENT } from "@oh-my-pi/pi-utils";
 import { opencodeGoRankingStrategy, opencodeGoUsageProvider } from "../src/usage/opencode-go";
 
-const DEFAULT_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
+const DEFAULT_USAGE_URL = "https://opencode.ai/inference/go/v1/usage";
 
-/** Live capture from `GET /zen/go/v1/usage`, 2026-08-12. */
+/** Live capture from Go's `GET /v1/usage`, 2026-08-12. */
 function usagePayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 	return {
 		usage: {
@@ -99,8 +99,8 @@ describe("opencode-go usage provider", () => {
 		expect(calls[0]?.headers["x-opencode-session"]?.length).toBeGreaterThan(0);
 	});
 
-	it("normalizes both catalog baseUrl forms onto the usage route", async () => {
-		for (const baseUrl of ["https://opencode.ai/zen/go", "https://opencode.ai/zen/go/v1"]) {
+	it("normalizes configured Go base URLs onto their usage route", async () => {
+		for (const baseUrl of ["https://opencode.ai/inference/go", "https://opencode.ai/inference/go/v1"]) {
 			const calls: Array<{ url: string; headers: Record<string, string> }> = [];
 			await opencodeGoUsageProvider.fetchUsage(
 				{ provider: "opencode-go", credential: { type: "api_key", apiKey: "sk-test" }, baseUrl },

@@ -9,6 +9,10 @@
 ### Fixed
 
 - Fixed OpenCode Go's `deepseek-flash` alias showing $0, unknown limits, and no reasoning instead of the V4.1 Flash rate card and capabilities ([#15357](https://github.com/can1357/oh-my-pi/issues/15357))
+### Fixed
+
+- Fixed OpenCode Go Gemini 4 Argon Contributor using an unsupported protocol and thinking level; requests now use the native Gemini endpoint ([#15722](https://github.com/can1357/oh-my-pi/issues/15722)).
+- Fixed OpenCode Go model requests targeting the legacy endpoint instead of `/inference/go/v1` ([#15722](https://github.com/can1357/oh-my-pi/issues/15722)).
 
 ## [18.10.4] - 2026-10-13
 
