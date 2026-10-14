@@ -1,10 +1,10 @@
 /**
- * The native project walk-up must never treat `~/.omp` as a project config dir.
+ * The native project walk-up must never treat home or temporary roots as project config dirs.
  * A cwd under home with no closer repo root (Windows temp dirs, scratch folders)
  * otherwise loads the user's ~/.omp/SYSTEM.md, RULES.md and AGENTS.md as project
  * config, even when the agent dir points elsewhere (profiles, isolated runs).
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -55,12 +55,78 @@ beforeEach(() => {
 
 afterEach(() => {
 	clearCache();
+	vi.restoreAllMocks();
 	for (const key of ENV_KEYS) {
 		if (savedEnv[key] === undefined) delete process.env[key];
 		else process.env[key] = savedEnv[key];
 	}
 	__resetDirsFromEnvForTests();
 	removeSyncWithRetries(tempDir);
+});
+
+test("a cwd outside home does not load native project config at or above the temporary root", async () => {
+	const tempRoot = path.join(tempDir, "tmp");
+	const cwd = path.join(tempRoot, "scratch", "work");
+	fs.mkdirSync(cwd, { recursive: true });
+	vi.spyOn(os, "tmpdir").mockReturnValue(tempRoot);
+	vi.spyOn(os, "homedir").mockReturnValue(home);
+	for (const root of [tempRoot, tempDir]) {
+		writeFile(path.join(root, ".omp", "SYSTEM.md"), "temporary system prompt\n");
+		writeFile(path.join(root, ".omp", "RULES.md"), "temporary rule\n");
+		writeFile(path.join(root, ".omp", "AGENTS.md"), "temporary agents\n");
+		writeFile(
+			path.join(root, ".omp", "skills", "temporary", "SKILL.md"),
+			"---\nname: temporary\ndescription: temporary skill\n---\nbody\n",
+		);
+	}
+	const ctx: LoadContext = { cwd, home, repoRoot: null };
+
+	const prompts = await loadNative<SystemPrompt>(systemPromptCapability.id, ctx);
+	const rules = await loadNative<Rule>(ruleCapability.id, ctx);
+	const contexts = await loadNative<ContextFile>(contextFileCapability.id, ctx);
+	const skills = await loadNative<Skill>(skillCapability.id, ctx);
+
+	expect({
+		prompts: prompts.map(prompt => prompt.path),
+		rules: rules.map(rule => rule.path),
+		contexts: contexts.map(context => context.path),
+		skills: skills.map(skill => skill.path),
+	}).toEqual({ prompts: [], rules: [], contexts: [], skills: [] });
+});
+
+test("native project config below the temporary root is still found", async () => {
+	const tempRoot = path.join(tempDir, "tmp");
+	const project = path.join(tempRoot, "project");
+	const cwd = path.join(project, "nested");
+	fs.mkdirSync(cwd, { recursive: true });
+	vi.spyOn(os, "tmpdir").mockReturnValue(tempRoot);
+	vi.spyOn(os, "homedir").mockReturnValue(home);
+	writeFile(path.join(project, ".omp", "SYSTEM.md"), "project system prompt\n");
+
+	const prompts = await loadNative<SystemPrompt>(systemPromptCapability.id, { cwd, home, repoRoot: null });
+
+	expect(prompts.map(prompt => [prompt.path, prompt.level])).toEqual([
+		[path.join(project, ".omp", "SYSTEM.md"), "project"],
+	]);
+});
+
+test("an overridden discovery home does not make the process home a native project config root", async () => {
+	const cwd = path.join(home, "scratch", "work");
+	fs.mkdirSync(cwd, { recursive: true });
+	vi.spyOn(os, "homedir").mockReturnValue(home);
+	const ctx: LoadContext = { cwd, home: path.join(tempDir, "other-home"), repoRoot: null };
+
+	const prompts = await loadNative<SystemPrompt>(systemPromptCapability.id, ctx);
+	const rules = await loadNative<Rule>(ruleCapability.id, ctx);
+	const contexts = await loadNative<ContextFile>(contextFileCapability.id, ctx);
+	const skills = await loadNative<Skill>(skillCapability.id, ctx);
+
+	expect({
+		prompts: prompts.map(prompt => prompt.path),
+		rules: rules.map(rule => rule.path),
+		contexts: contexts.map(context => context.path),
+		skills: skills.map(skill => skill.path),
+	}).toEqual({ prompts: [], rules: [], contexts: [], skills: [] });
 });
 
 test("a cwd under home without a repo does not load ~/.omp files as project config", async () => {

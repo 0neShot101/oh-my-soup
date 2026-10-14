@@ -30,6 +30,7 @@ import {
 	discoverExtensionModulePaths,
 	expandEnvVarsDeep,
 	getExtensionNameFromPath,
+	getProjectDiscoveryCeilings,
 	loadFilesFromDir,
 	parseRequestIdFormat,
 	SOURCE_PATHS,
@@ -74,15 +75,18 @@ async function getConfigDirs(ctx: LoadContext): Promise<Array<{ dir: string; lev
 	return result;
 }
 
-/** Ancestor directories (cwd spelling) through the optional inclusive stop directory, compared canonically. */
+/** Project ancestors through an inclusive stop directory, but never home or temporary-root ceilings. */
 export function getAncestorDirs(cwd: string, stopAt?: string | null): Array<{ dir: string; depth: number }> {
 	const ancestors: Array<{ dir: string; depth: number }> = [];
+	const ceilings = getProjectDiscoveryCeilings();
 	let current = path.resolve(cwd);
 	const stop = stopAt ? normalizePathForComparison(stopAt) : null;
 	let depth = 0;
 	while (true) {
+		const normalized = normalizePathForComparison(current);
+		if (ceilings.has(normalized)) break;
 		ancestors.push({ dir: current, depth });
-		if (stop && normalizePathForComparison(current) === stop) break;
+		if (stop && normalized === stop) break;
 		const parent = path.dirname(current);
 		if (parent === current) break;
 		current = parent;

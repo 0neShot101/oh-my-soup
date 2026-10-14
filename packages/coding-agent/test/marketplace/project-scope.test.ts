@@ -92,6 +92,89 @@ describe("resolveActiveProjectRegistryPath", () => {
 		expect(result).toBe(path.join(tmpDir, ".omp", "plugins", "installed_plugins.json"));
 	});
 
+	it("does not load a temporary root's .omp/plugins from an unanchored scratch directory", async () => {
+		const tempRoot = path.join(tmpDir, "tmp");
+		const cwd = path.join(tempRoot, "scratch", "work");
+		fs.mkdirSync(path.join(tempRoot, ".omp", "plugins"), { recursive: true });
+		fs.mkdirSync(cwd, { recursive: true });
+		vi.spyOn(os, "tmpdir").mockReturnValue(tempRoot);
+		vi.spyOn(os, "homedir").mockReturnValue(path.join(tmpDir, "home"));
+
+		expect(await resolveActiveProjectRegistryPath(cwd)).toBeNull();
+	});
+
+	it("does not fall back to a temporary root's .git anchor", async () => {
+		const tempRoot = path.join(tmpDir, "tmp");
+		const cwd = path.join(tempRoot, "scratch", "work");
+		fs.mkdirSync(path.join(tempRoot, ".git"), { recursive: true });
+		fs.mkdirSync(cwd, { recursive: true });
+		vi.spyOn(os, "tmpdir").mockReturnValue(tempRoot);
+		vi.spyOn(os, "homedir").mockReturnValue(path.join(tmpDir, "home"));
+
+		expect(await resolveActiveProjectRegistryPath(cwd)).toBeNull();
+	});
+
+	it("still finds a project's .omp below the temporary root", async () => {
+		const tempRoot = path.join(tmpDir, "tmp");
+		const project = path.join(tempRoot, "project");
+		const cwd = path.join(project, "sub");
+		fs.mkdirSync(path.join(project, ".omp"), { recursive: true });
+		fs.mkdirSync(cwd, { recursive: true });
+		vi.spyOn(os, "tmpdir").mockReturnValue(tempRoot);
+		vi.spyOn(os, "homedir").mockReturnValue(path.join(tmpDir, "home"));
+
+		expect(await resolveActiveProjectRegistryPath(cwd)).toBe(
+			path.join(project, ".omp", "plugins", "installed_plugins.json"),
+		);
+	});
+
+	it("does not create a default project registry at an aliased temporary root", async () => {
+		const tempRoot = path.join(tmpDir, "tmp");
+		const alias = path.join(tmpDir, "tmp-link");
+		fs.mkdirSync(path.join(tempRoot, ".omp"), { recursive: true });
+		fs.symlinkSync(tempRoot, alias, "dir");
+		vi.spyOn(os, "tmpdir").mockReturnValue(`${alias}${path.sep}`);
+		vi.spyOn(os, "homedir").mockReturnValue(path.join(tmpDir, "home"));
+
+		expect(await resolveActiveProjectRegistryPath(path.join(tempRoot, "scratch"))).toBeNull();
+		expect(await resolveOrDefaultProjectRegistryPath(tempRoot)).toBeUndefined();
+	});
+
+	it.skipIf(process.platform === "win32").each(["/tmp", "/var/tmp"])(
+		"does not create a project registry at the shared %s root even with another tmpdir",
+		async root => {
+			vi.spyOn(os, "tmpdir").mockReturnValue(tmpDir);
+			vi.spyOn(os, "homedir").mockReturnValue(path.join(tmpDir, "home"));
+
+			expect(await resolveOrDefaultProjectRegistryPath(root)).toBeUndefined();
+		},
+	);
+
+	it("skips another account's .omp/agent root and falls back to the cwd's git anchor", async () => {
+		const foreignHome = path.join(tmpDir, "other-user");
+		const cwd = path.join(foreignHome, "Development", "project");
+		fs.mkdirSync(path.join(foreignHome, ".omp", "agent"), { recursive: true });
+		fs.mkdirSync(path.join(foreignHome, ".omp", "plugins"), { recursive: true });
+		fs.mkdirSync(path.join(cwd, ".git"), { recursive: true });
+		vi.spyOn(os, "homedir").mockReturnValue(path.join(tmpDir, "isolated-home"));
+
+		expect(await resolveActiveProjectRegistryPath(cwd)).toBe(
+			path.join(cwd, ".omp", "plugins", "installed_plugins.json"),
+		);
+		expect(await resolveOrDefaultProjectRegistryPath(foreignHome)).toBeUndefined();
+	});
+
+	it("still prefers a plain ancestor .omp above the git root", async () => {
+		const cwd = path.join(tmpDir, "project");
+		fs.mkdirSync(path.join(tmpDir, ".omp"), { recursive: true });
+		fs.mkdirSync(path.join(cwd, ".git"), { recursive: true });
+		vi.spyOn(os, "homedir").mockReturnValue(path.join(tmpDir, "isolated-home"));
+
+		expect(await resolveActiveProjectRegistryPath(cwd)).toBe(
+			path.join(tmpDir, ".omp", "plugins", "installed_plugins.json"),
+		);
+	});
+
 	it("returns null when neither .omp/ nor .git/ found anywhere in the tree", async () => {
 		// Start at the filesystem root — guaranteed to have no .omp/ or .git/ ancestors.
 		const result = await resolveActiveProjectRegistryPath(path.sep);

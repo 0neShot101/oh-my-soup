@@ -1021,12 +1021,31 @@ export function parseClaudePluginsRegistry(content: string): ClaudePluginsRegist
 	return data;
 }
 
+/** Project discovery never examines home or shared temporary roots, or their ancestors. */
+export function getProjectDiscoveryCeilings(): ReadonlySet<string> {
+	const ceilings = new Set<string>();
+	ceilings.add(normalizePathForComparison(os.homedir()));
+	ceilings.add(normalizePathForComparison(os.tmpdir()));
+	if (process.platform !== "win32") {
+		ceilings.add(normalizePathForComparison("/tmp"));
+		ceilings.add(normalizePathForComparison("/var/tmp"));
+	}
+	return ceilings;
+}
+
 function isUserConfigRoot(root: string): boolean {
 	const configDir = normalizePathForComparison(path.join(root, getConfigDirName()));
-	return (
+	if (
 		configDir === normalizePathForComparison(path.join(os.homedir(), getConfigDirName())) ||
 		configDir === normalizePathForComparison(path.dirname(getPluginsDir()))
-	);
+	)
+		return true;
+	// Another account's default user config is still user scope when HOME is overridden.
+	try {
+		return fs.statSync(path.join(root, SOURCE_PATHS.native.userAgent)).isDirectory();
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -1037,17 +1056,20 @@ function isUserConfigRoot(root: string): boolean {
  *    The first match returns `<dir>/.omp/plugins/installed_plugins.json`.
  * 2. If no `.omp/` is found, rescan from `cwd` upward looking for `.git`.
  *    The git root is used as an anchor: `<gitRoot>/.omp/plugins/installed_plugins.json`.
- * 3. If neither is found, return `null` — no project context is active.
+ * 3. Stop before home or a temporary root in either pass. If neither anchor is
+ *    found below that ceiling, return `null` — no project context is active.
  *
  * This is the single source of truth for "active project root" used by install,
  * uninstall, list, upgrade, discovery, and doctor. Deterministic for a given `cwd`.
  */
 export async function resolveActiveProjectRegistryPath(cwd: string): Promise<string | null> {
+	return resolveProjectRegistryPath(cwd, getProjectDiscoveryCeilings());
+}
+
+async function resolveProjectRegistryPath(cwd: string, ceilings: ReadonlySet<string>): Promise<string | null> {
 	// Pass 1: walk up looking for an existing .omp/ directory (nearest wins).
-	// Stop before os.homedir() — ~/.omp/ is the user-level config dir, not a project root.
-	const homeDir = normalizePathForComparison(os.homedir());
 	let dir = path.resolve(cwd);
-	while (normalizePathForComparison(dir) !== homeDir) {
+	while (!ceilings.has(normalizePathForComparison(dir))) {
 		try {
 			const stat = await fs.promises.stat(path.join(dir, getConfigDirName()));
 			if (stat.isDirectory() && !isUserConfigRoot(dir)) {
@@ -1063,7 +1085,7 @@ export async function resolveActiveProjectRegistryPath(cwd: string): Promise<str
 
 	// Pass 2: walk up looking for .git as a fallback anchor.
 	dir = path.resolve(cwd);
-	while (normalizePathForComparison(dir) !== homeDir) {
+	while (!ceilings.has(normalizePathForComparison(dir))) {
 		try {
 			await fs.promises.stat(path.join(dir, ".git"));
 			if (!isUserConfigRoot(dir)) return path.join(dir, getConfigDirName(), "plugins", "installed_plugins.json");
@@ -1086,17 +1108,14 @@ export async function resolveActiveProjectRegistryPath(cwd: string): Promise<str
  * bootstrapped directory (no .omp/ or .git/ yet) works: writeInstalledPluginsRegistry auto-creates
  * the directory tree on first write.
  *
- * Returns undefined when cwd is os.homedir() — that path is already the user registry and must
- * never alias as the project registry.
+ * Returns undefined when cwd is a discovery ceiling or user config root, so the
+ * fallback never creates a shared temporary registry or aliases the user registry.
  */
 export async function resolveOrDefaultProjectRegistryPath(cwd: string): Promise<string | undefined> {
-	const resolved = await resolveActiveProjectRegistryPath(cwd);
+	const ceilings = getProjectDiscoveryCeilings();
+	const resolved = await resolveProjectRegistryPath(cwd, ceilings);
 	if (resolved) return resolved;
-	// Home directory must not be treated as a project root: the fallback path would alias
-	// getInstalledPluginsRegistryPath(), causing MarketplaceManager to load the same file
-	// as both user and project registry and producing duplicates / disambiguation errors.
-	if (normalizePathForComparison(cwd) === normalizePathForComparison(os.homedir()) || isUserConfigRoot(cwd))
-		return undefined;
+	if (ceilings.has(normalizePathForComparison(cwd)) || isUserConfigRoot(cwd)) return undefined;
 	return path.join(cwd, getConfigDirName(), "plugins", "installed_plugins.json");
 }
 
