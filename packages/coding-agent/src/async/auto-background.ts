@@ -24,50 +24,44 @@ export function resolveAutoBackgroundWaitMs(thresholdMs: number, timeoutMs: numb
 export type JobWaitInterrupt = { kind: "running" } | { kind: "steer" } | { kind: "aborted" };
 
 /**
- * Race a pending settlement (a managed job's completion, a service start)
- * against an optional auto-background threshold, the caller's abort signal,
- * and the turn's steering signal. Returns the settlement's own value when it
- * settles first — including one that already settled before the call, which
- * wins over already-raised signals; otherwise reports why the wait ended:
+ * Race a managed job's settlement against the auto-background threshold, the
+ * caller's abort signal, and the turn's steering signal. Returns the job's own
+ * completion when it settles first; otherwise reports why the wait ended:
  * "running" = threshold elapsed (background it), "steer" = a queued message
- * arrived mid-wait, "aborted" = the caller cancelled. An `undefined` threshold
- * never elapses.
+ * arrived mid-wait, "aborted" = the caller cancelled.
  */
 export async function raceJobSettlement<C>(
 	completion: Promise<C>,
-	thresholdMs: number | undefined,
+	thresholdMs: number,
 	signal?: AbortSignal,
 	steeringSignal?: AbortSignal,
 ): Promise<C | JobWaitInterrupt> {
-	// `completion` races first so an already-settled value (or rejection) beats
-	// already-raised signals: Promise.race resolves with the first settled
-	// entry in iteration order.
-	const waiters: Array<Promise<C | JobWaitInterrupt>> = [completion];
+	if (signal?.aborted) {
+		return { kind: "aborted" };
+	}
+	if (steeringSignal?.aborted) {
+		return { kind: "steer" };
+	}
 
 	// Cancellable threshold: a bare Bun.sleep(thresholdMs) leaves a live, ref'd
 	// timer for the full threshold after the job finishes (or abort/steer) wins
 	// the race first — delaying SDK/headless shutdown and accumulating timers
 	// under fast completion rates. Settle a withResolvers promise from
 	// setTimeout so the finally can clear it regardless of which waiter wins.
-	let thresholdTimer: NodeJS.Timeout | undefined;
-	if (thresholdMs !== undefined) {
-		const { promise: thresholdPromise, resolve: resolveThreshold } = Promise.withResolvers<{ kind: "running" }>();
-		thresholdTimer = setTimeout(() => resolveThreshold({ kind: "running" }), thresholdMs);
-		waiters.push(thresholdPromise);
-	}
+	const { promise: thresholdPromise, resolve: resolveThreshold } = Promise.withResolvers<{ kind: "running" }>();
+	const thresholdTimer = setTimeout(() => resolveThreshold({ kind: "running" }), thresholdMs);
+	const waiters: Array<Promise<C | JobWaitInterrupt>> = [completion, thresholdPromise];
 
 	const { promise: abortedPromise, resolve: resolveAborted } = Promise.withResolvers<{ kind: "aborted" }>();
 	const onAbort = () => resolveAborted({ kind: "aborted" });
 	const { promise: steerPromise, resolve: resolveSteer } = Promise.withResolvers<{ kind: "steer" }>();
 	const onSteer = () => resolveSteer({ kind: "steer" });
 	if (signal) {
-		if (signal.aborted) onAbort();
-		else signal.addEventListener("abort", onAbort, { once: true });
+		signal.addEventListener("abort", onAbort, { once: true });
 		waiters.push(abortedPromise);
 	}
 	if (steeringSignal) {
-		if (steeringSignal.aborted) onSteer();
-		else steeringSignal.addEventListener("abort", onSteer, { once: true });
+		steeringSignal.addEventListener("abort", onSteer, { once: true });
 		waiters.push(steerPromise);
 	}
 	try {

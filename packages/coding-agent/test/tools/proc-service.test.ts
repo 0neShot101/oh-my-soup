@@ -536,19 +536,60 @@ describe("bash services via proc://", () => {
 		}
 	}, 25_000);
 
-	it("ends the readiness wait on a queued steer and leaves the service starting", async () => {
+	it("ends the readiness wait on a queued steer only after the broker launched the service", async () => {
+		using temp = TempDir.createSync("@omp-proc-service-steer-");
+		const cwd = path.join(temp.path(), "project");
+		const runtimeDir = path.join(temp.path(), "runtime");
+		await fs.mkdir(cwd);
+		const client = await createDaemonBrokerClient(cwd, { runtimeDir, idleGraceMs: 5_000 });
+		const spy = vi.spyOn(daemonClient, "daemonClientForProject").mockResolvedValue(client);
+		const oldTitle = process.title;
+		const broker = startBroker(cwd, runtimeDir);
+		// Already queued when the call starts, i.e. before the broker connection.
 		const steering = new AbortController();
-		// The broker answers `start` only once readiness resolves or times out.
-		const readiness = Promise.withResolvers<DaemonRpcResult>();
+		steering.abort();
+		try {
+			// Readiness would wait 300s, past the test timeout; only the steer ends the call early.
+			const result = await new BashTool(toolSession(cwd)).execute(
+				"service",
+				{
+					command: "sleep 30",
+					name: "slow-service",
+					ready: { log: "never-printed", timeout: 300 },
+					pty: false,
+				},
+				undefined,
+				undefined,
+				steeringContext(steering.signal),
+			);
+			expect(result.details?.service).toMatchObject({ name: "slow-service", state: "starting", ready: false });
+			expect(result.details?.service?.pid).toBeNumber();
+			expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("proc://slow-service");
+			const read = await new ProcProtocolHandler().resolve(parseInternalUrl("proc://slow-service"), {
+				session: toolSession(cwd),
+			});
+			expect(read.details?.proc).toMatchObject({ daemon: { name: "slow-service", state: "starting" } });
+		} finally {
+			await client.request({ op: "stop", name: "slow-service", timeoutMs: 1_000 }).catch(() => undefined);
+			await client.request({ op: "shutdown" }).catch(() => undefined);
+			client.close();
+			await broker;
+			setProcessName(oldTitle);
+			spy.mockRestore();
+		}
+	}, 20_000);
+
+	it("still rejects validation and launch failures when a steer is queued", async () => {
+		const steering = new AbortController();
 		const client = {
 			projectDir: process.cwd(),
 			onCompletion: () => () => {},
 			close() {},
 			async request(operation: DaemonOperation): Promise<DaemonRpcResult> {
 				if (operation.op === "start") {
-					// Steer while the start request is in flight.
+					// The steer lands while the launch request is in flight.
 					steering.abort();
-					return readiness.promise;
+					throw new Error("Daemon cwd is not a directory");
 				}
 				throw new Error(`Unexpected broker op ${operation.op}`);
 			},
@@ -556,19 +597,17 @@ describe("bash services via proc://", () => {
 		const spy = vi.spyOn(daemonClient, "daemonClientForProject").mockResolvedValue(client);
 		const bash = new BashTool(toolSession(process.cwd()));
 		try {
-			const result = await bash.execute(
-				"service",
-				{ command: "sleep 600", name: "slow-service", ready: { log: "never-printed", timeout: 300 } },
-				undefined,
-				undefined,
-				steeringContext(steering.signal),
-			);
-			expect(result.details?.service).toMatchObject({ name: "slow-service", state: "starting", ready: false });
-			expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("proc://slow-service");
-			// The abandoned start settling later is harmless.
-			readiness.reject(new Error("readiness failed after the call returned"));
-
-			// A start that already failed still throws, even when the steer is already raised.
+			expect(
+				await rejectionMessage(
+					bash.execute(
+						"launch-failure",
+						{ command: "sleep 600", name: "launch-failure", ready: { log: "never-printed", timeout: 300 } },
+						undefined,
+						undefined,
+						steeringContext(steering.signal),
+					),
+				),
+			).toContain("Daemon cwd is not a directory");
 			expect(
 				await rejectionMessage(
 					bash.execute(
@@ -590,12 +629,11 @@ describe("bash services via proc://", () => {
 		const daemon: DaemonSnapshot = {
 			name: "ready-service",
 			id: "ready-service-id",
-			state: "ready",
+			state: "starting",
 			pid: 12345,
 			owner: "Main",
 			createdAt: now,
 			startedAt: now,
-			readyAt: now,
 			restartCount: 0,
 			outputBytes: 0,
 			persist: false,
@@ -609,6 +647,8 @@ describe("bash services via proc://", () => {
 			close() {},
 			async request(operation: DaemonOperation): Promise<DaemonRpcResult> {
 				if (operation.op === "start") return { op: "start", daemon, readyTimedOut: false };
+				if (operation.op === "wait")
+					return { op: "wait", daemon: { ...daemon, state: "ready", readyAt: now }, timedOut: false };
 				if (operation.op === "logs") {
 					logsRequested.resolve();
 					return logs.promise;

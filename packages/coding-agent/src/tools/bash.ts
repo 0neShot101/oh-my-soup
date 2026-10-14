@@ -1064,7 +1064,9 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		}
 
 		if (name !== undefined) {
-			const start = startService(
+			// Only a readiness wait can outlast a steer; without `ready` the start
+			// returns once the process spawns.
+			const service = await startService(
 				this.session,
 				{
 					name,
@@ -1074,28 +1076,22 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					ready,
 				},
 				signal,
+				ready === undefined ? undefined : ctx?.toolCall?.steeringSignal,
 			);
-			// Only a readiness wait can outlast a steer; without `ready` the start
-			// returns once the process spawns.
-			const steeringSignal = ready === undefined ? undefined : ctx?.toolCall?.steeringSignal;
-			const settled = steeringSignal
-				? await raceJobSettlement(start, undefined, undefined, steeringSignal)
-				: await start;
-			if ("kind" in settled) {
+			const daemon = service.daemon;
+			if (service.readyInterrupted) {
 				// A queued message arrived mid-wait: return so it injects promptly.
 				// The broker keeps starting the service, inspectable via proc://.
 				return {
 					content: [
 						{
 							type: "text",
-							text: `${name}: starting\nReadiness wait interrupted early to handle an incoming message; the service is still starting and keeps running. Read proc://${name} for status.`,
+							text: `${name}: starting${daemon.pid === undefined ? "" : ` pid=${daemon.pid}`}\nReadiness wait interrupted early to handle an incoming message; the service is still starting and keeps running. Read proc://${name} for status.`,
 						},
 					],
-					details: { service: { name, state: "starting", ready: false, timedOut: false } },
+					details: { service: { name, state: daemon.state, ready: false, timedOut: false, pid: daemon.pid } },
 				};
 			}
-			const service = settled;
-			const daemon = service.daemon;
 			const lines = [
 				`${daemon.name}: ${daemon.state}${daemon.pid === undefined ? "" : ` pid=${daemon.pid}`}${daemon.readyAt === undefined ? "" : " ready"}`,
 			];
