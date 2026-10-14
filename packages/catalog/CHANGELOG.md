@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `local/nemotron-streaming-en-0.6b` for local streaming English dictation.
+
 ## [18.10.4] - 2026-10-13
 
 ### Added

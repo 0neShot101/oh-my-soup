@@ -22,6 +22,8 @@ export interface SttCallbacks {
 	showWarning(msg: string): void;
 	showStatus(msg: string): void;
 	onStateChange(state: SttState): void;
+	/** Keep this capture as a draft, without interpreting submit commands. */
+	manualSubmit?: boolean;
 }
 
 /** The slice of a text input the controller dictates into. */
@@ -111,7 +113,7 @@ export class STTController {
 	 *  capture is starting, recording, or transcribing. */
 	async start(editor: SttTarget, options: SttCallbacks): Promise<void> {
 		if (this.#state === "transcribing") options.showStatus("Transcription in progress...");
-		if (this.#toggling || this.#state !== "idle") return;
+		if (this.#disposed || this.#toggling || this.#state !== "idle") return;
 		await this.#transition(options, () => this.#start(editor, options));
 	}
 
@@ -163,14 +165,12 @@ export class STTController {
 		// modelRoles.dictation mid-session re-runs preflight for the new model.
 		if (this.#resolvedModelKey === modelKey) return modelKey;
 		try {
-			// Loading the multi-hundred-MB speech model into the worker is what made
-			// the old "Checking STT dependencies…" step slow. Don't pay it before
-			// recording: when the weights are already cached, start now and warm the
-			// model in the background — the stream/transcribe paths load it on demand
-			// (memoized in the worker) and it is hot by the time recording stops.
-			// Only a genuine first-use download blocks (its progress shows in the
-			// download HUD), so we never record silently against missing weights.
-			if (await isSttModelCached(modelKey)) {
+			// Native streaming needs a ready recognizer before the microphone opens;
+			// otherwise the first words queue behind a cold model load. Buffered
+			// models can still warm in the background while recording.
+			const spec = resolveSttModelSpec(modelKey);
+			const online = spec.engine === "sherpa" && spec.mode === "online";
+			if (!online && (await isSttModelCached(modelKey))) {
 				this.#warmModel(modelKey);
 			} else {
 				await downloadSttModel(modelKey);
@@ -213,7 +213,7 @@ export class STTController {
 		}
 
 		let modelKey = await this.#ensureDeps(options, this.#resolveModelKey(model));
-		if (!modelKey) return;
+		if (!modelKey || this.#disposed) return;
 		model = this.#resolveModel();
 		if (model?.api === "openai-transcriptions") {
 			this.#startBuffered(editor, options, model);
@@ -226,7 +226,7 @@ export class STTController {
 		const startModelKey = this.#resolveModelKey(model);
 		if (startModelKey !== modelKey) {
 			modelKey = await this.#ensureDeps(options, startModelKey);
-			if (!modelKey) return;
+			if (!modelKey || this.#disposed) return;
 		}
 		await this.#startStreaming(editor, options, modelKey);
 	}
@@ -487,7 +487,7 @@ export class STTController {
 		}
 		if (!failed) options.showStatus(this.#streamCommitted ? "" : "No speech detected.");
 
-		if (this.#streamCommitted && !failed && this.#streamEditor) {
+		if (!options.manualSubmit && this.#streamCommitted && !failed && this.#streamEditor) {
 			const trigger = cfgSttSubmitTrigger.get(this.#settings);
 			const { submit, trimTrailing } = evaluateSubmitTrigger(this.#streamUtterance, trigger);
 			if (trimTrailing > 0) {

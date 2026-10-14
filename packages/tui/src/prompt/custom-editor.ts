@@ -64,6 +64,8 @@ export interface ComposerNativeState {
 	readonly rate?: number;
 	/** A turn is running: the send keycap becomes a Stop button. */
 	readonly running: boolean;
+	/** Native dictation control; undefined hides it for hosts without speech-to-text. */
+	readonly dictation?: "idle" | "starting" | "recording" | "transcribing";
 	/** The viewed subagent's lineage, outermost first and the viewed agent last; undefined on the main session. */
 	readonly viewing?: readonly string[];
 	/** The session's title, quoted in italics as the TSP placeholder; undefined until it has one. */
@@ -81,6 +83,7 @@ interface ComposerControls {
 	readonly mode: NativeNode | undefined;
 	readonly model: NativeNode | undefined;
 	readonly effort: NativeNode | undefined;
+	readonly dictation: NativeNode | undefined;
 	readonly submit: NativeNode;
 }
 
@@ -1036,7 +1039,8 @@ export class CustomEditor extends Editor {
 	}
 	/** Editing is available during bootstrap; atomic sends wait until submission is wired and enabled. */
 	protected override get nativeSendable(): boolean {
-		return this.onSubmit !== undefined && !this.disableSubmit;
+		const { dictation } = this.composerState();
+		return this.onSubmit !== undefined && !this.disableSubmit && (dictation === undefined || dictation === "idle");
 	}
 	/** The quoted-title placeholder, kept while the title stands so the editor node stays reused. */
 	#titlePlaceholder: { title: string; text: TspText } | undefined;
@@ -1078,9 +1082,9 @@ export class CustomEditor extends Editor {
 	 * subagent is focused, the attachment chips, a `line` row of the
 	 * shell-mode chip and the input, and the `bar`: model chip, effort chip
 	 * (or the effort glyph as the model chip's icon), the generation rate,
-	 * the other status facts, usage, then send (Stop while a turn runs).
-	 * Clicks come back as `status.model`, `thinking.cycle`, `submit`,
-	 * `interrupt` and `focus:<id>` actions.
+	 * the other status facts, usage, dictation, then send (Stop while a turn runs).
+	 * Clicks come back as `status.model`, `thinking.cycle`, `dictation.toggle`,
+	 * `submit`, `interrupt` and `focus:<id>` actions.
 	 */
 	override describeLayout = (input: NativeNode, cx: DescribeContext): NativeEditorLayout => {
 		const effortGlyph = cx.supports("effort");
@@ -1095,6 +1099,7 @@ export class CustomEditor extends Editor {
 			shell?.excluded,
 			state.thinking,
 			state.running,
+			state.dictation,
 			thinkingKey,
 			modelKey,
 			interruptKey,
@@ -1138,6 +1143,7 @@ export class CustomEditor extends Editor {
 								// The status facts are the bar's flexible space; without them a spacer keeps send at the end.
 								facts?.extras ?? node("row", { grow: 1 }, [], "gap"),
 								facts?.usage,
+								controls.dictation,
 								controls.submit,
 							]),
 							{ role: "omp.composer.bar", gap: "sm", align: "center" },
@@ -1289,6 +1295,41 @@ export class CustomEditor extends Editor {
 						"effort",
 					)
 				: undefined;
+		const recording = state.dictation === "recording";
+		const pending = state.dictation === "starting" || state.dictation === "transcribing";
+		const dictation =
+			state.dictation === undefined
+				? undefined
+				: node(
+						"row",
+						{
+							role: "omp.composer.dictation",
+							gap: "xs",
+							align: "center",
+							tone: recording ? "error" : pending ? "pending" : undefined,
+							title: recording
+								? "Stop recording and transcribe"
+								: pending
+									? "Dictation in progress"
+									: "Start dictation",
+							actions: pending ? undefined : { click: "dictation.toggle" },
+						},
+						pending
+							? [
+									node(
+										"spinner",
+										{ label: state.dictation === "starting" ? "Starting…" : "Transcribing…" },
+										undefined,
+										"pending",
+									),
+								]
+							: compact([
+									node("icon", { name: recording ? "stop" : "mic" }, undefined, "icon"),
+									recording && node("text", { text: "Recording · Stop", wrap: "none" }, undefined, "label"),
+								]),
+						"dictation",
+					);
+		const dictating = recording || pending;
 		const submit = state.running
 			? node(
 					"text",
@@ -1307,13 +1348,14 @@ export class CustomEditor extends Editor {
 					{
 						role: "omp.composer.send",
 						keys: ["enter"],
-						title: `Send  ${formatTooltipKey("enter")}`,
-						actions: { click: "submit" },
+						title: dictating ? "Finish dictation before sending" : `Send  ${formatTooltipKey("enter")}`,
+						tone: dictating ? "muted" : undefined,
+						actions: dictating ? undefined : { click: "submit" },
 					},
 					undefined,
 					"send",
 				);
-		if (!shell) return { focus, mode: undefined, model, effort, submit };
+		if (!shell) return { focus, mode: undefined, model, effort, dictation, submit };
 		const runs = shell.kind === "bash" ? "Runs in your shell" : "Runs in Python";
 		const mode = keyed(
 			row(
@@ -1336,15 +1378,15 @@ export class CustomEditor extends Editor {
 			),
 			"mode",
 		);
-		return { focus, mode, model, effort, submit };
+		return { focus, mode, model, effort, dictation, submit };
 	}
 
 	/**
-	 * Clicks on the composer's controls take the same paths as their keys: ⇧⇥,
-	 * ⏎ and Esc; the viewing header's links (`focus:<id>`) go to the host,
-	 * the status facts' clicks (`status.*`) to their source. Selection edits
-	 * go to the buffer; `send` submits its own prompt after saving the old draft
-	 * for recall and waiting for in-flight clipboard work.
+	 * Dictation clicks go directly to the host, independent of keybindings.
+	 * Other controls take the same paths as their keys; the viewing header's
+	 * links (`focus:<id>`) go to the host, the status facts' clicks to their source.
+	 * Selection edits go to the buffer; `send` submits its own prompt after
+	 * saving the old draft for recall and waiting for in-flight clipboard work.
 	 */
 	override handleNativeEvent(event: NativeUiEvent): void {
 		if (event.type === "send") {
@@ -1368,8 +1410,13 @@ export class CustomEditor extends Editor {
 			case "thinking.cycle":
 				this.onCycleThinkingLevel?.();
 				return;
+			case "dictation.toggle": {
+				const { dictation } = this.composerState();
+				if (dictation === "idle" || dictation === "recording") this.onToggleDictation?.();
+				return;
+			}
 			case "submit":
-				this.submit();
+				if (this.nativeSendable) this.submit();
 				return;
 			case "interrupt":
 				this.onEscape?.();
@@ -1404,6 +1451,8 @@ export class CustomEditor extends Editor {
 	onRetry?: () => void;
 	/** Called when Caps Lock is pressed. */
 	onCapsLock?: () => void;
+	/** Called directly by the native microphone/stop control, without synthesizing a keypress. */
+	onToggleDictation?: () => void;
 	/** Called when left-arrow is pressed while the editor is empty (cursor necessarily at start). */
 	onLeftAtStart?: () => void;
 	/** Called when the viewing header asks to view agent `id` ({@link MAIN_AGENT_ID}: the main session). */
