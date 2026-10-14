@@ -77,6 +77,7 @@ interface PageShadowRoot {
 
 interface PageElement {
 	readonly tagName: string;
+	readonly localName: string;
 	id: string;
 	readonly isConnected: boolean;
 	type: string;
@@ -493,12 +494,12 @@ function measureBoxInPage(el: unknown): MeasuredBox {
 		(style.backdropFilter ?? "none") !== "none" ||
 		/paint|layout|strict|content/.test(style.contain) ||
 		/size/.test(style.containerType ?? "") ||
-		style.contentVisibility === "auto" ||
+		(style.contentVisibility ?? "visible") !== "visible" ||
 		/transform|perspective|filter|translate|rotate|scale/.test(style.willChange);
-	// A top-layer box (modal dialog, open popover) renders outside every ancestor's clip.
+	// A top-layer box (modal dialog, open popover, fullscreen element) renders outside every ancestor's clip.
 	const inTopLayer = (node: PageElement): boolean => {
 		try {
-			return node.matches(":modal, :popover-open");
+			return node.matches(":modal, :popover-open, :fullscreen");
 		} catch {
 			return false;
 		}
@@ -542,8 +543,10 @@ function measureBoxInPage(el: unknown): MeasuredBox {
 		// `content-visibility`) clips like overflow.
 		const paintClip =
 			/paint|strict|content/.test(style.contain) || (style.contentVisibility ?? "visible") !== "visible";
-		const clipX = paintClip || (style.overflowX !== "visible" && style.display !== "inline");
-		const clipY = paintClip || (style.overflowY !== "visible" && style.display !== "inline");
+		// An inline `<svg>` still clips at its viewport, unlike a non-replaced inline box.
+		const overflowApplies = style.display !== "inline" || node.localName === "svg";
+		const clipX = paintClip || (style.overflowX !== "visible" && overflowApplies);
+		const clipY = paintClip || (style.overflowY !== "visible" && overflowApplies);
 		if (clipX || clipY) {
 			const clip = paddingBox(node);
 			if (clipX) {

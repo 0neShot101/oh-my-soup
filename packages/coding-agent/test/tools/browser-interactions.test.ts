@@ -988,6 +988,10 @@ customElements.define("x-actions", class extends HTMLElement {
 				html: `<div style="content-visibility: auto; height: 0"><button id="clipped">Pick</button></div>${later}`,
 				winner: "later",
 			},
+			"clipped by an inline svg viewport": {
+				html: `<svg width="50" height="50"><text id="clipped" x="10" y="190">Pick</text></svg>${later}`,
+				winner: "later",
+			},
 			"modal dialog escaping a transformed clip": {
 				html: `<div style="transform: translateZ(0); overflow: hidden; height: 0"><dialog id="dlg" style="margin: 0"><button id="modal">Pick</button></dialog></div>${later}<script>document.getElementById("dlg").showModal();</script>`,
 				winner: "modal",
