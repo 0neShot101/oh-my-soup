@@ -903,6 +903,7 @@ export async function discoverOpenAIModelsList(
 						max_model_len?: unknown;
 						context_length?: unknown;
 						limits?: unknown;
+						top_provider?: unknown;
 						input?: unknown;
 						input_modalities?: unknown;
 						output?: unknown;
@@ -953,8 +954,16 @@ export async function discoverOpenAIModelsList(
 			Number.isSafeInteger(maxInputTokens + maxOutputTokens)
 				? maxInputTokens + maxOutputTokens
 				: undefined;
+		// OpenRouter-shaped catalogs (OpenRouter, ModelRelay, ...) carry the
+		// output limit as `top_provider.max_completion_tokens` instead.
+		const topProvider = isRecord(item.top_provider) ? item.top_provider : undefined;
+		const topProviderMaxTokens = toPositiveNumberOrUndefined(topProvider?.max_completion_tokens);
 		const reportedMaxTokens =
-			maxOutputTokens !== undefined && Number.isSafeInteger(maxOutputTokens) ? maxOutputTokens : undefined;
+			maxOutputTokens !== undefined && Number.isSafeInteger(maxOutputTokens)
+				? maxOutputTokens
+				: topProviderMaxTokens !== undefined && Number.isSafeInteger(topProviderMaxTokens)
+					? topProviderMaxTokens
+					: undefined;
 		const reportedContextWindow =
 			toPositiveNumberOrUndefined(item.max_model_len) ??
 			toPositiveNumberOrUndefined(item.context_length) ??
