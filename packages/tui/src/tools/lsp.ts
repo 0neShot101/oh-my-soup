@@ -265,12 +265,11 @@ export function renderResult(
 		const header = `${icon} LSP ${actionLabel}`;
 
 		const rail = ` ${theme.fg("mdCodeBlockBorder", theme.boxRound.vertical)} `;
-		const contentLines =
-			codeBlockMatch && expanded
-				? bodyLines.flatMap(line =>
-						line.startsWith(rail) ? wrapPrefixedLine(rail, rail, line.slice(rail.length), contentWidth) : [line],
-					)
-				: bodyLines;
+		const contentLines = codeBlockMatch
+			? bodyLines.flatMap(line =>
+					line.startsWith(rail) ? wrapPrefixedLine(rail, rail, line.slice(rail.length), contentWidth) : [line],
+				)
+			: bodyLines;
 		return {
 			header,
 			phase: isPartial ? "partial" : state,

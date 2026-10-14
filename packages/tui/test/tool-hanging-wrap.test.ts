@@ -116,6 +116,32 @@ describe("prefixed tool rows", () => {
 		expect(rows[branch + 1]).toContain("remaining details");
 	});
 
+	it("keeps long Ask answers beneath their markers after submission, including grouped questions", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const chosen = "Choose the longer alternative because it contains information important at the end of its label";
+		const other = "Leave the other longer alternative visible so its ending still distinguishes the choices";
+		const answers = { question: "Pick?", options: [chosen, other], selectedOptions: [chosen] };
+		const cards = [
+			askToolRenderer.renderResult({ content: [], details: answers }, { expanded: false, isPartial: false }, theme),
+			askToolRenderer.renderResult(
+				{ content: [], details: { results: [{ id: "choice", multi: false, ...answers }] } },
+				{ expanded: false, isPartial: false },
+				theme,
+			),
+		];
+		for (const card of cards) {
+			const rows = plain(card.render(width));
+			const chosenRow = rows.findIndex(row => row.includes("◉ Choose"));
+			const otherRow = rows.findIndex(row => row.includes("○ Leave"));
+			expect(chosenRow).toBeGreaterThan(0);
+			expect(rows[chosenRow + 1]).toStartWith("│    ");
+			expect(rows[chosenRow + 1]).toContain("information important");
+			expect(otherRow).toBeGreaterThan(0);
+			expect(rows[otherRow + 1]).toStartWith("│    ");
+			expect(rows[otherRow + 1]).toContain("ending still");
+		}
+	});
+
 	it("hangs Ask option descriptions and LSP hover code beneath their prefix", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const ask = plain(
@@ -141,15 +167,18 @@ describe("prefixed tool rows", () => {
 		expect(ask[description + 1]).toStartWith("│     ");
 		expect(ask[description + 1]).toContain("card.");
 
-		const hover = plain(
-			renderLspResult(
-				{ content: [{ type: "text", text: `\`\`\`ts\nconst note = "${"long text ".repeat(12)}";\n\`\`\`` }] },
-				{ expanded: true, isPartial: false },
-				theme,
-			).render(width),
-		);
-		const codeRow = hover.findIndex(row => row.startsWith("│  │ "));
-		expect(codeRow).toBeGreaterThan(0);
-		expect(hover[codeRow + 1]).toStartWith("│  │ ");
+		for (const expanded of [true, false]) {
+			const hover = plain(
+				renderLspResult(
+					{ content: [{ type: "text", text: `\`\`\`ts\nconst note = "${"long text ".repeat(12)}";\n\`\`\`` }] },
+					{ expanded, isPartial: false },
+					theme,
+				).render(width),
+			);
+			const codeRow = hover.findIndex(row => row.startsWith("│  │ "));
+			expect(codeRow).toBeGreaterThan(0);
+			expect(hover[codeRow + 1]).toStartWith("│  │ ");
+			expect(hover[codeRow + 1]).toContain("long text");
+		}
 	});
 });
