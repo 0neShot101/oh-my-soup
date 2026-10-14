@@ -1,15 +1,14 @@
+mod enablement;
 pub(crate) mod menus;
 mod popup;
 
 use std::{
-	collections::{HashSet, VecDeque},
+	collections::VecDeque,
 	ffi::c_void,
 	mem,
 	ops::Range,
 	ptr::{self, NonNull},
-	sync::{LazyLock, Mutex},
-	thread,
-	time::Duration,
+	sync::LazyLock,
 };
 
 use objc2_application_services::{
@@ -218,10 +217,6 @@ static GET_WINDOW_ID: LazyLock<Option<GetWindowIdFn>> = LazyLock::new(|| {
 	}
 });
 
-/// Processes already asked to expose their renderer accessibility tree.
-static MANUAL_ACCESSIBILITY: LazyLock<Mutex<HashSet<libc::pid_t>>> =
-	LazyLock::new(|| Mutex::new(HashSet::new()));
-
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
 	fn AXUIElementCreateApplication(pid: libc::pid_t) -> *mut AXUIElement;
@@ -242,8 +237,18 @@ impl MacAx {
 	}
 
 	pub(super) fn raise(&mut self, window: &DesktopWindow) -> CoreResult<()> {
-		let root = self.window_root(window)?;
+		let root = Self::window_element(window)?;
 		self.perform(&root, "AXRaise")
+	}
+
+	/// `window`'s element for an operation on the window itself, such as
+	/// raising it or reading its menus: unlike
+	/// [`AxBackend::window_root`], it never waits for web content, so the
+	/// session's first read of the app still does.
+	pub(super) fn window_element(window: &DesktopWindow) -> CoreResult<AxHandle> {
+		let (_, _, element) = window_parts(window)?;
+		set_timeout(&element)?;
+		Ok(AxHandle::Mac(element))
 	}
 }
 
@@ -291,7 +296,9 @@ pub(super) fn key_window_id(pid: libc::pid_t) -> Option<u32> {
 pub(super) fn window_records(pid: libc::pid_t) -> Option<Vec<AxWindowRecord>> {
 	(*GET_WINDOW_ID)?;
 	let app = probe_application(pid)?;
-	enable_web_accessibility(pid, &app);
+	// As on every window lookup, the role query switches on Chromium's web
+	// accessibility; only the first content read waits for it.
+	enablement::activate(&app);
 	let windows = copy_elements_optional(&app, "AXWindows")?;
 	// An unmappable sibling is still a possible keyboard destination. Dropping
 	// it would turn an incomplete AX tree into false proof of exclusivity.
@@ -430,6 +437,60 @@ enum AttachedSearch {
 	},
 }
 
+/// The accessibility window of `app` that represents `win`: matched by native
+/// window id, among `AXWindows` and then its sheets, popovers and open menus,
+/// or, without the window-id SPI, by a unique title and frame.
+fn find_window(app: &AXUIElement, win: &DesktopWindow) -> CoreResult<CFRetained<AXUIElement>> {
+	let windows = copy_elements(app, "AXWindows")?;
+	let expected_id = win.id.parse::<u32>().ok();
+	if let (Some(get_id), Some(expected_id)) = (*GET_WINDOW_ID, expected_id) {
+		for element in windows {
+			let mut actual_id = 0u32;
+			// SAFETY: `actual_id` is writable and this retained AX element
+			// remains alive for the call.
+			if unsafe { get_id(&element, &mut actual_id) } == AXError::Success
+				&& actual_id == expected_id
+			{
+				return Ok(element);
+			}
+		}
+		// Sheets, popovers, and open menus are separate native windows that
+		// `AXWindows` omits.
+		let truncated = match attached_window(app, expected_id, win)? {
+			AttachedSearch::Found(element) => return Ok(element),
+			AttachedSearch::Missing { truncated } => truncated,
+		};
+		let scope = if truncated {
+			format!(
+				"; the search stopped at its limit of {MAX_ATTACHED_SEARCH_NODES} nodes or depth \
+				 {MAX_ATTACHED_SEARCH_DEPTH}, so the window may be nested deeper"
+			)
+		} else {
+			String::new()
+		};
+		return Err(DesktopError::ax_failed(format!(
+			"native window {expected_id} was not found in the application's accessibility windows, \
+			 sheets, popovers, or open menus{scope}"
+		)));
+	}
+	// Without the native id SPI, require a unique title AND frame match.
+	// A same-title replacement window must never inherit a stale target.
+	let mut matches = windows.into_iter().filter(|element| {
+		copy_string(element, "AXTitle").as_deref() == Some(win.title.as_str())
+			&& bounds(element).is_some_and(|bounds| bounds_matches_window(bounds, win))
+	});
+	let element = matches.next().ok_or_else(|| {
+		DesktopError::ax_failed(format!(
+			"accessibility window for native window {} ('{}') was not found",
+			win.id, win.title,
+		))
+	})?;
+	if matches.next().is_some() {
+		return Err(DesktopError::ax_failed("accessibility window title/frame match is ambiguous"));
+	}
+	Ok(element)
+}
+
 /// Finds the sheet, popover, or open menu of `app` that represents `win`,
 /// by a bounded breadth-first walk of the application's accessibility tree.
 /// `AppKit` gives each its own `WindowServer` window but lists only standard
@@ -494,71 +555,32 @@ fn attached_window(
 	})
 }
 
+/// `win`'s owning process, its application element (role queried, which
+/// switches on Chromium's web accessibility) and its window element.
+fn window_parts(
+	win: &DesktopWindow,
+) -> CoreResult<(libc::pid_t, CFRetained<AXUIElement>, CFRetained<AXUIElement>)> {
+	ensure_trusted()?;
+	let pid = win.pid.ok_or_else(|| {
+		DesktopError::ax_failed(format!("window {} has no owning process id", win.id))
+	})?;
+	let pid = i32::try_from(pid).map_err(|_| {
+		DesktopError::ax_failed(format!("window {} has an invalid process id", win.id))
+	})?;
+	let app = create_application(pid)?;
+	set_timeout(&app)?;
+	enablement::activate(&app);
+	let element = find_window(&app, win)?;
+	Ok((pid, app, element))
+}
+
 impl AxBackend for MacAx {
+	/// For a read of the window's content: the session's first read of a
+	/// Chromium-family app waits for its web content ([`enablement`]).
 	fn window_root(&mut self, win: &DesktopWindow) -> CoreResult<AxHandle> {
-		ensure_trusted()?;
-		let pid = win.pid.ok_or_else(|| {
-			DesktopError::ax_failed(format!("window {} has no owning process id", win.id))
-		})?;
-		let pid = i32::try_from(pid).map_err(|_| {
-			DesktopError::ax_failed(format!("window {} has an invalid process id", win.id))
-		})?;
-		let app = create_application(pid)?;
-		set_timeout(&app)?;
-		enable_web_accessibility(pid, &app);
-		let windows = copy_elements(&app, "AXWindows")?;
-		let expected_id = win.id.parse::<u32>().ok();
-		if let (Some(get_id), Some(expected_id)) = (*GET_WINDOW_ID, expected_id) {
-			for element in &windows {
-				let mut actual_id = 0u32;
-				// SAFETY: `actual_id` is writable and this retained AX element
-				// remains alive for the call.
-				if unsafe { get_id(element, &mut actual_id) } == AXError::Success
-					&& actual_id == expected_id
-				{
-					set_timeout(element)?;
-					return Ok(AxHandle::Mac(element.clone()));
-				}
-			}
-			// Sheets, popovers, and open menus are separate native windows that
-			// `AXWindows` omits.
-			let truncated = match attached_window(&app, expected_id, win)? {
-				AttachedSearch::Found(element) => {
-					set_timeout(&element)?;
-					return Ok(AxHandle::Mac(element));
-				},
-				AttachedSearch::Missing { truncated } => truncated,
-			};
-			let scope = if truncated {
-				format!(
-					"; the search stopped at its limit of {MAX_ATTACHED_SEARCH_NODES} nodes or depth \
-					 {MAX_ATTACHED_SEARCH_DEPTH}, so the window may be nested deeper"
-				)
-			} else {
-				String::new()
-			};
-			return Err(DesktopError::ax_failed(format!(
-				"native window {expected_id} was not found in the application's accessibility \
-				 windows, sheets, popovers, or open menus{scope}"
-			)));
-		}
-		// Without the native id SPI, require a unique title AND frame match.
-		// A same-title replacement window must never inherit a stale target.
-		let mut matches = windows.into_iter().filter(|element| {
-			copy_string(element, "AXTitle").as_deref() == Some(win.title.as_str())
-				&& bounds(element).is_some_and(|bounds| bounds_matches_window(bounds, win))
-		});
-		let element = matches.next().ok_or_else(|| {
-			DesktopError::ax_failed(format!(
-				"accessibility window for native window {} ('{}') was not found",
-				win.id, win.title,
-			))
-		})?;
-		if matches.next().is_some() {
-			return Err(DesktopError::ax_failed(
-				"accessibility window title/frame match is ambiguous",
-			));
-		}
+		let (pid, app, element) = window_parts(win)?;
+		enablement::before_first_read(pid, &app, &element)?;
+		// The wait gives the window's requests shorter timeouts.
 		set_timeout(&element)?;
 		Ok(AxHandle::Mac(element))
 	}
@@ -1289,36 +1311,6 @@ fn create_application(pid: libc::pid_t) -> CoreResult<CFRetained<AXUIElement>> {
 	// SAFETY: Create-rule ownership transfers the +1 AXUIElement reference into
 	// CFRetained.
 	Ok(unsafe { CFRetained::from_raw(pointer) })
-}
-
-/// Chromium-family apps build their renderer accessibility tree lazily. Reading
-/// the application role activates modern Chrome's native AX mode, while older
-/// Chromium/Electron builds also honor `AXManualAccessibility`. A process that
-/// rejects the manual setter incurs no readiness delay.
-fn enable_web_accessibility(pid: libc::pid_t, app: &AXUIElement) {
-	// Modern Chromium treats an assistive client's role query as the activation
-	// signal. Older Chromium/Electron builds use the manual setter below.
-	let _ = copy_string(app, "AXRole");
-	{
-		let mut enabled = MANUAL_ACCESSIBILITY
-			.lock()
-			.unwrap_or_else(|error| error.into_inner());
-		if !enabled.insert(pid) {
-			return;
-		}
-		let attribute = CFString::from_str("AXManualAccessibility");
-		// SAFETY: The retained element, attribute, and singleton CFBoolean remain
-		// valid for the synchronous setter call.
-		let error = unsafe { app.set_attribute_value(&attribute, CFBoolean::new(true)) };
-		if error != AXError::Success {
-			// Manual activation is unsupported; leave no stale pid marker.
-			enabled.remove(&pid);
-			return;
-		}
-	}
-	// The renderers publish their trees over IPC after the switch flips, so the
-	// first snapshot would otherwise race a still-empty web area.
-	thread::sleep(Duration::from_millis(500));
 }
 
 fn create_system_wide() -> CFRetained<AXUIElement> {
