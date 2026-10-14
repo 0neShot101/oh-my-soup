@@ -14,7 +14,7 @@
 
 ### Fixed
 
-- Fixed a task agent's `autoload-skills` silently dropping a skill added after the parent session started: agents are rediscovered on every spawn but the skill list was fixed at startup, so the spawn now rediscovers skills once when a named skill is missing
+- Fixed a task agent's `autoload-skills` silently dropping a skill added after the parent session started: agents are rediscovered on every spawn but the skill list was fixed at startup, so the spawn now rediscovers skills once when a named skill is missing ([#15723](https://github.com/can1357/oh-my-pi/pull/15723) by [@shyamsivakumar](https://github.com/shyamsivakumar))
 - `tab.ariaSnapshot()` no longer prints the value of a password field; it shows one bullet per character, as `tab.observe()` and the screen do, so a typed or browser-autofilled password stays out of the model's context ([#15502](https://github.com/can1357/oh-my-pi/pull/15502) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed browser `tab.text()` and `tab.html()` (and the same calls on a frame) throwing when called without a selector; they now read the page body on Chrome, Tern and cmux ([#15599](https://github.com/can1357/oh-my-pi/pull/15599) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed the macOS `computer` tool keeping the display awake for the rest of the session after a native call hung; the call's timeout or closing the session now lets it sleep ([#15414](https://github.com/can1357/oh-my-pi/pull/15414) by [@will-bogusz](https://github.com/will-bogusz))
