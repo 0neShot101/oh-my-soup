@@ -130,6 +130,39 @@ describe("TUI overlay focus", () => {
 		}
 	});
 
+	it("follows the live editor-slot owner while a paint-only overlay holds focus", () => {
+		const terminal = new MinimalTerminal();
+		const tui = new TUI(terminal);
+		const editor = new FocusRecorder("editor");
+		const editorSlot = new Container();
+		const approvalPrompt = new FocusRecorder("approval");
+		const sidebar: Component = { render: () => ["sidebar"] };
+
+		editorSlot.addChild(editor);
+		tui.addChild(editorSlot);
+		tui.setFocus(editor);
+
+		try {
+			tui.start();
+			const handle = tui.showOverlay(sidebar);
+			editorSlot.clear();
+			editorSlot.addChild(approvalPrompt);
+			tui.setFocus(approvalPrompt);
+			terminal.sendInput("x");
+
+			expect(tui.getFocused()).toBe(sidebar);
+			expect(approvalPrompt.inputs).toEqual(["x"]);
+			expect(editor.inputs).toEqual([]);
+
+			handle.hide();
+			terminal.sendInput("y");
+			expect(tui.getFocused()).toBe(approvalPrompt);
+			expect(approvalPrompt.inputs).toEqual(["x", "y"]);
+		} finally {
+			tui.stop();
+		}
+	});
+
 	it("lets the displaced editor reserve captured keys before input listeners", () => {
 		const terminal = new MinimalTerminal();
 		const tui = new TUI(terminal);

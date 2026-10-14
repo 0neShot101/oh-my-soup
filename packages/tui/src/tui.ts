@@ -1093,6 +1093,7 @@ export class TUI extends Container {
 	overlayStack: {
 		component: Component;
 		options?: OverlayOptions;
+		/** Focus restored after closing; tracks live focus changes beneath an input-less key holder. */
 		preFocus: Component | null;
 		hidden: boolean;
 		/**
@@ -1222,6 +1223,9 @@ export class TUI extends Container {
 	setFocus(component: Component | null): void {
 		const holder = this.#getKeyHolderOverlay();
 		if (holder && !isOverlayFocusTarget(holder.component, component)) {
+			if (!holder.component.handleInput && this.#focusedComponent === holder.component) {
+				holder.preFocus = component;
+			}
 			const currentFocus = this.#focusedComponent;
 			component = isOverlayFocusTarget(holder.component, currentFocus) ? currentFocus : holder.component;
 		}
