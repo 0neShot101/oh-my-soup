@@ -190,10 +190,10 @@ fn budget(element: &AXUIElement, deadline: Instant) -> CoreResult<bool> {
 mod tests {
 	use std::cell::Cell;
 
-	use super::{Family, Process, await_web_content};
+	use super::{Family, Process, READY_POLL, await_web_content};
 	use crate::desktop::{
 		control::{self, CancellationSource},
-		error::{CoreResult, DesktopError, ErrorCode},
+		error::{CoreResult, ErrorCode},
 	};
 
 	/// Runs [`await_web_content`] on a window whose content appears on the
@@ -241,12 +241,20 @@ mod tests {
 
 	#[test]
 	fn a_wait_cancelled_before_the_content_appeared_writes_nothing() {
+		// The cancel lands between polls, where the wait sleeps on the token.
+		let source = CancellationSource::default();
 		let writes = Cell::new(0);
-		let result = await_web_content(
-			Family::Electron,
-			|| -> CoreResult<bool> { Err(DesktopError::cancelled("cancelled")) },
-			|| writes.set(writes.get() + 1),
-		);
+		let result = control::with_token_for_test(&source.token(), || {
+			await_web_content(
+				Family::Electron,
+				|| {
+					source.cancel();
+					control::wait(READY_POLL)?;
+					Ok(false)
+				},
+				|| writes.set(writes.get() + 1),
+			)
+		});
 		assert_eq!(result.map_err(|error| error.code), Err(ErrorCode::Cancelled));
 		assert_eq!(writes.get(), 0);
 	}
