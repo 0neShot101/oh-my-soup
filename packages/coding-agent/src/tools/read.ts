@@ -36,7 +36,7 @@ import {
 	isIdaDatabasePath,
 } from "../ida";
 import { normalizeToLF } from "../edit/normalize";
-import { getEditStore } from "../edit/store";
+import { getEditStore, recordFullySeenRows } from "../edit/store";
 import {
 	extractUriScheme,
 	type InternalResource,
@@ -1544,6 +1544,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const displayLineByNumber = new Map<number, string>();
 		const fullLines = rawSelector ? undefined : buffered?.addressableLines;
 		let columnCut: ColumnCut | undefined;
+		let cutLines: Set<number> | undefined;
 		let displayContent: { text: string; startLine: number; lineNumbers?: Array<number | null> } | undefined;
 
 		for (const range of ranges) {
@@ -1589,6 +1590,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						if (!cloned) cloned = collectedLines.slice();
 						cloned[i] = text;
 						columnCut = addColumnCut(columnCut, maxColumns, range.startLine + i);
+						(cutLines ??= new Set()).add(range.startLine + i);
 					}
 				}
 				if (cloned) displayLines = cloned;
@@ -1623,6 +1625,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						const truncated = truncateLine(sourceText, maxColumns);
 						if (truncated.wasTruncated) {
 							columnCut = addColumnCut(columnCut, maxColumns, lineNumber);
+							(cutLines ??= new Set()).add(lineNumber);
 						}
 						return truncated.text;
 					},
@@ -1643,7 +1646,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				? getEditStore(this.session).recordSnapshot(absolutePath, buffered.normalizedText)
 				: getEditStore(this.session).recordSnapshotFile(absolutePath);
 			if (tag) {
-				getEditStore(this.session).recordSeenLinesFromBody(absolutePath, tag, outputText);
+				recordFullySeenRows(getEditStore(this.session), absolutePath, tag, outputText, cutLines);
 				outputText = `${formatReadHashlineHeader(formatPathRelativeToCwd(absolutePath, this.session.cwd), tag)}\n${outputText}`;
 			}
 		} else if (rawSelector && visibleSpans.length > 0) {
@@ -2391,6 +2394,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					// ellipsis-truncated text made every long-line file uneditable on
 					// the next edit attempt.
 					let displayLines: string[] = collectedLines;
+					let cutLines: Set<number> | undefined;
 					if (!rawSelector && maxColumns > 0) {
 						let cloned: string[] | undefined;
 						for (let i = 0; i < collectedLines.length; i++) {
@@ -2399,6 +2403,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 								if (!cloned) cloned = collectedLines.slice();
 								cloned[i] = text;
 								columnCut = addColumnCut(columnCut, maxColumns, startLineDisplay + i);
+								(cutLines ??= new Set()).add(startLineDisplay + i);
 							}
 						}
 						if (cloned) displayLines = cloned;
@@ -2511,6 +2516,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 									const truncated = truncateLine(sourceText, maxColumns);
 									if (truncated.wasTruncated) {
 										columnCut = addColumnCut(columnCut, maxColumns, lineNumber);
+										(cutLines ??= new Set()).add(lineNumber);
 									}
 									return truncated.text;
 								},
@@ -2623,7 +2629,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					if (reachedEof) details.totalLines = totalFileLines;
 
 					if (hashContext?.tag) {
-						getEditStore(this.session).recordSeenLinesFromBody(absolutePath, hashContext.tag, outputText);
+						recordFullySeenRows(getEditStore(this.session), absolutePath, hashContext.tag, outputText, cutLines);
 					}
 					if (rawSelector && !immutable && !firstLineExceedsLimit && collectedLines.length > 0) {
 						// A raw read emits no header, but recording the range it displayed
