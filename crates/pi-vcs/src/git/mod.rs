@@ -4,6 +4,7 @@
 //! reftable repositories, whole-worktree status/untracked walks whose resource
 //! failures must stay outside the driving process, and commit signing, which
 //! must use the user's configured Git signing program.
+//!
 //! Repository discovery is a pure filesystem walk (no subprocess, no gix open):
 //! it mirrors the battle-tested TypeScript walk it replaces — `.git` pointer
 //! files, `commondir` indirection, reftable detection — and is cheap enough for
