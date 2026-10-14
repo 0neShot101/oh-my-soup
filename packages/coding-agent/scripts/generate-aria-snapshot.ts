@@ -64,9 +64,32 @@ function walkElements(fn: (el: Element) => void): void {
 }
 type RefElement = Element & { _ariaRef?: { role: string; name: string; ref: string } };
 
-// Replaces each [text, bullets] pair in every name, prop and text child of the tree.
+// Masks every [text, bullets] pair in every name, prop and text child of the tree. Matches are found
+// in the original text, so overlapping passwords (\`abc\`, \`bcd\` in \`abcd\`) are masked whole.
 function maskAriaNode(node: AriaNode, forms: Array<[string, string]>): void {
-	const mask = (text: string) => forms.reduce((out, [form, bullets]) => out.replaceAll(form, bullets), text);
+	const mask = (text: string): string => {
+		// [start, end, bullets minus matched length] of every match, merged where they overlap.
+		const hits: Array<[number, number, number]> = [];
+		for (const [form, bullets] of forms) {
+			for (let at = text.indexOf(form); at >= 0; at = text.indexOf(form, at + 1)) {
+				hits.push([at, at + form.length, bullets.length - form.length]);
+			}
+		}
+		if (!hits.length) return text;
+		hits.sort((a, b) => a[0] - b[0]);
+		let out = "";
+		let cursor = 0;
+		for (let i = 0; i < hits.length; ) {
+			let [start, end, extra] = hits[i++];
+			while (i < hits.length && hits[i][0] < end) {
+				end = Math.max(end, hits[i][1]);
+				extra = Math.max(extra, hits[i++][2]);
+			}
+			out += text.slice(cursor, start) + "\\u2022".repeat(end - start + extra);
+			cursor = end;
+		}
+		return out + text.slice(cursor);
+	};
 	node.name = mask(node.name);
 	for (const key of Object.keys(node.props)) node.props[key] = mask(node.props[key]);
 	node.children = node.children.map(child => {
@@ -111,8 +134,7 @@ export function ariaSnapshot(root: Element | null, request: AriaSnapshotRequest 
 			masked.push([input, own]);
 		});
 		const tree = generateAriaTree(target, options);
-		// Longest first, so a password containing another one is masked whole.
-		if (pinned.length) maskAriaNode(tree.root, pinned.sort((a, b) => b[0].length - a[0].length));
+		if (pinned.length) maskAriaNode(tree.root, pinned);
 		return renderAriaTree(tree, options).text;
 	} finally {
 		for (const [input, own] of masked) {

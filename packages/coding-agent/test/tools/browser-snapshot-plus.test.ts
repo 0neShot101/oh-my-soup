@@ -191,6 +191,13 @@ await tab.evaluate((s, p, l) => {
 	Object.defineProperty(pin("pinned", p), "value", { get() { return native.get.call(this); } });
 	Object.defineProperty(pin("longer", l), "value", { get() { return native.get.call(this); } });
 	Object.preventExtensions(pin("sealed", s + "-sealed"));
+	// Overlapping, neither containing the other: a name reading "k9 abX4" holds the end of one and all of the other.
+	Object.defineProperty(pin("ovl1", "k9 ab"), "value", { get() { return native.get.call(this); } });
+	Object.defineProperty(pin("ovl2", "abX4"), "value", { get() { return native.get.call(this); } });
+	const pub = form.appendChild(document.createElement("span"));
+	pub.id = "pub";
+	pub.textContent = "k9";
+	form.appendChild(document.createElement("button")).setAttribute("aria-labelledby", "pub ovl2");
 	const frame = document.body.appendChild(document.createElement("iframe"));
 	const adopted = frame.contentDocument.createElement("input");
 	adopted.type = "password";
@@ -251,6 +258,7 @@ await tab.evaluate((s, p, l) => {
 				}),
 			);
 			expect(pageWorld.snapshot).not.toContain(secret);
+			expect(pageWorld.snapshot).not.toContain("X4");
 			for (const [id, value] of [
 				["pinned", pinnedValue],
 				["longer", longerValue],
