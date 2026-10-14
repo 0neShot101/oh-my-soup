@@ -520,12 +520,18 @@ function measureBoxInPage(el: unknown): MeasuredBox {
 		return false;
 	};
 	// The resolver still falls back to a match that is not shown, so the click's actionability check says why.
+	// A scroll container can leave only a strip at one edge of the match in view, so the probes include
+	// points just inside each edge as well as interior fractions.
+	const along = (start: number, end: number) => [
+		...[0.5, 0.15, 0.85].map(f => start + (end - start) * f),
+		start + Math.min(1, (end - start) / 2),
+		end - Math.min(1, (end - start) / 2),
+	];
 	const onScreen =
 		hitTestable &&
 		shown.some(r => {
-			const xs = [0.5, 0.15, 0.85].map(f => r.left + (r.right - r.left) * f);
-			const ys = [0.5, 0.15, 0.85].map(f => r.top + (r.bottom - r.top) * f);
-			return xs.some(x => ys.some(y => hitsElement(x, y)));
+			const ys = along(r.top, r.bottom);
+			return along(r.left, r.right).some(x => ys.some(y => hitsElement(x, y)));
 		});
 	return {
 		x: rect.left + page.scrollX,

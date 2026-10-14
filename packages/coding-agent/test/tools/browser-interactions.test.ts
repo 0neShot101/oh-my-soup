@@ -875,6 +875,37 @@ return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.e
 		}
 	}, 30_000);
 
+	test("clicks the first text match when a scroll container shows only a strip of it", async () => {
+		const session = makeSession();
+		const prelude = createBrowserPrelude(session);
+		const context = { session, toolCallId: "browser-text-click-strip" };
+		const tabName = `text-click-strip-${crypto.randomUUID()}`;
+		// Only 8 of the first button's 120px show at the panel's right edge, outside every interior probe.
+		const stripHtml = `<!doctype html>
+<div id="panel" style="width: 100px; overflow: auto; white-space: nowrap"><span style="display: inline-block; width: 92px"></span><button style="width: 120px" onclick="window.picks.push('strip')">Pick</button></div>
+<button onclick="window.picks.push('later')">Pick</button>
+<script>window.picks = [];</script>`;
+		await prelude.invoke(
+			{ action: "open", name: tabName, url: `data:text/html,${encodeURIComponent(stripHtml)}` },
+			context,
+		);
+		try {
+			const result = await prelude.invoke(
+				{
+					action: "run",
+					name: tabName,
+					code: `await tab.click("text/Pick");
+return await tab.evaluate(() => window.picks);`,
+					timeout: 20,
+				},
+				context,
+			);
+			expect(valueFrom<unknown>(result)).toEqual(["strip"]);
+		} finally {
+			await prelude.invoke({ action: "close", name: tabName, kill: true }, context).catch(() => undefined);
+		}
+	}, 30_000);
+
 	test("fails a click the browser does not deliver and completes the rest", async () => {
 		const browserHandle = await acquireBrowser({ kind: "headless", headless: true }, { cwd: process.cwd() });
 		if (!("browser" in browserHandle)) throw new Error("Expected a Puppeteer browser");
