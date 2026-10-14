@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed unnecessary worker scheduling overhead in `read` loops over regular files ([#15504](https://github.com/can1357/oh-my-pi/pull/15504) by [@mg-mg-mg](https://github.com/mg-mg-mg))
+
 ## [18.11.0] - 2026-10-14
 
 ### Fixed
