@@ -113,7 +113,7 @@ export function removeDsmlToolMarkupLeak(message: AssistantMessage): boolean {
 		} else {
 			const signature = block.thinkingSignature;
 			const reasoningField =
-				message.api === "openai-completions" &&
+				(message.api === "openai-completions" || message.api === "openrouter") &&
 				(signature === "reasoning_content" || signature === "reasoning" || signature === "reasoning_text");
 			if ((!signature || reasoningField) && stripped.trim().length > 0) {
 				content.push({ ...block, thinking: stripped });

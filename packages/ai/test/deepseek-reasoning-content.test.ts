@@ -254,7 +254,7 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 			expect(assistant?.reasoning_content).toBe("I need to read the file first.");
 		});
 
-		it("normalizes OpenRouter reasoning deltas to DeepSeek reasoning_content on replay", () => {
+		it("replays sanitized OpenRouter fallback reasoning on DeepSeek tool-call turns", () => {
 			const model = getBundledModel("openrouter", "deepseek/deepseek-v4-pro") as Model<"openai-completions">;
 			const compat = model.compat;
 			expect(compat.requiresReasoningContentForToolCalls).toBe(true);
@@ -263,7 +263,7 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 			const msg = assistantToolCall(model, [
 				{
 					type: "thinking",
-					thinking: "I should inspect the requested file.",
+					thinking: "I should inspect the requested file.</｜｜DSML｜｜parameter>",
 					thinkingSignature: "reasoning",
 				} as ThinkingContent,
 				{
@@ -273,6 +273,7 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 					arguments: { path: "package.json" },
 				} as ToolCall,
 			]);
+			expect(removeDsmlToolMarkupLeak(msg)).toBe(true);
 			const messages = convertMessages(model, { messages: [msg] }, compat);
 			const assistant = findOpenAICompletionAssistantWireMessage(messages);
 			expect(assistant).toBeDefined();
