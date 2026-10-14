@@ -1449,6 +1449,7 @@ export class SessionMaintenance {
 				tokensBefore = compactionPrep.tokensBefore;
 				details = compactionPrep.details;
 				preserveData = compactionPrep.preserveData;
+				providerReplayThroughEntryId = compactionPrep.providerReplayThroughEntryId;
 			} else if (snapcompactResult) {
 				summary = snapcompactResult.summary;
 				shortSummary = snapcompactResult.shortSummary;
@@ -1675,6 +1676,7 @@ export class SessionMaintenance {
 							hookDetails: prepared.details,
 						},
 						preserveData: prepared.preserveData,
+						providerReplayThroughEntryId: prepared.providerReplayThroughEntryId,
 					}
 				: {
 						summary: experimentalContextRolloverPrompt,
@@ -1834,6 +1836,7 @@ export class SessionMaintenance {
 								hookDetails: prepared.details,
 							},
 							preserveData: prepared.preserveData,
+							providerReplayThroughEntryId: prepared.providerReplayThroughEntryId,
 						}
 					: {
 							summary: experimentalContextRolloverPrompt,
@@ -3590,6 +3593,7 @@ export class SessionMaintenance {
 				tokensBefore: number;
 				details: unknown;
 				preserveData: Record<string, unknown> | undefined;
+				providerReplayThroughEntryId: string | undefined;
 		  }
 		| {
 				kind: "needsLlm";
@@ -3632,6 +3636,7 @@ export class SessionMaintenance {
 				tokensBefore: hookCompaction.tokensBefore,
 				details: hookCompaction.details,
 				preserveData,
+				providerReplayThroughEntryId: hookCompaction.providerReplayThroughEntryId,
 			};
 		}
 
@@ -5250,6 +5255,7 @@ export class SessionMaintenance {
 				tokensBefore = compactionPrep.tokensBefore;
 				details = compactionPrep.details;
 				preserveData = compactionPrep.preserveData;
+				providerReplayThroughEntryId = compactionPrep.providerReplayThroughEntryId;
 			} else if (handoffDocument) {
 				const handoffSummary = handoffSummaryFromDocument(handoffDocument.document, preparation);
 				summary = handoffSummary.summary;
