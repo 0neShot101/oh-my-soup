@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import * as vm from "node:vm";
 import { TempDir } from "@oh-my-pi/pi-utils/temp";
@@ -17,7 +17,7 @@ import { JAVASCRIPT_PRELUDE_SOURCE } from "../../src/eval/js/shared/prelude";
  * test runs against the real shipped helper, not a re-implementation.
  */
 function loadPrelude(callTool: (name: string, args: unknown) => Promise<unknown>): Record<string, unknown> {
-	const sandbox: Record<string, unknown> = { __omp_call_tool__: callTool };
+	const sandbox: Record<string, unknown> = { __omp_call_tool__: callTool, setTimeout, clearTimeout, Date };
 	vm.createContext(sandbox);
 	vm.runInContext(JAVASCRIPT_PRELUDE_SOURCE, sandbox);
 	return sandbox;
@@ -172,6 +172,47 @@ describe("eval js wait() timeout (issue #12549)", () => {
 		await (sandbox.wait as WaitHelper)([await agent("first")], { timeout: 10 });
 		await ((await agent("second")) as Waitable).wait({ timeout: 2 });
 		expect(waitCalls.map(call => call.timeoutMs)).toEqual([10_000, 2_000]);
+	});
+
+	it("times out while a completion id is still pending", async () => {
+		vi.useFakeTimers();
+		try {
+			const id = Promise.withResolvers<unknown>();
+			const sandbox = loadPrelude(async name => {
+				if (name === "__completion__") return id.promise;
+				throw new Error(`unexpected bridge call ${name}`);
+			});
+			const handle = (sandbox.completion as (prompt: string) => unknown)("hi");
+			const pending = (sandbox.wait as WaitHelper)([handle], { timeout: 5 });
+			vi.advanceTimersByTime(5_000);
+			await expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("only gives the host the time left after resolving completion ids", async () => {
+		vi.useFakeTimers();
+		try {
+			const id = Promise.withResolvers<unknown>();
+			const waitCalls: WaitCall[] = [];
+			const sandbox = loadPrelude(async (name, args) => {
+				if (name === "__completion__") return id.promise;
+				if (name === "__wait__") {
+					waitCalls.push(args as WaitCall);
+					return { items: [{ status: "completed", text: "done" }] };
+				}
+				throw new Error(`unexpected bridge call ${name}`);
+			});
+			const handle = (sandbox.completion as (prompt: string) => Waitable)("hi");
+			const pending = handle.wait({ timeout: 5 });
+			vi.advanceTimersByTime(4_000);
+			id.resolve({ id: "late" });
+			expect(await pending).toBe("done");
+			expect(waitCalls).toEqual([{ items: [{ kind: "completion", id: "late" }], timeoutMs: 1_000 }]);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("rejects mixing an options object with positional args", async () => {

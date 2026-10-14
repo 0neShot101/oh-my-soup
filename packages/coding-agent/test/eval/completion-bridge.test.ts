@@ -1023,6 +1023,28 @@ describe("completion() through eval runtimes", () => {
 		});
 	});
 
+	it("waits for a completion started in an earlier JavaScript cell", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-completion-cells-");
+		const options = {
+			cwd: tempDir.path(),
+			sessionId: `js-completion-cells:${crypto.randomUUID()}`,
+			session: makeSession({ cwd: tempDir.path() }),
+			sessionFile: path.join(tempDir.path(), "session.jsonl"),
+		};
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "hello from the next cell" }));
+
+		const started = await executeJs(
+			'var handles = [completion("hi", { model: "smol" })]; print("started");',
+			options,
+		);
+		expect(started.exitCode).toBe(0);
+		expect(started.output.trim()).toBe("started");
+
+		const result = await executeJs("print((await wait(handles))[0]);", options);
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("hello from the next cell");
+	});
+
 	it("exposes plain and structured completion() in the Python runtime", async () => {
 		const tempDir = TempDir.createSync("@omp-eval-completion-py-");
 		try {
