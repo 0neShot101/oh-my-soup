@@ -927,6 +927,14 @@ return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.e
 				html: `<div style="position: relative; overflow: hidden; height: 0"><button id="clipped" style="position: absolute; top: 10px; left: 10px">Pick</button></div>${later}`,
 				winner: "later",
 			},
+			"clipped by paint containment": {
+				html: `<div style="contain: paint; height: 0"><button id="clipped">Pick</button></div>${later}`,
+				winner: "later",
+			},
+			"modal dialog escaping a transformed clip": {
+				html: `<div style="transform: translateZ(0); overflow: hidden; height: 0"><dialog id="dlg" style="margin: 0"><button id="modal">Pick</button></dialog></div>${later}<script>document.getElementById("dlg").showModal();</script>`,
+				winner: "modal",
+			},
 			"slotted into a clipped shadow wrapper": {
 				html: `<div id="host"><button id="slotted">Pick</button></div>${later}<script>${shadow("host", zeroClip)}</script>`,
 				selector: "#slotted, #later",

@@ -94,6 +94,12 @@ interface PageElement {
 	shadowRoot: PageShadowRoot | null;
 	getBoundingClientRect(): PageRect;
 	getClientRects(): ArrayLike<PageRect>;
+	readonly offsetWidth?: number;
+	readonly offsetHeight?: number;
+	readonly clientLeft?: number;
+	readonly clientTop?: number;
+	readonly clientWidth?: number;
+	readonly clientHeight?: number;
 	getRootNode(): PageRoot;
 	contains(other: PageElement): boolean;
 	getAttribute(name: string): string | null;
@@ -472,13 +478,35 @@ async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal
 					/paint|layout|strict|content/.test(style.contain) ||
 					/size/.test(style.containerType ?? "") ||
 					style.contentVisibility === "auto" ||
-					/transform|perspective|filter/.test(style.willChange);
+					/transform|perspective|filter|translate|rotate|scale/.test(style.willChange);
+				// A top-layer box (modal dialog, open popover) renders outside every ancestor's clip.
+				const inTopLayer = (node: PageElement): boolean => {
+					try {
+						return node.matches(":modal, :popover-open");
+					} catch {
+						return false;
+					}
+				};
+				// Descendants are clipped at the padding edge, so a border never shows them.
+				const paddingBox = (node: PageElement) => {
+					const box = node.getBoundingClientRect();
+					const scaleX = node.offsetWidth ? box.width / node.offsetWidth : 1;
+					const scaleY = node.offsetHeight ? box.height / node.offsetHeight : 1;
+					const left = box.left + (node.clientLeft ?? 0) * scaleX;
+					const top = box.top + (node.clientTop ?? 0) * scaleY;
+					return {
+						left,
+						top,
+						right: node.clientWidth === undefined ? box.right : left + node.clientWidth * scaleX,
+						bottom: node.clientHeight === undefined ? box.bottom : top + node.clientHeight * scaleY,
+					};
+				};
 				const rect = element.getBoundingClientRect();
 				const view = { left: 0, top: 0, right: page.innerWidth, bottom: page.innerHeight };
 				// An overflow box clips only descendants whose containing block lies inside it: an absolute
 				// box escapes static ancestors, a fixed one every ancestor up to one that contains fixed boxes.
 				let position = page.getComputedStyle(element).position;
-				for (let node = flatParent(element); node; node = flatParent(node)) {
+				for (let node = inTopLayer(element) ? null : flatParent(element); node; node = flatParent(node)) {
 					// <html> and <body> overflow normally applies to the viewport, which is already the starting clip.
 					if (node.tagName === "BODY" || node.tagName === "HTML") break;
 					const style = page.getComputedStyle(node);
@@ -487,22 +515,34 @@ async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal
 					if (position === "fixed" && !containsFixed(style)) continue;
 					if (position === "absolute" && style.position === "static" && !containsFixed(style)) continue;
 					position = style.position;
-					const clip = node.getBoundingClientRect();
-					if (style.overflowX !== "visible") {
-						view.left = Math.max(view.left, clip.left);
-						view.right = Math.min(view.right, clip.right);
+					// Overflow does not apply to a non-replaced inline box; paint containment clips like overflow.
+					const paintClip = /paint|strict|content/.test(style.contain);
+					const clipX = paintClip || (style.overflowX !== "visible" && style.display !== "inline");
+					const clipY = paintClip || (style.overflowY !== "visible" && style.display !== "inline");
+					if (clipX || clipY) {
+						const clip = paddingBox(node);
+						if (clipX) {
+							view.left = Math.max(view.left, clip.left);
+							view.right = Math.min(view.right, clip.right);
+						}
+						if (clipY) {
+							view.top = Math.max(view.top, clip.top);
+							view.bottom = Math.min(view.bottom, clip.bottom);
+						}
 					}
-					if (style.overflowY !== "visible") {
-						view.top = Math.max(view.top, clip.top);
-						view.bottom = Math.min(view.bottom, clip.bottom);
-					}
+					if (inTopLayer(node)) break;
 				}
 				return {
 					x: rect.left + page.scrollX,
 					y: rect.top + page.scrollY,
 					sized: rect.width >= 1 && rect.height >= 1,
 					onScreen:
-						rect.right > view.left && rect.bottom > view.top && rect.left < view.right && rect.top < view.bottom,
+						view.right > view.left &&
+						view.bottom > view.top &&
+						rect.right > view.left &&
+						rect.bottom > view.top &&
+						rect.left < view.right &&
+						rect.top < view.bottom,
 				};
 			}),
 		)) as { x: number; y: number; sized: boolean; onScreen: boolean };
