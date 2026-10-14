@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed parallel tool calls overwriting each other on OpenAI-compatible gateways that reuse `index: 0` across separate streamed chunks with distinct tool-call IDs
+- Fixed parallel tool calls overwriting each other on OpenAI-compatible gateways that reuse `index: 0` across separate streamed chunks with distinct tool-call IDs ([#15682](https://github.com/can1357/oh-my-pi/pull/15682) by [@Zzz141592653](https://github.com/Zzz141592653))
 
 ## [18.10.4] - 2026-10-13
 
