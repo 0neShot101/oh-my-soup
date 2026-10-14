@@ -40,7 +40,7 @@ it.skipIf(process.platform === "win32")(
 		const script = path.join(cwd, "cleanup.sh");
 		await Bun.write(
 			script,
-			"trap 'trap \"\" TERM; sleep 0.2; printf cleaned > cleaned; exit 0' TERM\nprintf 'ready\\n'\nwhile :; do sleep 1; done\n",
+			"trap 'sleep 0.2; printf cleaned >> cleaned; exit 0' TERM\nprintf 'ready\\n'\nwhile :; do :; done\n",
 		);
 		const ready = Promise.withResolvers<void>();
 		const result = await tool.execute(
