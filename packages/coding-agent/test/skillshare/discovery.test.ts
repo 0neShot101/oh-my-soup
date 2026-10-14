@@ -74,6 +74,35 @@ describe("skillshare discovery provider", () => {
 		expect(result.warnings).toEqual([]);
 	});
 
+	it("skips a foreign user root's lock while retaining local project and user locks", async () => {
+		const foreignHome = path.join(tempHome, "alice");
+		const localProject = path.join(foreignHome, "project");
+		const cwd = path.join(localProject, "nested");
+		await fs.mkdir(cwd, { recursive: true });
+		await fs.mkdir(path.join(foreignHome, ".omp", "agent"), { recursive: true });
+		await storeSkill("mallory", "foreign", "1.0.0", "Foreign registry skill");
+		await storeSkill("alice", "local", "1.0.0", "Local registry skill");
+		await storeSkill("alice", "user", "1.0.0", "User registry skill");
+		for (const [root, scope, name] of [
+			[path.join(foreignHome, ".omp"), "mallory", "foreign"],
+			[path.join(localProject, ".omp"), "alice", "local"],
+			[getAgentDir(), "alice", "user"],
+		] as const) {
+			await writeSkillsLock(path.join(root, "skills.lock.json"), {
+				version: 1,
+				skills: { [`@${scope}/${name}`]: lockEntry(scope, name, "1.0.0") },
+			});
+		}
+
+		const result = await loadSkillshareSkills({ cwd, home: tempHome, repoRoot: null });
+
+		expect(result.items.map(skill => [skill.name, skill.level])).toEqual([
+			["local", "project"],
+			["user", "user"],
+		]);
+		expect(result.warnings).toEqual([]);
+	});
+
 	it("loads project locks below the temporary root without inheriting locks at or above it", async () => {
 		const tempRoot = path.join(tempHome, "tmp");
 		const localProject = path.join(tempRoot, "project");

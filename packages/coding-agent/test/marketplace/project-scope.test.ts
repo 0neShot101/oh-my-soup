@@ -27,6 +27,7 @@ import {
 	writeInstalledPluginsRegistry,
 } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
+import * as piUtils from "@oh-my-pi/pi-utils";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -162,6 +163,19 @@ describe("resolveActiveProjectRegistryPath", () => {
 			path.join(cwd, ".omp", "plugins", "installed_plugins.json"),
 		);
 		expect(await resolveOrDefaultProjectRegistryPath(foreignHome)).toBeUndefined();
+	});
+
+	it("keeps an active repo-local .omp/agent directory in project scope", async () => {
+		const project = path.join(tmpDir, "project");
+		const agentDir = path.join(project, ".omp", "agent");
+		fs.mkdirSync(agentDir, { recursive: true });
+		fs.mkdirSync(path.join(project, ".git"), { recursive: true });
+		vi.spyOn(os, "homedir").mockReturnValue(path.join(tmpDir, "isolated-home"));
+		vi.spyOn(piUtils, "getAgentDir").mockReturnValue(`${agentDir}${path.sep}`);
+		const registry = path.join(project, ".omp", "plugins", "installed_plugins.json");
+
+		expect(await resolveActiveProjectRegistryPath(project)).toBe(registry);
+		expect(await resolveOrDefaultProjectRegistryPath(project)).toBe(registry);
 	});
 
 	it("still prefers a plain ancestor .omp above the git root", async () => {

@@ -1033,7 +1033,8 @@ export function getProjectDiscoveryCeilings(): ReadonlySet<string> {
 	return ceilings;
 }
 
-function isUserConfigRoot(root: string): boolean {
+/** User config roots are not project anchors, except for an active repo-local agent directory. */
+export async function isUserConfigRoot(root: string): Promise<boolean> {
 	const configDir = normalizePathForComparison(path.join(root, getConfigDirName()));
 	if (
 		configDir === normalizePathForComparison(path.join(os.homedir(), getConfigDirName())) ||
@@ -1042,7 +1043,9 @@ function isUserConfigRoot(root: string): boolean {
 		return true;
 	// Another account's default user config is still user scope when HOME is overridden.
 	try {
-		return fs.statSync(path.join(root, SOURCE_PATHS.native.userAgent)).isDirectory();
+		const agentDir = path.join(root, SOURCE_PATHS.native.userAgent);
+		const stat = await fs.promises.stat(agentDir);
+		return stat.isDirectory() && normalizePathForComparison(agentDir) !== normalizePathForComparison(getAgentDir());
 	} catch {
 		return false;
 	}
@@ -1072,7 +1075,7 @@ async function resolveProjectRegistryPath(cwd: string, ceilings: ReadonlySet<str
 	while (!ceilings.has(normalizePathForComparison(dir))) {
 		try {
 			const stat = await fs.promises.stat(path.join(dir, getConfigDirName()));
-			if (stat.isDirectory() && !isUserConfigRoot(dir)) {
+			if (stat.isDirectory() && !(await isUserConfigRoot(dir))) {
 				return path.join(dir, getConfigDirName(), "plugins", "installed_plugins.json");
 			}
 		} catch {
@@ -1088,7 +1091,8 @@ async function resolveProjectRegistryPath(cwd: string, ceilings: ReadonlySet<str
 	while (!ceilings.has(normalizePathForComparison(dir))) {
 		try {
 			await fs.promises.stat(path.join(dir, ".git"));
-			if (!isUserConfigRoot(dir)) return path.join(dir, getConfigDirName(), "plugins", "installed_plugins.json");
+			if (!(await isUserConfigRoot(dir)))
+				return path.join(dir, getConfigDirName(), "plugins", "installed_plugins.json");
 		} catch {
 			// not found at this level — continue up
 		}
@@ -1115,7 +1119,7 @@ export async function resolveOrDefaultProjectRegistryPath(cwd: string): Promise<
 	const ceilings = getProjectDiscoveryCeilings();
 	const resolved = await resolveProjectRegistryPath(cwd, ceilings);
 	if (resolved) return resolved;
-	if (ceilings.has(normalizePathForComparison(cwd)) || isUserConfigRoot(cwd)) return undefined;
+	if (ceilings.has(normalizePathForComparison(cwd)) || (await isUserConfigRoot(cwd))) return undefined;
 	return path.join(cwd, getConfigDirName(), "plugins", "installed_plugins.json");
 }
 

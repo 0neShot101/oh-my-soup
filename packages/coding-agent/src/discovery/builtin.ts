@@ -31,6 +31,7 @@ import {
 	expandEnvVarsDeep,
 	getExtensionNameFromPath,
 	getProjectDiscoveryCeilings,
+	isUserConfigRoot,
 	loadFilesFromDir,
 	parseRequestIdFormat,
 	SOURCE_PATHS,
@@ -95,6 +96,15 @@ export function getAncestorDirs(cwd: string, stopAt?: string | null): Array<{ di
 	return ancestors;
 }
 
+/** Skip user config roots without stopping the project walk at those directories. */
+export async function* getProjectAncestorDirs(ctx: LoadContext): AsyncGenerator<{ dir: string; depth: number }> {
+	const home = normalizePathForComparison(ctx.home);
+	for (const ancestor of getAncestorDirs(ctx.cwd, ctx.repoRoot ?? ctx.home)) {
+		if (normalizePathForComparison(ancestor.dir) === home || (await isUserConfigRoot(ancestor.dir))) continue;
+		yield ancestor;
+	}
+}
+
 /**
  * Nearest `.omp/` between cwd and the repo root. The home directory is never a
  * project: `~/.omp` is the user config root, so a cwd under home (temp dirs on
@@ -102,9 +112,7 @@ export function getAncestorDirs(cwd: string, stopAt?: string | null): Array<{ di
  * project config — that also bypasses an overridden agent dir or profile.
  */
 async function findNearestProjectConfigDir(ctx: LoadContext): Promise<{ dir: string; depth: number } | null> {
-	const home = normalizePathForComparison(ctx.home);
-	for (const ancestor of getAncestorDirs(ctx.cwd, ctx.repoRoot ?? ctx.home)) {
-		if (normalizePathForComparison(ancestor.dir) === home) continue;
+	for await (const ancestor of getProjectAncestorDirs(ctx)) {
 		const configDir = await ifNonEmptyDir(ancestor.dir, PATHS.projectDir);
 		if (configDir) return { dir: configDir, depth: ancestor.depth };
 	}
@@ -299,18 +307,17 @@ registerProvider<SystemPrompt>(systemPromptCapability.id, {
 async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 	// Walk up from cwd finding .omp/skills/ in ancestors (closest first). Home is
 	// the user config root, never a project (see findNearestProjectConfigDir).
-	const home = normalizePathForComparison(ctx.home);
-	const ancestors = getAncestorDirs(ctx.cwd, ctx.repoRoot ?? ctx.home).filter(
-		({ dir }) => normalizePathForComparison(dir) !== home,
-	);
-	const projectScans = ancestors.map(({ dir }) =>
-		scanSkillsFromDir(ctx, {
-			dir: path.join(dir, PATHS.projectDir, "skills"),
-			providerId: PROVIDER_ID,
-			level: "project",
-			requireDescription: true,
-		}),
-	);
+	const projectScans: Promise<LoadResult<Skill>>[] = [];
+	for await (const { dir } of getProjectAncestorDirs(ctx)) {
+		projectScans.push(
+			scanSkillsFromDir(ctx, {
+				dir: path.join(dir, PATHS.projectDir, "skills"),
+				providerId: PROVIDER_ID,
+				level: "project",
+				requireDescription: true,
+			}),
+		);
+	}
 
 	// User-level scan from ~/.omp/agent/skills/
 	const userScan = scanSkillsFromDir(ctx, {
