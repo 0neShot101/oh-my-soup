@@ -19,7 +19,14 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { convertAnthropicMessages, streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { AnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic-client";
 import type { MessageParam } from "@oh-my-pi/pi-ai/providers/anthropic-wire";
-import type { AssistantMessage, Context, Model, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
+import type {
+	AssistantMessage,
+	Context,
+	Message,
+	Model,
+	ProviderSessionState,
+	ToolResultMessage,
+} from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 const fableModel: Model<"anthropic-messages"> = buildModel({
@@ -698,5 +705,115 @@ describe("mid-turn fallback a gateway opted into", () => {
 		if (!Array.isArray(replayed)) throw new Error("expected the fallback turn on the wire");
 		expect(replayed.map(block => block.type)).toEqual(["thinking", "text", "tool_use"]);
 		expect(replayed[0]).toMatchObject({ thinking: "fallback plan", signature: "sig-fallback" });
+	});
+
+	// A turn recorded before boundaries were kept: both models' reasoning and no
+	// marker. Sessions that already hold one must recover rather than 400 forever.
+	const zeroUsage = {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+	const markerlessHistory: Message[] = [
+		{ role: "user", content: "Summarize the README", timestamp: 0 },
+		{
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "earlier plan", thinkingSignature: "sig-earlier" },
+				{ type: "text", text: "It covers the CLI." },
+			],
+			api: "anthropic-messages",
+			provider: "gateway",
+			model: "claude-opus-5-5",
+			usage: zeroUsage,
+			stopReason: "stop",
+			timestamp: 0,
+		},
+		{ role: "user", content: "Read a.txt", timestamp: 0 },
+		{
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "primary plan", thinkingSignature: "sig-primary" },
+				{ type: "thinking", thinking: "fallback plan", thinkingSignature: "sig-fallback" },
+				{ type: "text", text: "Reading it." },
+				{ type: "toolCall", id: "toolu_read", name: "read", arguments: { path: "a.txt" } },
+			],
+			api: "anthropic-messages",
+			provider: "gateway",
+			model: "claude-opus-5-5",
+			usage: zeroUsage,
+			stopReason: "toolUse",
+			timestamp: 0,
+		},
+		{
+			role: "toolResult",
+			toolCallId: "toolu_read",
+			toolName: "read",
+			content: [{ type: "text", text: "contents" }],
+			isError: false,
+			timestamp: 0,
+		},
+	];
+
+	/** Answers like the gateway: any request whose latest turn replays thinking is refused. */
+	function refuseLatestTurnThinking(requests: Array<{ messages: MessageParam[] }>): void {
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation((params: unknown) => {
+			const request = params as { messages: MessageParam[] };
+			requests.push(request);
+			const latest = request.messages.findLast(message => message.role === "assistant")?.content;
+			if (Array.isArray(latest) && latest.some(block => block.type === "thinking")) {
+				const rejection = Object.assign(
+					new Error(
+						'400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.3.content.1: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified. These blocks must remain as they were in the original response."}}',
+					),
+					{ status: 400 },
+				);
+				return {
+					async withResponse() {
+						throw rejection;
+					},
+				} as never;
+			}
+			return createMockRequest(nextTurnEvents) as never;
+		});
+	}
+
+	it("drops a refused latest turn's reasoning once and keeps it dropped for the session", async () => {
+		const requests: Array<{ messages: MessageParam[] }> = [];
+		refuseLatestTurnThinking(requests);
+		const options = {
+			apiKey: "sk-gateway",
+			thinkingEnabled: true,
+			providerSessionState: new Map<string, ProviderSessionState>(),
+		};
+
+		const recovered = await streamAnthropic(gatewayModel, { messages: markerlessHistory }, options).result();
+		expect(recovered.stopReason).toBe("stop");
+		expect(requests).toHaveLength(2);
+		const [earlier, latest] = requests[1]!.messages.filter(message => message.role === "assistant");
+		expect(Array.isArray(latest?.content) && latest.content.map(block => block.type)).toEqual(["text", "tool_use"]);
+		// Only the refused turn loses its reasoning.
+		expect(earlier?.content).toContainEqual(expect.objectContaining({ type: "thinking", signature: "sig-earlier" }));
+
+		// The session's next request replays the same prefix on its first attempt.
+		await streamAnthropic(gatewayModel, { messages: markerlessHistory }, options).result();
+		expect(requests).toHaveLength(3);
+	});
+
+	it("recovers without session state by dropping every replayed thinking block", async () => {
+		const requests: Array<{ messages: MessageParam[] }> = [];
+		refuseLatestTurnThinking(requests);
+
+		const recovered = await streamAnthropic(
+			gatewayModel,
+			{ messages: markerlessHistory },
+			{ apiKey: "sk-gateway", thinkingEnabled: true },
+		).result();
+		expect(recovered.stopReason).toBe("stop");
+		expect(requests).toHaveLength(2);
+		expect(JSON.stringify(requests[1]!.messages)).not.toContain('"type":"thinking"');
 	});
 });

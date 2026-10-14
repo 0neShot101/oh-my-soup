@@ -600,7 +600,11 @@ type AnthropicProviderSessionState = ProviderSessionState & {
 	 * Cleared on session close.
 	 */
 	cacheControlOptionsUnsupported: boolean;
-	/** Thinking blocks stripped after a prefix-binding 400 forced a retry without `drop_block`. */
+	/**
+	 * Thinking blocks the client strips after a 400 rejected their replay: a
+	 * prefix-binding 400 that forced a retry without `drop_block`, or a latest
+	 * assistant turn whose reasoning the API refused as modified.
+	 */
 	prefixDroppedThinkingBlocks: Set<string>;
 	/**
 	 * Server-reported `prefix_binding_mismatch` drops already warned about. A
@@ -1993,6 +1997,33 @@ function rememberPrefixDroppedThinking(
 	}
 }
 
+/**
+ * Replay keys of the thinking blocks in the request's latest assistant turn.
+ * Anthropic validates every assistant message after the last user message
+ * carrying more than tool results as one "latest assistant message" (its error
+ * indices count blocks across that whole run).
+ */
+function latestAssistantTurnThinkingKeys(params: MessageCreateParamsStreaming): string[] {
+	const keys: string[] = [];
+	for (let index = params.messages.length - 1; index >= 0; index--) {
+		const message = params.messages[index]!;
+		if (message.role !== "assistant") {
+			const toolResultsOnly =
+				Array.isArray(message.content) &&
+				message.content.length > 0 &&
+				message.content.every(block => block.type === "tool_result");
+			if (!toolResultsOnly) break;
+			continue;
+		}
+		if (!Array.isArray(message.content)) continue;
+		for (const block of message.content) {
+			const key = thinkingReplayKey(block);
+			if (key) keys.push(key);
+		}
+	}
+	return keys;
+}
+
 function rememberPrefixBindingFailure(
 	params: MessageCreateParamsStreaming,
 	message: string,
@@ -2202,6 +2233,7 @@ const streamAnthropicOnce = (
 			};
 			let dropAllThinking = droppedAllThinkingForSignature;
 			let prefixBindingRetryAttempted = false;
+			let latestTurnThinkingRetryAttempted = false;
 			// Claude Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`; the wrapper
 			// already turned the gated compat off, this covers caller/frozen inputs.
 			const killSwitchActive = experimentalBetasDisabled(model);
@@ -3500,6 +3532,50 @@ const streamAnthropicOnce = (
 						output.stopReason = "stop";
 						firstTokenTime = undefined;
 						continue;
+					}
+					if (
+						!latestTurnThinkingRetryAttempted &&
+						firstTokenTime === undefined &&
+						!streamedReplayUnsafeContent &&
+						AIError.isImmutableLatestThinkingText(streamFailureMessage)
+					) {
+						// The API refused the latest assistant turn's reasoning as modified
+						// (e.g. a mid-turn fallback persisted without its boundary marker).
+						// Resending the turn fails the same way forever, so drop its
+						// reasoning on the wire — stored history keeps it — and retry once.
+						// The session remembers the dropped blocks so later requests replay
+						// the same prefix; without session state, drop every block instead.
+						const keys = latestAssistantTurnThinkingKeys(params);
+						if (keys.length > 0) {
+							logger.warn(
+								"anthropic: latest assistant turn's thinking rejected as modified, dropping it and retrying",
+								{
+									provider: model.provider,
+									model: model.id,
+									baseUrl,
+									blocks: keys.length,
+								},
+							);
+							latestTurnThinkingRetryAttempted = true;
+							if (providerSessionState) {
+								for (const key of keys) providerSessionState.prefixDroppedThinkingBlocks.add(key);
+							} else {
+								dropAllThinking = true;
+							}
+							params = await rebuildParams(streamFailure);
+							providerRetryAttempt = 0;
+							output.content.length = 0;
+							output.model = model.id;
+							output.responseId = undefined;
+							output.upstreamModel = undefined;
+							output.errorMessage = undefined;
+							output.inputTransformations = undefined;
+							output.providerPayload = undefined;
+							output.usage = createEmptyUsage(copilotDynamicHeaders?.premiumRequests);
+							output.stopReason = "stop";
+							firstTokenTime = undefined;
+							continue;
+						}
 					}
 					if (
 						!forceDemoteUnsignedThinking &&
