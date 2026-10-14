@@ -314,27 +314,31 @@ export async function clickElement(
 	const point = await actionableClickPoint(handle, label, signal, options);
 	const watch = await untilAborted(signal, () =>
 		handle.evaluateHandle(el => {
-			const page = globalThis as unknown as {
-				addEventListener(
-					type: string,
-					listener: (event: { composedPath(): unknown[] }) => void,
-					capture: boolean,
-				): void;
-				removeEventListener(
-					type: string,
-					listener: (event: { composedPath(): unknown[] }) => void,
-					capture: boolean,
-				): void;
-			};
+			type Listen = (
+				type: string,
+				listener: (event: { composedPath(): unknown[] }) => void,
+				capture: boolean,
+			) => void;
+			const target = el as unknown as { addEventListener: Listen; removeEventListener: Listen };
+			const page = globalThis as unknown as { addEventListener: Listen; removeEventListener: Listen };
 			const state = { delivered: false, stop: () => {} };
-			const seen = (event: { composedPath(): unknown[] }) => {
+			// The target's own listener sees events inside a closed shadow root, which the window's path hides;
+			// the window's sees an event a page handler stops before it reaches the target.
+			const onTarget = () => {
+				state.delivered = true;
+			};
+			const onPage = (event: { composedPath(): unknown[] }) => {
 				if (event.composedPath().includes(el)) state.delivered = true;
 			};
-			page.addEventListener("mousedown", seen, true);
-			page.addEventListener("click", seen, true);
+			for (const type of ["mousedown", "click"]) {
+				target.addEventListener(type, onTarget, true);
+				page.addEventListener(type, onPage, true);
+			}
 			state.stop = () => {
-				page.removeEventListener("mousedown", seen, true);
-				page.removeEventListener("click", seen, true);
+				for (const type of ["mousedown", "click"]) {
+					target.removeEventListener(type, onTarget, true);
+					page.removeEventListener(type, onPage, true);
+				}
 			};
 			return state;
 		}),
@@ -354,13 +358,17 @@ export async function clickElement(
 			.finally(() => watch.dispose().catch(() => undefined));
 		throw error;
 	}
-	// A click that navigated away took the page's record with it; it reached the page.
+	// A click that navigated away took the page's record with it; it reached the page. A cancelled call
+	// still fails as cancelled.
 	const delivered = await untilAborted(signal, () =>
 		watch.evaluate(state => {
 			state.stop();
 			return state.delivered;
 		}),
-	).catch(() => true);
+	).catch((error: unknown) => {
+		if (signal?.aborted) throw error;
+		return true;
+	});
 	await watch.dispose().catch(() => undefined);
 	if (!delivered) {
 		throw new ToolError(`${label}: the browser did not deliver the click to the element (disabled or inert)`);
@@ -469,8 +477,8 @@ interface MeasuredBox {
  * Runs in the page: the element's document position, whether it has a box, and whether the browser shows
  * it anywhere in the viewport. Visibility is the renderer's own hit test at a few points of each on-screen
  * fragment, landing on the element or inside it, so every clip, transform, top layer and containment rule
- * is the browser's. An element hit testing cannot see by design (`pointer-events: none`, `visibility:
- * hidden`) is ranked by geometry, and the click's actionability check reports why it cannot be clicked.
+ * is the browser's. An element hit testing cannot see (`pointer-events: none`, `visibility: hidden`, inert)
+ * is not shown.
  * Self-contained, since Puppeteer serializes it.
  */
 function measureBoxInPage(el: unknown): MeasuredBox {
@@ -501,12 +509,14 @@ function measureBoxInPage(el: unknown): MeasuredBox {
 		}
 		return false;
 	};
-	const onScreen = shown.some(r => {
-		if (!hitTestable) return true;
-		const xs = [0.5, 0.15, 0.85].map(f => r.left + (r.right - r.left) * f);
-		const ys = [0.5, 0.15, 0.85].map(f => r.top + (r.bottom - r.top) * f);
-		return xs.some(x => ys.some(y => hitsElement(x, y)));
-	});
+	// The resolver still falls back to a match that is not shown, so the click's actionability check says why.
+	const onScreen =
+		hitTestable &&
+		shown.some(r => {
+			const xs = [0.5, 0.15, 0.85].map(f => r.left + (r.right - r.left) * f);
+			const ys = [0.5, 0.15, 0.85].map(f => r.top + (r.bottom - r.top) * f);
+			return xs.some(x => ys.some(y => hitsElement(x, y)));
+		});
 	return {
 		x: rect.left + page.scrollX,
 		y: rect.top + page.scrollY,
@@ -575,7 +585,8 @@ async function probeOffScreen(
 /**
  * Resolve text-query matches to the first match the browser shows on screen, in document order. When none
  * is on screen, off-screen matches are scrolled into view in document order and the first one shown wins;
- * failing that, the first one a click could be aimed at, so the click itself reports what stops it.
+ * failing that, the first one a click could be aimed at, then the first match, so the click itself reports
+ * what stops it.
  */
 export async function resolveActionableQueryHandlerClickTarget(
 	handles: ElementHandle[],
@@ -600,7 +611,7 @@ export async function resolveActionableQueryHandlerClickTarget(
 				}
 				if (probe.reachable) reachable ??= candidate;
 			}
-			winner ??= reachable;
+			winner ??= reachable ?? candidates[0];
 		}
 	} catch (error) {
 		await disposeOwned(candidates);

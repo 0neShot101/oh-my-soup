@@ -128,9 +128,9 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser click timeouts", () => {
 			expect(hidden).toMatch(/^tab\.click\("#hidden"\) timed out after \d+ms/);
 			expect(hidden).toContain("last check: display:none");
 			expect(await attempt(`tab.click("#faded")`)).toContain("last check: opacity:0");
-			// Text queries keep the first on-screen match even when it is refused, and report why.
+			// A refused match the browser shows is still reported; one it cannot hit test yields to a shown twin.
 			expect(await attempt(`tab.click("text/Faded")`)).toContain("last check: opacity:0");
-			expect(await attempt(`tab.click("text/Twin")`)).toContain("last check: pointer-events:none");
+			expect(await attempt(`tab.click("text/Twin")`)).toBe("clicked");
 			// The browser drops these clicks, so they fail rather than report success.
 			expect(await attempt(`tab.click("#off")`)).toContain("did not deliver the click");
 			expect(await attempt(`tab.click("text/Asleep")`)).toContain("did not deliver the click");
@@ -922,6 +922,18 @@ document.getElementById("actions").attachShadow({ mode: "open" }).innerHTML =
 			await page.setContent(`<div inert><button id="shell">Shell</button><dialog id="dlg"><button id="ok">OK</button></dialog></div>
 <script>document.getElementById("dlg").showModal();</script>`);
 			expect(await outcomes(["ok", "shell"])).toEqual({ ok: "clicked", shell: "covered" });
+			// A button in a closed shadow root receives the click though the window only sees its host.
+			const closed = await page.evaluateHandle(`(() => {
+	const host = document.body.appendChild(document.createElement("div"));
+	const root = host.attachShadow({ mode: "closed" });
+	root.innerHTML = "<button>Closed</button>";
+	return root.querySelector("button");
+})()`);
+			const closedButton = closed.asElement();
+			if (!closedButton) throw new Error("Expected the closed-root button");
+			await page.evaluate("document.querySelector('dialog').close()");
+			expect(await clickElement(closedButton, "click closed").then(() => "clicked")).toBe("clicked");
+			await closed.dispose();
 		} finally {
 			await page.close().catch(() => undefined);
 			if (browserHandle.browser.connected) await releaseBrowser(browserHandle, { kill: true });
