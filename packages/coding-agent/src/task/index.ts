@@ -743,7 +743,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	/**
 	 * Result contract for a spawn: with `task.structured` the caller's
 	 * `outputSchema`/`schemaMode` pass through; without it the child gets no
-	 * schema or `yield` tool and returns its final message.
+	 * schema or `yield` tool and returns its final message, unless its agent
+	 * declares `structured: true` (resolved in the shared subagent policy).
 	 */
 	#resultParams(params: TaskParams): Pick<StructuredSubagentRequest, "outputSchema" | "schemaMode" | "structured"> {
 		if (!this.#isStructured()) return { structured: false };
