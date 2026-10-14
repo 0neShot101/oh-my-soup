@@ -188,9 +188,6 @@ export function createFrameApi(frame: Frame, hooks: FrameApiHooks): BrowserFrame
 		selector,
 		zeroMatchAfterMs: hooks.zeroMatchAfterMs,
 	});
-	// `text()`/`html()` read the frame's `<body>` when no selector is given; any value passed, `null` included, is
-	// still checked as a selector, as on the tab.
-	const bodyIfOmitted = (selector: string | undefined): string => (selector === undefined ? "body" : selector);
 	const waitForSelector = (selector: string, options?: FrameWaitOptions): Promise<boolean> => {
 		const deadline = hooks.waitMs(options?.timeout);
 		return hooks.op(
@@ -282,25 +279,27 @@ export function createFrameApi(frame: Frame, hooks: FrameApiHooks): BrowserFrame
 					await untilAborted(signal, () => frame.focus(hooks.normalizeSelector(options.selector!)));
 				await untilAborted(signal, () => pressKey(frame.page(), key));
 			}),
-		text: selector =>
+		// Without a selector, the frame's `<body>`; any value passed, `null` included, is still checked as a selector.
+		text: (selector = "body") =>
 			hooks.op(
-				`frame.text(${JSON.stringify(bodyIfOmitted(selector))})`,
+				`frame.text(${JSON.stringify(selector)})`,
 				hooks.quickOpMs,
 				signal =>
 					untilAborted(signal, () =>
-						frame.$eval(hooks.normalizeSelector(bodyIfOmitted(selector)), element => element.textContent ?? ""),
+						frame.$eval(hooks.normalizeSelector(selector), element => {
+							const rendered = "innerText" in element ? element.innerText : undefined;
+							return (typeof rendered === "string" ? rendered : (element.textContent ?? "")).trim();
+						}),
 					),
-				selectorOptions(bodyIfOmitted(selector)),
+				selectorOptions(selector),
 			),
-		html: selector =>
+		html: (selector = "body") =>
 			hooks.op(
-				`frame.html(${JSON.stringify(bodyIfOmitted(selector))})`,
+				`frame.html(${JSON.stringify(selector)})`,
 				hooks.quickOpMs,
 				signal =>
-					untilAborted(signal, () =>
-						frame.$eval(hooks.normalizeSelector(bodyIfOmitted(selector)), element => element.innerHTML),
-					),
-				selectorOptions(bodyIfOmitted(selector)),
+					untilAborted(signal, () => frame.$eval(hooks.normalizeSelector(selector), element => element.innerHTML)),
+				selectorOptions(selector),
 			),
 		value: selector =>
 			hooks.op(
