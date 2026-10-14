@@ -36,7 +36,7 @@ import {
 	isIdaDatabasePath,
 } from "../ida";
 import { normalizeToLF } from "../edit/normalize";
-import { getEditStore } from "../edit/store";
+import { getEditStore, recordFullySeenRows } from "../edit/store";
 import {
 	extractUriScheme,
 	type InternalResource,
@@ -128,6 +128,7 @@ import {
 	type SuffixMatchCache,
 } from "./read-path-resolution";
 import { type PdfImageReadTarget, renderPdfPageScreenshot, splitPdfImageReadPath } from "./read-pdf";
+import { ternShowsMedia } from "./tern-media";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import {
 	VideoError,
@@ -755,6 +756,19 @@ interface LocatedRead {
 	spec: SchemeSpec;
 }
 
+interface FilesystemReadOptions {
+	located?: LocatedRead;
+	question?: string;
+	/** Model-facing path for `?q=` hints; defaults to the displayed file path. */
+	questionPath?: string;
+	signal?: AbortSignal;
+	onBufferedFile?: (bytes: Buffer) => void;
+	onConflictMarkers?: () => void;
+	lexicalAbsolutePath?: string;
+	/** Keep image routing under `:raw` (see `AgentToolContext.rawImages`). */
+	rawImages?: boolean;
+}
+
 /**
  * Workflow hint for a large located file: page it through its URL, search/copy its backing
  * file. `rawBlocked` explains a refused whole-file `:raw` read.
@@ -834,7 +848,16 @@ function appendRepeatReadHint(session: ToolSession, path: string, result: AgentT
 	const tracker = holder[kRepeatReadTracker];
 	if (tracker.size > REPEAT_READ_TRACKER_CAP) tracker.clear();
 
-	const hash = Bun.hash.xxHash64(block.text);
+	let hash = BigInt(result.content.length);
+	for (const content of result.content) {
+		hash = Bun.hash.wyhash(content.type, hash);
+		if (content.type === "text") {
+			hash = Bun.hash.wyhash(content.text, hash);
+		} else if (content.type === "image") {
+			hash = Bun.hash.wyhash(content.mimeType, hash);
+			hash = Bun.hash.wyhash(content.data, hash);
+		}
+	}
 	const entry = tracker.get(path);
 	if (!entry || entry.hash !== hash) {
 		tracker.set(path, { hash, count: 1 });
@@ -1521,6 +1544,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const displayLineByNumber = new Map<number, string>();
 		const fullLines = rawSelector ? undefined : buffered?.addressableLines;
 		let columnCut: ColumnCut | undefined;
+		let cutLines: Set<number> | undefined;
 		let displayContent: { text: string; startLine: number; lineNumbers?: Array<number | null> } | undefined;
 
 		for (const range of ranges) {
@@ -1566,6 +1590,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						if (!cloned) cloned = collectedLines.slice();
 						cloned[i] = text;
 						columnCut = addColumnCut(columnCut, maxColumns, range.startLine + i);
+						(cutLines ??= new Set()).add(range.startLine + i);
 					}
 				}
 				if (cloned) displayLines = cloned;
@@ -1600,6 +1625,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						const truncated = truncateLine(sourceText, maxColumns);
 						if (truncated.wasTruncated) {
 							columnCut = addColumnCut(columnCut, maxColumns, lineNumber);
+							(cutLines ??= new Set()).add(lineNumber);
 						}
 						return truncated.text;
 					},
@@ -1620,7 +1646,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				? getEditStore(this.session).recordSnapshot(absolutePath, buffered.normalizedText)
 				: getEditStore(this.session).recordSnapshotFile(absolutePath);
 			if (tag) {
-				getEditStore(this.session).recordSeenLinesFromBody(absolutePath, tag, outputText);
+				recordFullySeenRows(getEditStore(this.session), absolutePath, tag, outputText, cutLines);
 				outputText = `${formatReadHashlineHeader(formatPathRelativeToCwd(absolutePath, this.session.cwd), tag)}\n${outputText}`;
 			}
 		} else if (rawSelector && visibleSpans.length > 0) {
@@ -1658,7 +1684,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		params: ReadParams,
 		signal?: AbortSignal,
 		_onUpdate?: AgentToolUpdateCallback<ReadToolDetails>,
-		_toolContext?: AgentToolContext,
+		toolContext?: AgentToolContext,
 		onBufferedFile?: (bytes: Buffer) => void,
 		onConflictMarkers?: () => void,
 		lexicalAbsolutePath?: string,
@@ -1726,6 +1752,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				located = { url, path: target.path, sel: target.sel, spec: target.spec };
 			}
 		}
+		const rawImages = toolContext?.rawImages === true;
 		if (!located) {
 			return this.#readFilesystemPath(readPath, {
 				question,
@@ -1733,6 +1760,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				onBufferedFile,
 				onConflictMarkers,
 				lexicalAbsolutePath,
+				rawImages,
 			});
 		}
 		// A located URL reads its backing file through the filesystem pipeline (images, `:img`,
@@ -1742,6 +1770,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			question,
 			questionPath: readPath,
 			signal,
+			rawImages,
 		});
 		const details: ReadToolDetails = result.details ?? {};
 		details.resolvedPath ??= located.path;
@@ -1763,22 +1792,35 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	 * The filesystem read pipeline: directories, archives, sqlite, PDFs, video,
 	 * images, documents, notebooks, and streamed/paged text. `located` carries
 	 * the URL a routed read resolved to `readPath`; its hints name that URL.
+	 * A whole read of a file Tern's media viewer shows records it as display-only
+	 * `details.mediaPath`, whatever content the model receives.
 	 */
 	async #readFilesystemPath(
 		readPath: string,
-		options: {
-			located?: LocatedRead;
-			question?: string;
-			/** Model-facing path for `?q=` hints; defaults to the displayed file path. */
-			questionPath?: string;
-			signal?: AbortSignal;
-			onBufferedFile?: (bytes: Buffer) => void;
-			onConflictMarkers?: () => void;
-			lexicalAbsolutePath?: string;
-		},
+		options: FilesystemReadOptions,
 	): Promise<AgentToolResult<ReadToolDetails>> {
-		const { located, question, questionPath, signal, onBufferedFile, onConflictMarkers, lexicalAbsolutePath } =
-			options;
+		const media: { path?: string } = {};
+		const result = await this.#readFilesystemPipeline(readPath, options, media);
+		if (media.path === undefined || result.isError) return result;
+		return { ...result, details: { ...result.details, mediaPath: media.path } };
+	}
+
+	/** {@link #readFilesystemPath}'s body; sets `media.path` once the read is known to be a whole Tern-viewable file. */
+	async #readFilesystemPipeline(
+		readPath: string,
+		options: FilesystemReadOptions,
+		media: { path?: string },
+	): Promise<AgentToolResult<ReadToolDetails>> {
+		const {
+			located,
+			question,
+			questionPath,
+			signal,
+			onBufferedFile,
+			onConflictMarkers,
+			lexicalAbsolutePath,
+			rawImages,
+		} = options;
 		const immutable = located?.spec.immutable === true;
 		const displayMode = resolveFileDisplayMode(this.session, { immutable });
 		// In-body continuation hints name the URL for located reads, so paging stays on the URL.
@@ -1980,6 +2022,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				.done();
 		}
 
+		// Whole-file reads only (no selector, `:raw`, `:img`); line ranges and video frames show their slice.
+		if (
+			(localTarget.sel === undefined || parsed.kind === "raw" || parsed.kind === "image") &&
+			ternShowsMedia(absolutePath)
+		) {
+			media.path = absolutePath;
+		}
+
 		const ext = path.extname(renderAbsolutePath).toLowerCase();
 		// Buffer once for every consumer below: the image sniff, the binary sniff,
 		// the structural summary, the rendered window, bracket context, and the
@@ -1990,11 +2040,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		// extension, since only magic bytes — never the name — decide.
 		const wholeFileBytes = fileSize <= SNAPSHOT_MAX_BYTES ? await readWholeFile(absolutePath) : undefined;
 		const imageHeader = wholeFileBytes?.subarray(0, IMAGE_METADATA_HEADER_BYTES);
-		const imageMetadata = isRawSelector(parsed)
-			? null
-			: imageHeader !== undefined
-				? parseImageMetadata(imageHeader)
-				: await readImageMetadata(absolutePath);
+		const imageMetadata =
+			isRawSelector(parsed) && !rawImages
+				? null
+				: imageHeader !== undefined
+					? parseImageMetadata(imageHeader)
+					: await readImageMetadata(absolutePath);
 		const mimeType = imageMetadata?.mimeType;
 		const resolvedDisplayPath = located?.url ?? formatPathRelativeToCwd(renderAbsolutePath, this.session.cwd);
 		const shouldConvertWithMarkit = CONVERTIBLE_EXTENSIONS.has(ext);
@@ -2343,6 +2394,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					// ellipsis-truncated text made every long-line file uneditable on
 					// the next edit attempt.
 					let displayLines: string[] = collectedLines;
+					let cutLines: Set<number> | undefined;
 					if (!rawSelector && maxColumns > 0) {
 						let cloned: string[] | undefined;
 						for (let i = 0; i < collectedLines.length; i++) {
@@ -2351,6 +2403,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 								if (!cloned) cloned = collectedLines.slice();
 								cloned[i] = text;
 								columnCut = addColumnCut(columnCut, maxColumns, startLineDisplay + i);
+								(cutLines ??= new Set()).add(startLineDisplay + i);
 							}
 						}
 						if (cloned) displayLines = cloned;
@@ -2463,6 +2516,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 									const truncated = truncateLine(sourceText, maxColumns);
 									if (truncated.wasTruncated) {
 										columnCut = addColumnCut(columnCut, maxColumns, lineNumber);
+										(cutLines ??= new Set()).add(lineNumber);
 									}
 									return truncated.text;
 								},
@@ -2575,7 +2629,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					if (reachedEof) details.totalLines = totalFileLines;
 
 					if (hashContext?.tag) {
-						getEditStore(this.session).recordSeenLinesFromBody(absolutePath, hashContext.tag, outputText);
+						recordFullySeenRows(getEditStore(this.session), absolutePath, hashContext.tag, outputText, cutLines);
 					}
 					if (rawSelector && !immutable && !firstLineExceedsLimit && collectedLines.length > 0) {
 						// A raw read emits no header, but recording the range it displayed
