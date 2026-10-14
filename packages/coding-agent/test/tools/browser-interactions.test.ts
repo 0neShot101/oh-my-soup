@@ -870,6 +870,29 @@ return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.e
 		}
 	}, 30_000);
 
+	test("skips off-screen text matches that are disabled or stay clipped once scrolled to", async () => {
+		const browserHandle = await acquireBrowser({ kind: "headless", headless: true }, { cwd: process.cwd() });
+		if (!("browser" in browserHandle)) throw new Error("Expected a Puppeteer browser");
+		const page = await browserHandle.browser.newPage();
+		try {
+			await page.setContent(`<div style="height: 3000px"></div><button id="disabled" disabled>Far</button>
+<div style="height: 3000px"></div><div style="overflow: hidden; height: 0"><button id="clipped">Far</button></div>
+<div style="height: 3000px"></div><button id="enabled">Far</button>`);
+			const handles = await page.$$("text/Far");
+			const winner = await resolveActionableQueryHandlerClickTarget(handles);
+			const winnerId = await winner?.evaluate(el => {
+				// Puppeteer's page callback type cannot name DOM globals in this test environment.
+				const element = el as unknown as { id: string };
+				return element.id;
+			});
+			expect(winnerId).toBe("enabled");
+			await Promise.all([winner, ...handles].map(handle => handle?.dispose()));
+		} finally {
+			await page.close().catch(() => undefined);
+			if (browserHandle.browser.connected) await releaseBrowser(browserHandle, { kill: true });
+		}
+	}, 30_000);
+
 	test("scrolls off-screen text matches only until the first reachable one", async () => {
 		const browserHandle = await acquireBrowser({ kind: "headless", headless: true }, { cwd: process.cwd() });
 		if (!("browser" in browserHandle)) throw new Error("Expected a Puppeteer browser");

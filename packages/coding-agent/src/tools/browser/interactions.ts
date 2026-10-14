@@ -414,6 +414,138 @@ async function disposeOwned(candidates: Iterable<QueryCandidate>): Promise<void>
 	}
 }
 
+interface MeasuredBox {
+	x: number;
+	y: number;
+	sized: boolean;
+	onScreen: boolean;
+	disabled: boolean;
+}
+
+/**
+ * Runs in the page: the element's document position, whether it has a box, whether any of it shows
+ * through the viewport and its clipping ancestors, and whether it is a disabled control.
+ * Self-contained, since Puppeteer serializes it.
+ */
+function measureBoxInPage(el: unknown): MeasuredBox {
+	const element = el as unknown as PageElement;
+	type Style = Record<
+		| "position"
+		| "display"
+		| "overflowX"
+		| "overflowY"
+		| "transform"
+		| "translate"
+		| "rotate"
+		| "scale"
+		| "perspective"
+		| "filter"
+		| "backdropFilter"
+		| "contain"
+		| "containerType"
+		| "contentVisibility"
+		| "willChange",
+		string
+	>;
+	const page = globalThis as unknown as {
+		innerWidth: number;
+		innerHeight: number;
+		scrollX: number;
+		scrollY: number;
+		getComputedStyle(element: PageElement): Style;
+	};
+	// Flat-tree parent: a slotted node renders inside its slot (which may itself be slotted).
+	const flatParent = (node: PageElement): PageElement | null =>
+		node.assignedSlot ?? node.parentElement ?? node.getRootNode().host ?? null;
+	// Boxes that become the containing block of fixed descendants (and so of absolute ones too).
+	const containsFixed = (style: Style): boolean =>
+		style.transform !== "none" ||
+		style.translate !== "none" ||
+		style.rotate !== "none" ||
+		style.scale !== "none" ||
+		style.perspective !== "none" ||
+		style.filter !== "none" ||
+		(style.backdropFilter ?? "none") !== "none" ||
+		/paint|layout|strict|content/.test(style.contain) ||
+		/size/.test(style.containerType ?? "") ||
+		style.contentVisibility === "auto" ||
+		/transform|perspective|filter|translate|rotate|scale/.test(style.willChange);
+	// A top-layer box (modal dialog, open popover) renders outside every ancestor's clip.
+	const inTopLayer = (node: PageElement): boolean => {
+		try {
+			return node.matches(":modal, :popover-open");
+		} catch {
+			return false;
+		}
+	};
+	// Descendants are clipped at the padding edge, so a border never shows them.
+	const paddingBox = (node: PageElement) => {
+		const box = node.getBoundingClientRect();
+		const scaleX = node.offsetWidth ? box.width / node.offsetWidth : 1;
+		const scaleY = node.offsetHeight ? box.height / node.offsetHeight : 1;
+		const left = box.left + (node.clientLeft ?? 0) * scaleX;
+		const top = box.top + (node.clientTop ?? 0) * scaleY;
+		return {
+			left,
+			top,
+			right: node.clientWidth === undefined ? box.right : left + node.clientWidth * scaleX,
+			bottom: node.clientHeight === undefined ? box.bottom : top + node.clientHeight * scaleY,
+		};
+	};
+	const rect = element.getBoundingClientRect();
+	const view = { left: 0, top: 0, right: page.innerWidth, bottom: page.innerHeight };
+	// An overflow box clips only descendants whose containing block lies inside it: an absolute
+	// box escapes static ancestors, a fixed one every ancestor up to one that contains fixed boxes.
+	let position = page.getComputedStyle(element).position;
+	for (let node = inTopLayer(element) ? null : flatParent(element); node; node = flatParent(node)) {
+		// <html> and <body> overflow normally applies to the viewport, which is already the starting clip.
+		if (node.tagName === "BODY" || node.tagName === "HTML") break;
+		const style = page.getComputedStyle(node);
+		// Nothing above a top-layer box clips it, whichever box contains the match.
+		const topLayer = inTopLayer(node);
+		// A display:contents node (e.g. a default <slot>) has no box to clip or contain anything.
+		const skip =
+			style.display === "contents" ||
+			(position === "fixed" && !containsFixed(style)) ||
+			(position === "absolute" && style.position === "static" && !containsFixed(style));
+		if (skip) {
+			if (topLayer) break;
+			continue;
+		}
+		position = style.position;
+		// Overflow does not apply to a non-replaced inline box; paint containment clips like overflow.
+		const paintClip = /paint|strict|content/.test(style.contain);
+		const clipX = paintClip || (style.overflowX !== "visible" && style.display !== "inline");
+		const clipY = paintClip || (style.overflowY !== "visible" && style.display !== "inline");
+		if (clipX || clipY) {
+			const clip = paddingBox(node);
+			if (clipX) {
+				view.left = Math.max(view.left, clip.left);
+				view.right = Math.min(view.right, clip.right);
+			}
+			if (clipY) {
+				view.top = Math.max(view.top, clip.top);
+				view.bottom = Math.min(view.bottom, clip.bottom);
+			}
+		}
+		if (topLayer) break;
+	}
+	return {
+		x: rect.left + page.scrollX,
+		y: rect.top + page.scrollY,
+		sized: rect.width >= 1 && rect.height >= 1,
+		onScreen:
+			view.right > view.left &&
+			view.bottom > view.top &&
+			rect.right > view.left &&
+			rect.bottom > view.top &&
+			rect.left < view.right &&
+			rect.top < view.bottom,
+		// A disabled native control takes no click, though hit-testing still finds it.
+		disabled: element.matches(":disabled"),
+	};
+}
+
 /**
  * Lift a text match to its clickable ancestor and measure it, or return null for a match with no box.
  * Geometry comes from `getBoundingClientRect`, clipped by the viewport and by the `overflow` boxes an
@@ -435,124 +567,7 @@ async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal
 			candidate = element;
 			owned = candidate !== handle;
 		} else await proxy.dispose();
-		const box = (await untilAborted(signal, () =>
-			candidate.evaluate(el => {
-				const element = el as unknown as PageElement;
-				type Style = Record<
-					| "position"
-					| "display"
-					| "overflowX"
-					| "overflowY"
-					| "transform"
-					| "translate"
-					| "rotate"
-					| "scale"
-					| "perspective"
-					| "filter"
-					| "backdropFilter"
-					| "contain"
-					| "containerType"
-					| "contentVisibility"
-					| "willChange",
-					string
-				>;
-				const page = globalThis as unknown as {
-					innerWidth: number;
-					innerHeight: number;
-					scrollX: number;
-					scrollY: number;
-					getComputedStyle(element: PageElement): Style;
-				};
-				// Flat-tree parent: a slotted node renders inside its slot (which may itself be slotted).
-				const flatParent = (node: PageElement): PageElement | null =>
-					node.assignedSlot ?? node.parentElement ?? node.getRootNode().host ?? null;
-				// Boxes that become the containing block of fixed descendants (and so of absolute ones too).
-				const containsFixed = (style: Style): boolean =>
-					style.transform !== "none" ||
-					style.translate !== "none" ||
-					style.rotate !== "none" ||
-					style.scale !== "none" ||
-					style.perspective !== "none" ||
-					style.filter !== "none" ||
-					(style.backdropFilter ?? "none") !== "none" ||
-					/paint|layout|strict|content/.test(style.contain) ||
-					/size/.test(style.containerType ?? "") ||
-					style.contentVisibility === "auto" ||
-					/transform|perspective|filter|translate|rotate|scale/.test(style.willChange);
-				// A top-layer box (modal dialog, open popover) renders outside every ancestor's clip.
-				const inTopLayer = (node: PageElement): boolean => {
-					try {
-						return node.matches(":modal, :popover-open");
-					} catch {
-						return false;
-					}
-				};
-				// Descendants are clipped at the padding edge, so a border never shows them.
-				const paddingBox = (node: PageElement) => {
-					const box = node.getBoundingClientRect();
-					const scaleX = node.offsetWidth ? box.width / node.offsetWidth : 1;
-					const scaleY = node.offsetHeight ? box.height / node.offsetHeight : 1;
-					const left = box.left + (node.clientLeft ?? 0) * scaleX;
-					const top = box.top + (node.clientTop ?? 0) * scaleY;
-					return {
-						left,
-						top,
-						right: node.clientWidth === undefined ? box.right : left + node.clientWidth * scaleX,
-						bottom: node.clientHeight === undefined ? box.bottom : top + node.clientHeight * scaleY,
-					};
-				};
-				const rect = element.getBoundingClientRect();
-				const view = { left: 0, top: 0, right: page.innerWidth, bottom: page.innerHeight };
-				// An overflow box clips only descendants whose containing block lies inside it: an absolute
-				// box escapes static ancestors, a fixed one every ancestor up to one that contains fixed boxes.
-				let position = page.getComputedStyle(element).position;
-				for (let node = inTopLayer(element) ? null : flatParent(element); node; node = flatParent(node)) {
-					// <html> and <body> overflow normally applies to the viewport, which is already the starting clip.
-					if (node.tagName === "BODY" || node.tagName === "HTML") break;
-					const style = page.getComputedStyle(node);
-					// Nothing above a top-layer box clips it, whichever box contains the match.
-					const topLayer = inTopLayer(node);
-					// A display:contents node (e.g. a default <slot>) has no box to clip or contain anything.
-					const skip =
-						style.display === "contents" ||
-						(position === "fixed" && !containsFixed(style)) ||
-						(position === "absolute" && style.position === "static" && !containsFixed(style));
-					if (skip) {
-						if (topLayer) break;
-						continue;
-					}
-					position = style.position;
-					// Overflow does not apply to a non-replaced inline box; paint containment clips like overflow.
-					const paintClip = /paint|strict|content/.test(style.contain);
-					const clipX = paintClip || (style.overflowX !== "visible" && style.display !== "inline");
-					const clipY = paintClip || (style.overflowY !== "visible" && style.display !== "inline");
-					if (clipX || clipY) {
-						const clip = paddingBox(node);
-						if (clipX) {
-							view.left = Math.max(view.left, clip.left);
-							view.right = Math.min(view.right, clip.right);
-						}
-						if (clipY) {
-							view.top = Math.max(view.top, clip.top);
-							view.bottom = Math.min(view.bottom, clip.bottom);
-						}
-					}
-					if (topLayer) break;
-				}
-				return {
-					x: rect.left + page.scrollX,
-					y: rect.top + page.scrollY,
-					sized: rect.width >= 1 && rect.height >= 1,
-					onScreen:
-						view.right > view.left &&
-						view.bottom > view.top &&
-						rect.right > view.left &&
-						rect.bottom > view.top &&
-						rect.left < view.right &&
-						rect.top < view.bottom,
-				};
-			}),
-		)) as { x: number; y: number; sized: boolean; onScreen: boolean };
+		const box = await untilAborted(signal, () => candidate.evaluate(measureBoxInPage));
 		if (box.sized) return { handle: candidate, x: box.x, y: box.y, onScreen: box.onScreen, owned };
 	} catch (error) {
 		if (owned) await candidate.dispose().catch(() => undefined);
@@ -563,7 +578,10 @@ async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal
 	return null;
 }
 
-/** Scroll an off-screen match into view and report whether a click could reach it (or names what covers it). */
+/**
+ * Scroll an off-screen match into view and report whether a click could reach it (or names what covers it).
+ * Hit-testing alone accepts a clipping ancestor and a disabled control, so the match must also show and be enabled.
+ */
 async function scrollToClickable(handle: ElementHandle, signal?: AbortSignal): Promise<boolean> {
 	try {
 		await untilAborted(signal, () =>
@@ -572,6 +590,8 @@ async function scrollToClickable(handle: ElementHandle, signal?: AbortSignal): P
 				element.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
 			}),
 		);
+		const box = await untilAborted(signal, () => handle.evaluate(measureBoxInPage));
+		if (!box.onScreen || box.disabled) return false;
 		const actionable = await isClickActionable(handle, signal);
 		return actionable.ok || actionable.coveredBy !== undefined;
 	} catch (error) {
