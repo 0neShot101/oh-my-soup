@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fixed the macOS `computer` tool sometimes reading an empty page on its first read of a Chrome window, and leaving Electron apps it read in screen-reader mode until they quit ([#15604](https://github.com/can1357/oh-my-pi/pull/15604) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed macOS `press()` on a scrolled-out row in a Mac Catalyst app reporting success while nothing happened: the element is asked to scroll into view first ([#15607](https://github.com/can1357/oh-my-pi/pull/15607) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.10.4] - 2026-10-13
