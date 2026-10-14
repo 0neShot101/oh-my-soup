@@ -1033,15 +1033,17 @@ export function getProjectDiscoveryCeilings(): ReadonlySet<string> {
 	return ceilings;
 }
 
-/** User config roots are not project anchors, except for an active repo-local agent directory. */
+/** The current user's config roots are never project anchors. */
 export async function isUserConfigRoot(root: string): Promise<boolean> {
 	const configDir = normalizePathForComparison(path.join(root, getConfigDirName()));
-	if (
+	return (
 		configDir === normalizePathForComparison(path.join(os.homedir(), getConfigDirName())) ||
 		configDir === normalizePathForComparison(path.dirname(getPluginsDir()))
-	)
-		return true;
-	// Another account's default user config is still user scope when HOME is overridden.
+	);
+}
+
+/** An inactive default user layout is not a project anchor above a git root or without a repo. */
+export async function isForeignUserConfigRoot(root: string): Promise<boolean> {
 	try {
 		const agentDir = path.join(root, SOURCE_PATHS.native.userAgent);
 		const stat = await fs.promises.stat(agentDir);
@@ -1061,6 +1063,8 @@ export async function isUserConfigRoot(root: string): Promise<boolean> {
  *    The git root is used as an anchor: `<gitRoot>/.omp/plugins/installed_plugins.json`.
  * 3. Stop before home or a temporary root in either pass. If neither anchor is
  *    found below that ceiling, return `null` — no project context is active.
+ * Inactive `.omp/agent/` layouts are skipped only above the nearest git root,
+ * or throughout an unanchored walk, so repo-local agent directories stay project scope.
  *
  * This is the single source of truth for "active project root" used by install,
  * uninstall, list, upgrade, discovery, and doctor. Deterministic for a given `cwd`.
@@ -1070,13 +1074,17 @@ export async function resolveActiveProjectRegistryPath(cwd: string): Promise<str
 }
 
 async function resolveProjectRegistryPath(cwd: string, ceilings: ReadonlySet<string>): Promise<string | null> {
-	// Pass 1: walk up looking for an existing .omp/ directory (nearest wins).
+	// Find the nearest git root once, retaining the existing user-root exclusion for fallback.
+	let nearestGitRoot: string | null = null;
+	let gitAnchor: string | null = null;
 	let dir = path.resolve(cwd);
 	while (!ceilings.has(normalizePathForComparison(dir))) {
 		try {
-			const stat = await fs.promises.stat(path.join(dir, getConfigDirName()));
-			if (stat.isDirectory() && !(await isUserConfigRoot(dir))) {
-				return path.join(dir, getConfigDirName(), "plugins", "installed_plugins.json");
+			await fs.promises.stat(path.join(dir, ".git"));
+			nearestGitRoot ??= dir;
+			if (!(await isUserConfigRoot(dir))) {
+				gitAnchor = dir;
+				break;
 			}
 		} catch {
 			// not found at this level — continue up
@@ -1086,22 +1094,29 @@ async function resolveProjectRegistryPath(cwd: string, ceilings: ReadonlySet<str
 		dir = parent;
 	}
 
-	// Pass 2: walk up looking for .git as a fallback anchor.
+	// Existing .omp/ directories still win, even above the git root, except foreign user roots.
+	let aboveGitRoot = nearestGitRoot === null;
 	dir = path.resolve(cwd);
 	while (!ceilings.has(normalizePathForComparison(dir))) {
 		try {
-			await fs.promises.stat(path.join(dir, ".git"));
-			if (!(await isUserConfigRoot(dir)))
+			const stat = await fs.promises.stat(path.join(dir, getConfigDirName()));
+			if (
+				stat.isDirectory() &&
+				!(await isUserConfigRoot(dir)) &&
+				(!aboveGitRoot || !(await isForeignUserConfigRoot(dir)))
+			) {
 				return path.join(dir, getConfigDirName(), "plugins", "installed_plugins.json");
+			}
 		} catch {
 			// not found at this level — continue up
 		}
+		if (dir === nearestGitRoot) aboveGitRoot = true;
 		const parent = path.dirname(dir);
 		if (parent === dir) break; // filesystem root
 		dir = parent;
 	}
 
-	return null; // not inside any project
+	return gitAnchor ? path.join(gitAnchor, getConfigDirName(), "plugins", "installed_plugins.json") : null;
 }
 
 /**
@@ -1119,7 +1134,13 @@ export async function resolveOrDefaultProjectRegistryPath(cwd: string): Promise<
 	const ceilings = getProjectDiscoveryCeilings();
 	const resolved = await resolveProjectRegistryPath(cwd, ceilings);
 	if (resolved) return resolved;
-	if (ceilings.has(normalizePathForComparison(cwd)) || (await isUserConfigRoot(cwd))) return undefined;
+	// A cwd containing .omp/ at or below a git root already resolved above.
+	if (
+		ceilings.has(normalizePathForComparison(cwd)) ||
+		(await isUserConfigRoot(cwd)) ||
+		(await isForeignUserConfigRoot(cwd))
+	)
+		return undefined;
 	return path.join(cwd, getConfigDirName(), "plugins", "installed_plugins.json");
 }
 

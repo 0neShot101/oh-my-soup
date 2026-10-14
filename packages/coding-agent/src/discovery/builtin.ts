@@ -31,6 +31,7 @@ import {
 	expandEnvVarsDeep,
 	getExtensionNameFromPath,
 	getProjectDiscoveryCeilings,
+	isForeignUserConfigRoot,
 	isUserConfigRoot,
 	loadFilesFromDir,
 	parseRequestIdFormat,
@@ -101,6 +102,7 @@ export async function* getProjectAncestorDirs(ctx: LoadContext): AsyncGenerator<
 	const home = normalizePathForComparison(ctx.home);
 	for (const ancestor of getAncestorDirs(ctx.cwd, ctx.repoRoot ?? ctx.home)) {
 		if (normalizePathForComparison(ancestor.dir) === home || (await isUserConfigRoot(ancestor.dir))) continue;
+		if (!ctx.repoRoot && (await isForeignUserConfigRoot(ancestor.dir))) continue;
 		yield ancestor;
 	}
 }

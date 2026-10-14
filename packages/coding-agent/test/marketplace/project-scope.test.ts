@@ -19,6 +19,7 @@ import {
 	resolveOrDefaultProjectRegistryPath,
 } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { MarketplaceManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace/manager";
+import { getEnabledPlugins } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
 import type { InstalledPluginEntry } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 import {
 	addInstalledPlugin,
@@ -51,6 +52,7 @@ describe("resolveActiveProjectRegistryPath", () => {
 	});
 
 	afterEach(() => {
+		clearClaudePluginRootsCache();
 		vi.restoreAllMocks();
 		removeSyncWithRetries(tmpDir);
 	});
@@ -169,13 +171,57 @@ describe("resolveActiveProjectRegistryPath", () => {
 		const project = path.join(tmpDir, "project");
 		const agentDir = path.join(project, ".omp", "agent");
 		fs.mkdirSync(agentDir, { recursive: true });
-		fs.mkdirSync(path.join(project, ".git"), { recursive: true });
 		vi.spyOn(os, "homedir").mockReturnValue(path.join(tmpDir, "isolated-home"));
 		vi.spyOn(piUtils, "getAgentDir").mockReturnValue(`${agentDir}${path.sep}`);
 		const registry = path.join(project, ".omp", "plugins", "installed_plugins.json");
 
 		expect(await resolveActiveProjectRegistryPath(project)).toBe(registry);
 		expect(await resolveOrDefaultProjectRegistryPath(project)).toBe(registry);
+	});
+
+	it.each([".", "nested"])("keeps .omp/agent at or below a git root (%s) in project scope", async subdir => {
+		const project = path.join(tmpDir, "project");
+		const anchor = path.join(project, subdir);
+		const cwd = path.join(anchor, "work");
+		const home = path.join(tmpDir, "isolated-home");
+		const pluginsDir = path.join(anchor, ".omp", "plugins");
+		const pluginDir = path.join(pluginsDir, "node_modules", "omp-project-agent");
+		fs.mkdirSync(path.join(project, ".git"), { recursive: true });
+		fs.mkdirSync(path.join(anchor, ".omp", "agent"), { recursive: true });
+		fs.mkdirSync(cwd, { recursive: true });
+		fs.mkdirSync(pluginDir, { recursive: true });
+		await Bun.write(
+			path.join(pluginsDir, "package.json"),
+			JSON.stringify({ dependencies: { "omp-project-agent": "*" } }),
+		);
+		await Bun.write(
+			path.join(pluginDir, "package.json"),
+			JSON.stringify({ name: "omp-project-agent", version: "1.0.0", omp: { tools: "tools" } }),
+		);
+		vi.spyOn(os, "homedir").mockReturnValue(home);
+		vi.spyOn(piUtils, "getAgentDir").mockReturnValue(path.join(home, ".omp", "agent"));
+		const registry = path.join(pluginsDir, "installed_plugins.json");
+
+		expect(await resolveActiveProjectRegistryPath(cwd)).toBe(registry);
+		expect(await resolveOrDefaultProjectRegistryPath(anchor)).toBe(registry);
+		const plugins = await getEnabledPlugins(cwd, { home });
+		expect(plugins.map(plugin => [plugin.name, plugin.scope, plugin.path])).toEqual([
+			["omp-project-agent", "project", pluginDir],
+		]);
+	});
+
+	it("skips an inactive user config root without a git anchor", async () => {
+		const foreignHome = path.join(tmpDir, "other-user");
+		const cwd = path.join(foreignHome, "scratch", "work");
+		fs.mkdirSync(path.join(foreignHome, ".omp", "agent"), { recursive: true });
+		fs.mkdirSync(path.join(foreignHome, ".omp", "plugins"), { recursive: true });
+		fs.mkdirSync(cwd, { recursive: true });
+		vi.spyOn(os, "tmpdir").mockReturnValue(tmpDir);
+		vi.spyOn(os, "homedir").mockReturnValue(path.join(tmpDir, "isolated-home"));
+		vi.spyOn(piUtils, "getAgentDir").mockReturnValue(path.join(tmpDir, "isolated-agent"));
+
+		expect(await resolveActiveProjectRegistryPath(cwd)).toBeNull();
+		expect(await resolveOrDefaultProjectRegistryPath(foreignHome)).toBeUndefined();
 	});
 
 	it("still prefers a plain ancestor .omp above the git root", async () => {

@@ -103,6 +103,31 @@ describe("skillshare discovery provider", () => {
 		expect(result.warnings).toEqual([]);
 	});
 
+	it("keeps a repo-local session agent directory's project lock and the process user lock", async () => {
+		const cwd = path.join(project, "nested");
+		const agentDir = path.join(project, ".omp", "agent");
+		await fs.mkdir(cwd, { recursive: true });
+		await fs.mkdir(agentDir, { recursive: true });
+		await storeSkill("alice", "local", "1.0.0", "Local registry skill");
+		await storeSkill("alice", "user", "1.0.0", "User registry skill");
+		await writeSkillsLock(path.join(project, ".omp", "skills.lock.json"), {
+			version: 1,
+			skills: { "@alice/local": lockEntry("alice", "local", "1.0.0") },
+		});
+		await writeSkillsLock(path.join(getAgentDir(), "skills.lock.json"), {
+			version: 1,
+			skills: { "@alice/user": lockEntry("alice", "user", "1.0.0") },
+		});
+
+		const result = await loadSkillshareSkills({ cwd, home: tempHome, repoRoot: project, agentDir });
+
+		expect(result.items.map(skill => [skill.name, skill.level])).toEqual([
+			["local", "project"],
+			["user", "user"],
+		]);
+		expect(result.warnings).toEqual([]);
+	});
+
 	it("loads project locks below the temporary root without inheriting locks at or above it", async () => {
 		const tempRoot = path.join(tempHome, "tmp");
 		const localProject = path.join(tempRoot, "project");

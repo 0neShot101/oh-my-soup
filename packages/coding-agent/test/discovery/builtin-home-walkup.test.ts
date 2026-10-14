@@ -110,6 +110,41 @@ test("native project config below the temporary root is still found", async () =
 	]);
 });
 
+test("a repo-local session agent directory does not hide native project config or skills", async () => {
+	const project = path.join(tempDir, "project");
+	const cwd = path.join(project, "nested");
+	const agentDir = path.join(project, ".omp", "agent");
+	fs.mkdirSync(cwd, { recursive: true });
+	fs.mkdirSync(path.join(project, ".git"), { recursive: true });
+	fs.mkdirSync(agentDir, { recursive: true });
+	vi.spyOn(os, "homedir").mockReturnValue(home);
+	writeFile(path.join(project, ".omp", "SYSTEM.md"), "project system prompt\n");
+	writeFile(path.join(project, ".omp", "RULES.md"), "project rule\n");
+	writeFile(path.join(project, ".omp", "AGENTS.md"), "project agents\n");
+	writeFile(
+		path.join(project, ".omp", "skills", "project", "SKILL.md"),
+		"---\nname: project\ndescription: project skill\n---\nbody\n",
+	);
+	const ctx: LoadContext = { cwd, home, repoRoot: project, agentDir };
+
+	const prompts = await loadNative<SystemPrompt>(systemPromptCapability.id, ctx);
+	const rules = await loadNative<Rule>(ruleCapability.id, ctx);
+	const contexts = await loadNative<ContextFile>(contextFileCapability.id, ctx);
+	const skills = await loadNative<Skill>(skillCapability.id, ctx);
+
+	expect({
+		prompts: prompts.map(prompt => prompt.path),
+		rules: rules.map(rule => rule.path),
+		contexts: contexts.map(context => context.path),
+		skills: skills.map(skill => skill.path),
+	}).toEqual({
+		prompts: [path.join(project, ".omp", "SYSTEM.md")],
+		rules: [path.join(project, ".omp", "RULES.md")],
+		contexts: [path.join(project, ".omp", "AGENTS.md")],
+		skills: [path.join(project, ".omp", "skills", "project", "SKILL.md")],
+	});
+});
+
 test("native project discovery skips a foreign user config root without hiding a workspace above it", async () => {
 	const foreignHome = path.join(tempDir, "alice");
 	const cwd = path.join(foreignHome, "scratch", "work");
