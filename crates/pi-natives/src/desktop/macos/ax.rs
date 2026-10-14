@@ -296,6 +296,9 @@ pub(super) fn key_window_id(pid: libc::pid_t) -> Option<u32> {
 pub(super) fn window_records(pid: libc::pid_t) -> Option<Vec<AxWindowRecord>> {
 	(*GET_WINDOW_ID)?;
 	let app = probe_application(pid)?;
+	// As on every window lookup, the role query switches on Chromium's web
+	// accessibility; only the first content read waits for it.
+	enablement::activate(&app);
 	let windows = copy_elements_optional(&app, "AXWindows")?;
 	// An unmappable sibling is still a possible keyboard destination. Dropping
 	// it would turn an incomplete AX tree into false proof of exclusivity.
