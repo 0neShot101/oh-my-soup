@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed wake completions falsely reporting no output when the agent already messaged its owner over IRC ([#PR](https://github.com/can1357/oh-my-pi/pull/PR) by [@mg-mg-mg](https://github.com/mg-mg-mg)).
+
 ## [18.11.0] - 2026-10-14
 
 ### Added

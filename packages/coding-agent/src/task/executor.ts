@@ -3106,13 +3106,16 @@ export function buildWakeRelayBody(args: {
 		return `${headline} ${context} ${transcript}`;
 	}
 
-	// Completed lane. `alreadyMessaged` completed turns were filtered upstream
-	// (their answer would duplicate what the agent already sent).
+	// Peer relays filter already-messaged completed turns upstream; parent-owned
+	// wake jobs still need an accurate completion when IRC was the only output.
 	const answer = summary ?? args.turnText.trim();
 	if (answer) return answer;
 	if (args.finalizeError) {
 		const message = args.finalizeError instanceof Error ? args.finalizeError.message : String(args.finalizeError);
 		return `Wake turn failed to finalize: ${message}. No answer was produced. ${transcript}`;
+	}
+	if (args.alreadyMessaged) {
+		return `Wake turn completed; ${args.id} sent a message during this turn. ${transcript}`;
 	}
 	return `Wake turn produced no output. ${transcript}`;
 }
