@@ -251,6 +251,16 @@ function isToolResultImageAttachment(item: Record<string, unknown>): boolean {
 	return hasLabel && hasImage;
 }
 
+/** Options for {@link trimRemoteCompactionInputToContextWindow}. */
+export interface TrimRemoteCompactionOptions {
+	/**
+	 * Whether oversized trailing tool outputs may be rewritten (default true).
+	 * False when a caller can compact a shorter prefix instead, so a kept tool
+	 * result replays intact rather than being replaced.
+	 */
+	rewriteOutputs?: boolean;
+}
+
 /**
  * Preserve the full native transcript unless trailing tool outputs alone push a
  * remote compaction request beyond the model window. Replacing only those
@@ -265,15 +275,16 @@ export function trimRemoteCompactionInputToContextWindow(
 	contextWindow: number | null | undefined,
 	instructions: string,
 	tools?: unknown[],
+	options?: TrimRemoteCompactionOptions,
 ): TrimRemoteCompactionInputResult {
 	const before = probeRemoteCompactionInputBudget(input, tokenizer, instructions, tools, contextWindow);
-	if (before.fits) {
+	if (before.fits || options?.rewriteOutputs === false) {
 		return {
 			input,
 			rewrittenOutputs: 0,
 			estimatedTokensBefore: before.tokens,
 			estimatedTokensAfter: before.tokens,
-			fits: true,
+			fits: before.fits || before.textFits,
 		};
 	}
 
@@ -848,6 +859,8 @@ export async function requestOpenAiRemoteCompaction(
 		sessionId?: string;
 		providerSessionState?: Map<string, ProviderSessionState>;
 		codexCompaction?: CodexCompactionContext;
+		/** Forwarded to {@link trimRemoteCompactionInputToContextWindow}. */
+		rewriteOutputs?: boolean;
 	},
 ): Promise<OpenAiRemoteCompactionResponse> {
 	let fetchImpl: FetchImpl = opts?.fetch ?? fetch;
@@ -861,6 +874,8 @@ export async function requestOpenAiRemoteCompaction(
 		new Tokenizer(model),
 		model.contextWindow,
 		instructions,
+		undefined,
+		{ rewriteOutputs: opts?.rewriteOutputs },
 	);
 	if (trimmed.rewrittenOutputs > 0) {
 		logger.info("Rewrote trailing tool outputs before OpenAI remote compaction", {

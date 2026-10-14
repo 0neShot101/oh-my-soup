@@ -1541,6 +1541,7 @@ export class SessionMaintenance {
 				tokensBefore,
 				details,
 				preserveData: snapcompact.stripPreservedArchive(preserveData),
+				...(providerReplayThroughEntryId ? { providerReplayThroughEntryId } : {}),
 			};
 			options?.onComplete?.(compactionResult);
 			return compactionResult;
@@ -5606,6 +5607,9 @@ export class SessionMaintenance {
 			tokensBefore: args.tokensBefore,
 			details: args.details,
 			preserveData: snapcompact.stripPreservedArchive(args.preserveData),
+			...(args.providerReplayThroughEntryId
+				? { providerReplayThroughEntryId: args.providerReplayThroughEntryId }
+				: {}),
 		};
 		// Post-maintenance progress guard — evaluated BEFORE emitting
 		// auto_compaction_end so the TUI rebuild triggered by that event

@@ -2750,6 +2750,66 @@ describe("compact() remote compaction failure handling", () => {
 		expect(result.preserveData?.openaiRemoteCompaction).toBeDefined();
 	});
 
+	test("replays an oversized kept tool result instead of rewriting it when the prefix fits", async () => {
+		const preparation = makePreparation();
+		preparation.settings = { ...preparation.settings, remoteStreamingV2Enabled: true };
+		preparation.lastSummarizedEntryId = "summarized-last";
+		preparation.recentMessages = [
+			{ role: "user", content: "read the large file", timestamp: 2 },
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "call_kept|fc_kept", name: "read", arguments: { path: "/tmp/x" } }],
+				timestamp: 3,
+				provider: "openai",
+				model: "gpt-5",
+				api: "openai-responses",
+				usage: ZERO_USAGE,
+				stopReason: "toolUse",
+			},
+			{
+				role: "toolResult",
+				toolCallId: "call_kept|fc_kept",
+				toolName: "read",
+				content: [{ type: "text", text: "kept tool output ".repeat(8_000) }],
+				isError: false,
+				timestamp: 4,
+			},
+		];
+		const model = makeOpenAiModel({
+			contextWindow: 20_000,
+			remoteCompaction: {
+				enabled: true,
+				v2StreamingEnabled: true,
+				v2Endpoint: "https://compact.example/v1/responses",
+			},
+		});
+		const requestInputs: string[] = [];
+		const fetchMock: FetchImpl = async (_input, init) => {
+			const body: unknown = JSON.parse(String(init?.body));
+			if (!isRecord(body) || !Array.isArray(body.input)) throw new Error("expected V2 compaction input");
+			requestInputs.push(JSON.stringify(body.input));
+			return sseResponse([
+				{
+					type: "response.output_item.done",
+					output_index: 0,
+					item: { type: "compaction", encrypted_content: "enc_prefix" },
+				},
+				{
+					type: "response.completed",
+					response: { usage: { input_tokens: 100, output_tokens: 2, total_tokens: 102 } },
+				},
+			]);
+		};
+
+		const result = await compact(preparation, model, "test-key", undefined, undefined, { fetch: fetchMock });
+
+		expect(requestInputs).toHaveLength(1);
+		expect(requestInputs[0]).toContain("long history");
+		expect(requestInputs[0]).not.toContain("call_kept");
+		expect(requestInputs[0]).not.toContain(CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE);
+		expect(result.providerReplayThroughEntryId).toBe("summarized-last");
+	});
+
 	test("re-expands native history for local preparation when new native compaction is disabled", async () => {
 		const localComplete = vi
 			.spyOn(ai, "completeSimple")

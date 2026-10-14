@@ -1721,8 +1721,10 @@ export async function compact(
 	 * response or tool output after the last check), which no request can
 	 * send. Then compact the history before the tail instead; the tail replays
 	 * normally after the native history, as a speculative snapshot's later
-	 * turns do.
+	 * turns do. While that fallback exists, the whole-history attempt must not
+	 * rewrite the tail's trailing tool outputs: the prefix keeps them intact.
 	 */
+	const canCompactBeforeTail = lastSummarizedEntryId !== undefined && recentMessages.length > 0;
 	const sendRemoteCompaction = async (
 		sendWhole: () => Promise<void>,
 		sendPrefix: () => Promise<boolean>,
@@ -1732,8 +1734,7 @@ export async function compact(
 		} catch (err) {
 			if (
 				signal?.aborted ||
-				!lastSummarizedEntryId ||
-				recentMessages.length === 0 ||
+				!canCompactBeforeTail ||
 				!AIError.is(AIError.classify(err), AIError.Flag.ContextOverflow)
 			) {
 				throw err;
@@ -1827,11 +1828,10 @@ export async function compact(
 			}
 			return { codexBody, remoteHistory, retainedUserItems };
 		};
-		const sendV2 = async ({
-			codexBody,
-			remoteHistory,
-			retainedUserItems,
-		}: RemoteCompactionV2Input): Promise<void> => {
+		const sendV2 = async (
+			{ codexBody, remoteHistory, retainedUserItems }: RemoteCompactionV2Input,
+			rewriteOutputs: boolean,
+		): Promise<void> => {
 			const instructions = codexBody
 				? typeof codexBody.instructions === "string"
 					? codexBody.instructions
@@ -1850,6 +1850,7 @@ export async function compact(
 				model.contextWindow,
 				instructions,
 				tools,
+				{ rewriteOutputs },
 			);
 			if (trimmed.rewrittenOutputs > 0) {
 				logger.info("Rewrote trailing tool outputs before OpenAI V2 remote compaction", {
@@ -1892,11 +1893,11 @@ export async function compact(
 		if (whole.remoteHistory.length > 0) {
 			try {
 				await sendRemoteCompaction(
-					() => sendV2(whole),
+					() => sendV2(whole, !canCompactBeforeTail),
 					async () => {
 						const prefix = await buildV2Input(false);
 						if (prefix.remoteHistory.length === 0) return false;
-						await sendV2(prefix);
+						await sendV2(prefix, true);
 						return true;
 					},
 				);
@@ -1933,7 +1934,7 @@ export async function compact(
 					: undefined;
 		const convertToLlm = summaryOptions.convertToLlm ?? defaultConvertToLlm;
 		const supportsOriginalDetail = openAiCompatSupportsImageDetailOriginal(model);
-		const sendV1 = async (remoteHistory: Array<Record<string, unknown>>): Promise<void> => {
+		const sendV1 = async (remoteHistory: Array<Record<string, unknown>>, rewriteOutputs: boolean): Promise<void> => {
 			const remote = await withAuth(
 				apiKey,
 				key =>
@@ -1948,6 +1949,7 @@ export async function compact(
 							sessionId: summaryOptions.sessionId,
 							providerSessionState: summaryOptions.providerSessionState,
 							codexCompaction: summaryOptions.codexCompaction,
+							rewriteOutputs,
 						},
 					),
 				{ signal },
@@ -1963,7 +1965,7 @@ export async function compact(
 		if (whole.length > 0) {
 			try {
 				await sendRemoteCompaction(
-					() => sendV1(whole),
+					() => sendV1(whole, !canCompactBeforeTail),
 					async () => {
 						const prefix = buildOpenAiNativeHistory(
 							convertToLlm(remotePrefixMessages),
@@ -1972,7 +1974,7 @@ export async function compact(
 							supportsOriginalDetail,
 						);
 						if (prefix.length === 0) return false;
-						await sendV1(prefix);
+						await sendV1(prefix, true);
 						return true;
 					},
 				);
