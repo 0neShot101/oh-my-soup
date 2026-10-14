@@ -8,6 +8,7 @@ import { createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
 import { CmuxTab } from "@oh-my-pi/pi-coding-agent/tools/browser/cmux/cmux-tab";
 import {
 	clickQueryHandlerText,
+	isClickActionable,
 	resolveActionableQueryHandlerClickTarget,
 } from "@oh-my-pi/pi-coding-agent/tools/browser/interactions";
 import { acquireBrowser, releaseBrowser } from "@oh-my-pi/pi-coding-agent/tools/browser/registry";
@@ -874,6 +875,28 @@ return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.e
 		}
 	}, 30_000);
 
+	test("clicks a modal dialog's button though the dialog sits in an inert shell", async () => {
+		const browserHandle = await acquireBrowser({ kind: "headless", headless: true }, { cwd: process.cwd() });
+		if (!("browser" in browserHandle)) throw new Error("Expected a Puppeteer browser");
+		const page = await browserHandle.browser.newPage();
+		try {
+			await page.setContent(`<div inert><button id="shell">Shell</button><dialog id="dlg"><button id="ok">OK</button></dialog></div>
+<script>document.getElementById("dlg").showModal();</script>`);
+			const reasons = [];
+			for (const selector of ["#ok", "#shell"]) {
+				const handle = await page.$(selector);
+				if (!handle) throw new Error(`Expected ${selector}`);
+				const result = await isClickActionable(handle);
+				reasons.push(result.ok ? "ok" : result.reason);
+				await handle.dispose();
+			}
+			expect(reasons).toEqual(["ok", "inert"]);
+		} finally {
+			await page.close().catch(() => undefined);
+			if (browserHandle.browser.connected) await releaseBrowser(browserHandle, { kill: true });
+		}
+	}, 30_000);
+
 	test("skips off-screen text matches that are disabled, inert, disabled inside their shadow root or stay clipped once scrolled to", async () => {
 		const browserHandle = await acquireBrowser({ kind: "headless", headless: true }, { cwd: process.cwd() });
 		if (!("browser" in browserHandle)) throw new Error("Expected a Puppeteer browser");
@@ -991,6 +1014,10 @@ customElements.define("x-actions", class extends HTMLElement {
 			"clipped by an inline svg viewport": {
 				html: `<svg width="50" height="50"><text id="clipped" x="10" y="190">Pick</text></svg>${later}`,
 				winner: "later",
+			},
+			"inside a scaled inline svg viewport": {
+				html: `<svg width="50" height="50" style="transform: scale(4); transform-origin: 0 0"><text id="scaled" x="35" y="20">Pick</text></svg>${later}`,
+				winner: "scaled",
 			},
 			"modal dialog escaping a transformed clip": {
 				html: `<div style="transform: translateZ(0); overflow: hidden; height: 0"><dialog id="dlg" style="margin: 0"><button id="modal">Pick</button></dialog></div>${later}<script>document.getElementById("dlg").showModal();</script>`,

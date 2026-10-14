@@ -189,11 +189,20 @@ function checkClickActionable(
 	// hit-testing finds it.
 	const flatParent = (node: PageElement): PageElement | null =>
 		node.assignedSlot ?? node.parentElement ?? node.getRootNode().host ?? null;
+	const isModal = (node: PageElement): boolean => {
+		try {
+			return node.matches(":modal");
+		} catch {
+			return false;
+		}
+	};
 	const refused = (target: PageElement): "disabled" | "inert" | undefined => {
 		if (target.matches(":disabled")) return "disabled";
 		for (let node: PageElement | null = target; node; node = flatParent(node)) {
 			if (node.inert) return "inert";
 			if (node.matches("button:disabled")) return "disabled";
+			// A modal dialog escapes the inertness and controls of everything around it.
+			if (isModal(node)) break;
 		}
 		// A hit retargeted to a host stands for the content the host slots into its shadow root.
 		for (const child of Array.from(target.childNodes ?? [])) {
@@ -507,8 +516,11 @@ function measureBoxInPage(el: unknown): MeasuredBox {
 	// Descendants are clipped at the padding edge, so a border never shows them.
 	const paddingBox = (node: PageElement) => {
 		const box = node.getBoundingClientRect();
-		const scaleX = node.offsetWidth ? box.width / node.offsetWidth : 1;
-		const scaleY = node.offsetHeight ? box.height / node.offsetHeight : 1;
+		// An SVG viewport has no offset size; its client size is the same untransformed basis.
+		const width = node.offsetWidth || node.clientWidth;
+		const height = node.offsetHeight || node.clientHeight;
+		const scaleX = width ? box.width / width : 1;
+		const scaleY = height ? box.height / height : 1;
 		const left = box.left + (node.clientLeft ?? 0) * scaleX;
 		const top = box.top + (node.clientTop ?? 0) * scaleY;
 		return {
@@ -539,6 +551,11 @@ function measureBoxInPage(el: unknown): MeasuredBox {
 			continue;
 		}
 		position = style.position;
+		// `content-visibility: hidden` paints none of its content, wherever it lies.
+		if (style.contentVisibility === "hidden") {
+			view.right = view.left;
+			break;
+		}
 		// Overflow does not apply to a non-replaced inline box; paint containment (explicit, or implied by
 		// `content-visibility`) clips like overflow.
 		const paintClip =
