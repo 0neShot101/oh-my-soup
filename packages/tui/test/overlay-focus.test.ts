@@ -96,6 +96,50 @@ class OwningOverlay extends FocusRecorder implements OverlayFocusOwner {
 }
 
 describe("TUI overlay focus", () => {
+	it("delivers keys to the displaced editor beneath a paint-only overlay", () => {
+		const terminal = new MinimalTerminal();
+		const tui = new TUI(terminal);
+		const editor = new FocusRecorder("editor");
+		const sidebar: Component = { render: () => ["sidebar"] };
+
+		tui.addChild(editor);
+		tui.setFocus(editor);
+
+		try {
+			tui.start();
+			tui.showOverlay(sidebar);
+			terminal.sendInput("hello");
+
+			expect(tui.getFocused()).toBe(sidebar);
+			expect(editor.inputs).toEqual(["hello"]);
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("does not pass through multiple paint-only overlays to a distant editor", () => {
+		const terminal = new MinimalTerminal();
+		const tui = new TUI(terminal);
+		const editor = new FocusRecorder("editor");
+		const sidebar: Component = { render: () => ["sidebar"] };
+		const decoration: Component = { render: () => ["decoration"] };
+
+		tui.addChild(editor);
+		tui.setFocus(editor);
+
+		try {
+			tui.start();
+			tui.showOverlay(sidebar);
+			tui.showOverlay(decoration);
+			terminal.sendInput("hello");
+
+			expect(tui.getFocused()).toBe(decoration);
+			expect(editor.inputs).toEqual([]);
+		} finally {
+			tui.stop();
+		}
+	});
+
 	it("keeps keyboard focus on the visible overlay when a hidden surface requests focus", () => {
 		const terminal = new MinimalTerminal();
 		const tui = new TUI(terminal);

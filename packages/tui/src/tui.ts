@@ -2955,18 +2955,19 @@ export class TUI extends Container {
 			return;
 		}
 
-		// Pass input to focused component (including Ctrl+C).
-		// The focused component can decide how to handle Ctrl+C.
-		// Opted-in components only dirty their focused subtree. Unregistered
-		// components retain the legacy full compose because their callbacks may
-		// mutate siblings; focus changes also require the new surface to paint.
-		const focused = this.#focusedComponent;
-		if (focused?.handleInput) {
+		// An input-less overlay leaves keyboard input with the focus it displaced.
+		// Ordinary focused components and overlays with handlers keep their own input.
+		let target = this.#focusedComponent;
+		if (!target?.handleInput) {
+			const holder = this.#getKeyHolderOverlay();
+			target = holder?.component === target ? holder.preFocus : null;
+		}
+		if (target?.handleInput) {
 			// Filter out key release events unless component opts in
-			if (isKeyRelease(data) && !focused.wantsKeyRelease) {
+			if (isKeyRelease(data) && !target.wantsKeyRelease) {
 				return;
 			}
-			focused.handleInput(data);
+			target.handleInput(data);
 			this.requestRender();
 		}
 	}

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Paint-only overlays no longer swallow typing intended for the focused input beneath them ([#15793](https://github.com/can1357/oh-my-pi/issues/15793)).
+
 ## [18.11.0] - 2026-10-14
 
 ### Added
