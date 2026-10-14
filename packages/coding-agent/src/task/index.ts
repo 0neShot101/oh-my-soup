@@ -179,6 +179,8 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		description: agent.description,
 		readOnly: isReadOnlyAgent(agent),
 		blocking: agent.blocking === true,
+		// Marked only while `task.structured` is off; with it on, every agent's result is structured.
+		structured: !options.structured && agent.structured === true,
 	}));
 	const scoutAvailable = isScoutSpawnable(options.disabledAgents, options.parentSpawns);
 	return prompt.render(taskDescriptionTemplate, {
@@ -194,6 +196,7 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		structured: options.structured,
 		asyncEnabled: options.asyncEnabled,
 		hasBlockingAgents: renderedAgents.some(agent => agent.blocking),
+		hasStructuredAgents: renderedAgents.some(agent => agent.structured),
 		hasModelMentions: options.sessionAgents.length > 0,
 		ircEnabled: options.ircEnabled,
 		asyncGuidance: options.asyncGuidance,
