@@ -6,6 +6,7 @@
  * checkout records the commit, branch, and a hash of its uncommitted diff, because its
  * version string stays the same across every unreleased commit and local edit.
  */
+import type { VcsGitRepo } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { $env, isCompiledBinary, logger, VERSION } from "@oh-my-pi/pi-utils";
 import type { SessionEntry } from "./session-entries";
@@ -17,7 +18,10 @@ export interface RuntimeIdentity {
 	commit?: string;
 	/** Source checkout branch; absent on a detached HEAD. */
 	branch?: string;
-	/** Hash of the checkout's uncommitted tracked changes (`git diff HEAD`); absent when clean. */
+	/**
+	 * Hash of the checkout's uncommitted tracked changes (`git diff HEAD`); absent when clean,
+	 * `unknown` when the diff could not be read (too large) or has not been read yet.
+	 */
 	diff?: string;
 	/** Free-form name from `OMP_BUILD_LABEL`. */
 	label?: string;
@@ -27,41 +31,55 @@ const MAX_LABEL_LENGTH = 80;
 const MAX_DIFF_BYTES = 64 * 1024 * 1024;
 const SOURCE_PACKAGE_PREFIX = "packages/coding-agent/";
 
-const envLabel = $env.OMP_BUILD_LABEL?.trim();
+const envLabel = $env.OMP_BUILD_LABEL?.replace(/\s+/g, " ").trim();
 let current: RuntimeIdentity = { version: VERSION, label: envLabel ? envLabel.slice(0, MAX_LABEL_LENGTH) : undefined };
 
-async function resolveSourceIdentity(): Promise<void> {
-	// Compiled binaries and package-manager installs have no checkout of their own; a git
-	// repository found above a node_modules install belongs to some other project.
-	if (isCompiledBinary() || import.meta.dir.split(/[\\/]/).includes("node_modules")) return;
+/** Git handle of the checkout this module runs from; null for compiled binaries and package installs. */
+function findSourceCheckout(): VcsGitRepo | null {
+	// A git repository found above a node_modules install belongs to some other project.
+	if (isCompiledBinary() || import.meta.dir.split(/[\\/]/).includes("node_modules")) return null;
 	const repo = vcs.git(import.meta.dir);
-	if (!repo?.prefixOf(import.meta.dir)?.startsWith(SOURCE_PACKAGE_PREFIX)) return;
-	const head = repo.headSync();
-	if (!head.commit) return;
+	return repo?.prefixOf(import.meta.dir)?.startsWith(SOURCE_PACKAGE_PREFIX) ? repo : null;
+}
+
+async function readUncommittedDiff(repo: VcsGitRepo): Promise<void> {
 	const [patch, tags] = await Promise.all([
-		repo.diffText({ base: "HEAD", binary: true, maxBytes: MAX_DIFF_BYTES }),
-		repo.tagsAt("HEAD"),
+		repo.diffText({ base: "HEAD", binary: true, maxBytes: MAX_DIFF_BYTES }).catch((error: unknown) => {
+			logger.debug("Could not read the source checkout diff", { error: String(error) });
+			return null;
+		}),
+		repo.tagsAt("HEAD").catch((): string[] => []),
 	]);
-	if (!patch && tags.includes(`v${VERSION}`)) return;
+	if (patch === "" && tags.includes(`v${VERSION}`)) {
+		current = { version: VERSION, label: current.label };
+		return;
+	}
 	current = {
-		version: VERSION,
-		commit: head.commit,
-		branch: head.branch ?? undefined,
-		diff: patch ? Bun.hash(patch).toString(16).padStart(16, "0") : undefined,
-		label: current.label,
+		...current,
+		diff: patch === null ? "unknown" : patch ? Bun.hash(patch).toString(16).padStart(16, "0") : undefined,
 	};
 }
 
-const ready = resolveSourceIdentity().catch(error => {
+// Commit and branch resolve synchronously at import, so no entry from a source checkout is ever
+// stamped like a release; only the diff hash (and the exact-release-tag check) is asynchronous.
+let ready: Promise<void> = Promise.resolve();
+try {
+	const repo = findSourceCheckout();
+	const head = repo?.headSync();
+	if (repo && head?.commit) {
+		current = { ...current, commit: head.commit, branch: head.branch ?? undefined, diff: "unknown" };
+		ready = readUncommittedDiff(repo);
+	}
+} catch (error) {
 	logger.debug("Could not resolve source checkout identity", { error: String(error) });
-});
+}
 
-/** Settles once source-checkout details are resolved; await before creating sessions. */
+/** Settles once the source checkout's diff is read; session entry points await it before writing. */
 export function loadRuntimeIdentity(): Promise<void> {
 	return ready;
 }
 
-/** Build identity of this process; version and label only until {@link loadRuntimeIdentity} settles. */
+/** Build identity of this process; a source checkout's `diff` is `unknown` until {@link loadRuntimeIdentity} settles. */
 export function currentRuntimeIdentity(): RuntimeIdentity {
 	return current;
 }
