@@ -179,6 +179,7 @@ pub(super) fn is_chromium(pid: libc::pid_t) -> bool {
 fn is_chromium_bundle(bundle: &str) -> bool {
 	[
 		"com.google.Chrome",
+		"com.google.chrome.for.testing",
 		"org.chromium.Chromium",
 		"com.brave.Browser",
 		"com.microsoft.edgemac",
@@ -275,6 +276,7 @@ mod tests {
 	fn chromium_identity_does_not_match_unrelated_display_names() {
 		assert!(is_chromium_bundle("com.google.Chrome.canary"));
 		assert!(is_chromium_bundle("company.thebrowser.Browser"));
+		assert!(is_chromium_bundle("com.google.chrome.for.testing"));
 		assert!(!is_chromium_bundle("com.apple.archiveutility"));
 		assert!(!is_chromium_bundle("com.google.ChromeNotABrowser"));
 	}
