@@ -203,6 +203,11 @@ export function optionMarker(uiTheme: Theme, multi: boolean | undefined, selecte
 	return selected ? uiTheme.radio.selected : uiTheme.radio.unselected;
 }
 
+function wrapOptionLabel(marker: string, label: string, width: number): string[] {
+	const prefix = ` ${marker} `;
+	return wrapPrefixedLine(prefix, " ".repeat(visibleWidth(prefix)), label, width);
+}
+
 /** Render the offered options for a question form as flat marker bullets (no tree guides). */
 function renderQuestionOptionLines(
 	uiTheme: Theme,
@@ -214,8 +219,7 @@ function renderQuestionOptionLines(
 	const out: string[] = [];
 	for (const opt of options) {
 		const optLabel = renderInlineMarkdown(opt.label, mdTheme, t => uiTheme.fg("muted", t));
-		const marker = ` ${uiTheme.fg("dim", optionMarker(uiTheme, multi, false))} `;
-		out.push(...wrapPrefixedLine(marker, " ".repeat(visibleWidth(marker)), optLabel, width));
+		out.push(...wrapOptionLabel(uiTheme.fg("dim", optionMarker(uiTheme, multi, false)), optLabel, width));
 		if (opt.description?.trim()) {
 			const description = renderInlineMarkdown(opt.description.trim(), mdTheme, t => uiTheme.fg("dim", t));
 			const prefix = `   ${uiTheme.fg("dim", "↳")} `;
@@ -264,6 +268,7 @@ function renderAnswerOptionLines(
 	customInput: string | undefined,
 	note: string | undefined,
 	width: number,
+	contentWidth: number,
 	selectedIndices?: ReadonlySet<number>,
 ): string[] {
 	const selected = new Set(selectedOptions ?? []);
@@ -284,7 +289,7 @@ function renderAnswerOptionLines(
 		const labelStyled = renderInlineMarkdown(label, mdTheme, t =>
 			isSelected ? uiTheme.fg("toolOutput", t) : uiTheme.fg("muted", t),
 		);
-		out.push(` ${markerStyled} ${labelStyled}`);
+		out.push(...wrapOptionLabel(markerStyled, labelStyled, contentWidth));
 	}
 	if (customInput !== undefined) out.push(...renderCustomInputLines(uiTheme, customInput));
 	if (note !== undefined) out.push(...renderNoteLines(uiTheme, note, width));
@@ -556,7 +561,7 @@ export const askToolRenderer = {
 				},
 				uiTheme,
 			);
-			return framedToolCard(uiTheme, ({ width }) => {
+			return framedToolCard(uiTheme, ({ width, contentWidth }) => {
 				const rawResults = rawDetails.results ?? [];
 				const sections = results.map((r, index) => {
 					// Sanitizing preserves order and length, so raw indices align with `r`.
@@ -573,6 +578,7 @@ export const askToolRenderer = {
 							r.customInput,
 							r.note,
 							width,
+							contentWidth,
 							selectedIndicesFor(raw?.options, raw?.selectedOptions),
 						),
 					];
@@ -611,7 +617,7 @@ export const askToolRenderer = {
 		const dCustom = details.customInput;
 		const dNote = details.note;
 		const dTimedOut = details.timedOut;
-		return framedToolCard(uiTheme, ({ width }) => {
+		return framedToolCard(uiTheme, ({ width, contentWidth }) => {
 			// md() returns a shared cached array (module-level Markdown LRU) — copy before appending.
 			const bodyLines = [
 				...md(question, width),
@@ -624,6 +630,7 @@ export const askToolRenderer = {
 					dCustom,
 					dNote,
 					width,
+					contentWidth,
 					selectedIndicesFor(rawDetails.options, rawDetails.selectedOptions),
 				),
 			];
