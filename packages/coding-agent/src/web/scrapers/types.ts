@@ -173,21 +173,35 @@ export async function loadPage(url: string, options: LoadPageOptions = {}): Prom
 				return { content: "", contentType, finalUrl, ok: true, status: response.status, bodySkipped: true };
 			}
 
-			const body = await readBodyCapped(response, maxBytes);
-			if (!body) {
+			const responseBody = await readBodyCapped(response, maxBytes);
+			if (!responseBody) {
 				return { content: "", contentType, finalUrl, ok: false, status: response.status };
 			}
 
-			const content = decodeBody(body.bytes, rawContentType);
+			const content = decodeBody(responseBody.bytes, rawContentType);
 			if (isBotBlocked(response.status, content) && attempt < USER_AGENTS.length - 1) {
 				continue;
 			}
 
 			if (!response.ok) {
-				return { content, contentType, finalUrl, ok: false, status: response.status, truncated: body.truncated };
+				return {
+					content,
+					contentType,
+					finalUrl,
+					ok: false,
+					status: response.status,
+					truncated: responseBody.truncated,
+				};
 			}
 
-			return { content, contentType, finalUrl, ok: true, status: response.status, truncated: body.truncated };
+			return {
+				content,
+				contentType,
+				finalUrl,
+				ok: true,
+				status: response.status,
+				truncated: responseBody.truncated,
+			};
 		} catch (error) {
 			if (signal?.aborted) {
 				throw new ToolAbortError();
