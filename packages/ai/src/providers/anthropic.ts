@@ -1618,26 +1618,6 @@ function formatEchoedRefusalContent(content: AssistantMessage["content"]): Conte
 }
 
 /**
- * The echoed prefix as kept in the stored redemption turn. The refused model
- * signed its thinking, and later turns replay this turn without the credit
- * token that let the server accept that signature on another model, so its
- * thinking is stored unsigned (replay drops or demotes it like any unsigned
- * block) and its redacted thinking, which has no unsigned form, is dropped.
- */
-function storedRefusalPrefix(content: AssistantMessage["content"]): AssistantMessage["content"] {
-	const stored: AssistantMessage["content"] = [];
-	for (const block of refusalContinuationPrefix(content)) {
-		if (block.type === "redactedThinking") continue;
-		if (block.type === "thinking") {
-			stored.push({ type: "thinking", thinking: block.thinking });
-			continue;
-		}
-		stored.push(block);
-	}
-	return stored;
-}
-
-/**
  * The refused request's frozen body retargeted at the fallback model with the
  * credit token, optionally followed by the echoed refusal prefix.
  */
@@ -3770,9 +3750,11 @@ const streamAnthropicOnce = (
 				}
 			}
 			if (usingFallbackCredit && fallbackCreditShape === "continuation" && frozenRedemption?.refusedContent) {
-				// The response continues the echoed prefix; keep it in the stored turn so
-				// later replays keep the prefix text and server tools.
-				output.content.unshift(...storedRefusalPrefix(frozenRedemption.refusedContent));
+				// The response continues the echoed prefix; keep it, signatures included, in
+				// the stored turn. A tool loop requires the turn to open with its thinking
+				// block, and a later rejection of the refused model's signature is
+				// recovered by the invalid-signature retry.
+				output.content.unshift(...refusalContinuationPrefix(frozenRedemption.refusedContent));
 			}
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;

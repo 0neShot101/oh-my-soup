@@ -2211,7 +2211,7 @@ describe("anthropic stream envelope handling", () => {
 		expect(attemptedBodies[1].fallback_credit_token).toBeUndefined();
 	});
 
-	it("echoes refused thinking and server tools, and stores the refused thinking unsigned", async () => {
+	it("echoes refused thinking and server tools, and keeps the stored turn opening with the signed thinking", async () => {
 		let capturedParams: Record<string, unknown> | undefined;
 		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(((rawParams: unknown) => {
 			capturedParams = rawParams as Record<string, unknown>;
@@ -2292,16 +2292,18 @@ describe("anthropic stream envelope handling", () => {
 			{ type: "text", text: "Based on search:" },
 		]);
 
-		// The stored turn keeps the prefix text and server tool. Later turns replay it
-		// without the credit token, so the refused model's signature is not replayed.
+		// A later replay (e.g. the tool_result request of a tool loop) must open the
+		// turn with its thinking block and keep the server tool call.
 		const replay = convertAnthropicMessages([context.messages[0], structuredCloneJSON(result)], fallbackModel, false);
 		const replayed = replay.find(message => message.role === "assistant");
-		expect(JSON.stringify(replayed?.content)).not.toContain("sig-refused");
-		expect(replayed?.content).toEqual([
-			{ type: "server_tool_use", id: "stu_123", name: "web_search", input: { query: "weather" } },
-			// The mock continuation streams no text delta, so only the prefix text replays.
-			expect.objectContaining({ type: "text", text: "Based on search:" }),
-		]);
+		const replayedContent = replayed?.content as Array<Record<string, unknown>>;
+		expect(replayedContent[0]).toEqual({ type: "thinking", thinking: "Search first.", signature: "sig-refused" });
+		expect(replayedContent).toContainEqual({
+			type: "server_tool_use",
+			id: "stu_123",
+			name: "web_search",
+			input: { query: "weather" },
+		});
 	});
 
 	it("surfaces error when transient redemption retries run out without stepping down", async () => {
