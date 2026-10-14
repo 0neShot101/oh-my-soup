@@ -114,6 +114,7 @@ import {
 	persistForeignSession,
 } from "./session/foreign-session-import";
 import type { ForeignSessionInfo, ForeignSessionSource, ForeignSessionStore } from "./session/foreign-session-store";
+import { loadRuntimeIdentity } from "./session/runtime-identity";
 import { resolveResumableSession, type SessionInfo } from "./session/session-listing";
 import { ForkSourceNotFoundError, SessionManager, SessionMoveRefusedError } from "./session/session-manager";
 import { forkIfMovedAway } from "./session/session-transfer";
@@ -2019,6 +2020,8 @@ export async function runRootCommand(
 		// Reading the token immediately after `--continue` distinguishes the session
 		// id from UUID-shaped values owned by later extension flags.
 		normalizeContinueSessionArgs(parsedArgs, rawArgs);
+		// Source checkouts resolve their commit and diff asynchronously; new session headers record it.
+		await loadRuntimeIdentity();
 
 		// Resolve native resume/fork flags or import one foreign transcript into a
 		// fresh persisted OMP session before constructing the AgentSession.

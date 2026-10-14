@@ -59,6 +59,12 @@ import { buildToolsMarkdown } from "@oh-my-pi/pi-tui/prompt/tools-markdown";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
 import type { AuthStorage, OAuthAccountIdentity } from "../../session/auth-storage";
 import type { CompactMode } from "../../session/compact-modes";
+import {
+	currentRuntimeIdentity,
+	formatRuntimeIdentity,
+	runtimeIdentityHistory,
+	sameRuntimeIdentity,
+} from "../../session/runtime-identity";
 import type { NewSessionOptions } from "../../session/session-entries";
 import {
 	cleanSourceCheckoutIfConfigured,
@@ -554,6 +560,15 @@ export class CommandController {
 		let info = "";
 		info += `${theme.fg("dim", "File:")} ${stats.sessionFile ?? "In-memory"}\n`;
 		info += `${theme.fg("dim", "ID:")} ${stats.sessionId}\n`;
+		const builds = runtimeIdentityHistory(this.ctx.session.sessionManager.getEntries());
+		const running = currentRuntimeIdentity();
+		for (const [index, build] of builds.entries()) {
+			const prefix = index === 0 ? theme.fg("dim", "Build:") : theme.fg("dim", "     →");
+			info += `${prefix} ${replaceTabs(sanitizeText(formatRuntimeIdentity(build)))}\n`;
+		}
+		if (!sameRuntimeIdentity(builds[builds.length - 1], running)) {
+			info += `${theme.fg("dim", "Running:")} ${replaceTabs(sanitizeText(formatRuntimeIdentity(running)))}\n`;
+		}
 		info += `\n${theme.bold("Provider")}\n`;
 		const model = this.ctx.session.model;
 		if (!model) {
