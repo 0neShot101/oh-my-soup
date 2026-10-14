@@ -400,7 +400,6 @@ describe("interactive /usage account visibility", () => {
 		const refresh = Promise.withResolvers<UsageReport[] | null>();
 		const ctx = createInteractiveModeContext({
 			reportContainer: new Container(),
-			composerInputAtBottom: () => true,
 			commandReportRows: () => 20,
 			ui: { terminal: { columns: 120, rows: 30 } },
 			session: {
