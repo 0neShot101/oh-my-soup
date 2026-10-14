@@ -1060,6 +1060,8 @@ fn replace_whole_value<F: TextField>(field: &F, text: &str) -> CoreResult<bool> 
 		if !field.in_background() {
 			return Ok(false);
 		}
+		// A run cancelled while the probes blocked changes nothing.
+		control::check()?;
 		match field.focus() {
 			AXError::Success => {},
 			AXError::CannotComplete => unanswered = Some("AXFocused"),
@@ -1070,8 +1072,9 @@ fn replace_whole_value<F: TextField>(field: &F, text: &str) -> CoreResult<bool> 
 	// Focusing can swap in the field editor, so the length is read afterward.
 	// The user may bring the app forward while those reads or the selection
 	// write block: a borrowed caret is theirs again, so it is neither selected
-	// nor typed over.
-	let still_borrowed = || previous.is_none() || field.in_background();
+	// nor typed over. Nor does a run cancelled meanwhile go on to write.
+	let still_borrowed =
+		|| (previous.is_none() || field.in_background()) && control::check().is_ok();
 	let selected = unanswered.is_none()
 		&& field.selectable_length().is_some_and(|length| {
 			still_borrowed()
@@ -1098,6 +1101,7 @@ fn replace_whole_value<F: TextField>(field: &F, text: &str) -> CoreResult<bool> 
 				)));
 			}
 		}
+		control::check()?;
 		if let Some(attribute) = unanswered {
 			return Err(DesktopError::ax_unconfirmed(format!(
 				"setting {attribute} to replace the field's text got no reply in time \
@@ -1815,6 +1819,9 @@ mod tests {
 		focus_reply:        AXError,
 		select_reply:       AXError,
 		calls:              RefCell<Vec<&'static str>>,
+		/// Cancelled while the selection write blocks, as a run stopped then
+		/// would be.
+		cancel_on_select:   Option<crate::desktop::control::CancellationSource>,
 	}
 
 	impl ScriptedField {
@@ -1828,6 +1835,7 @@ mod tests {
 				focus_reply: AXError::Success,
 				select_reply: AXError::Success,
 				calls: RefCell::default(),
+				cancel_on_select: None,
 			}
 		}
 
@@ -1877,6 +1885,9 @@ mod tests {
 			self.calls.borrow_mut().push("select");
 			if self.switches_on_select {
 				self.switched.set(true);
+			}
+			if let Some(source) = &self.cancel_on_select {
+				source.cancel();
 			}
 			self.select_reply
 		}
@@ -1933,6 +1944,21 @@ mod tests {
 		};
 		let error = replace_whole_value(&field, "abc").unwrap_err();
 		assert_eq!(error.code, ErrorCode::AxUnconfirmed);
+		assert_eq!(field.calls(), ["focus", "select", "hand back"]);
+	}
+
+	#[test]
+	fn a_run_cancelled_during_the_selection_write_hands_focus_back_and_writes_nothing() {
+		use crate::desktop::control::{self, CancellationSource};
+
+		let source = CancellationSource::default();
+		let field = ScriptedField {
+			cancel_on_select: Some(source.clone()),
+			..ScriptedField::new(false, false)
+		};
+		let result =
+			control::with_token_for_test(&source.token(), || replace_whole_value(&field, "abc"));
+		assert_eq!(result.map_err(|error| error.code), Err(ErrorCode::Cancelled));
 		assert_eq!(field.calls(), ["focus", "select", "hand back"]);
 	}
 
