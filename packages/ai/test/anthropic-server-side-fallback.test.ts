@@ -819,13 +819,13 @@ describe("mid-turn fallback a gateway opted into", () => {
 });
 
 describe("fallback-credit continuation after a mid-turn fallback", () => {
-	// Redeeming a credit always deletes `fallbacks` from the frozen body and
-	// filters the beta, so the echoed refusal prefix can neither carry the
-	// marker nor replay both models' signed reasoning — the latter is the 400
-	// this file is about.
+	// The continuation echoes the refused response's content. A `fallback`
+	// boundary is accepted without the beta and validates the thinking around
+	// it by position, so it must stay exactly where it appeared even though
+	// redemption deletes `fallbacks` from the frozen body.
 	const usage = { input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
 
-	it("echoes one model's reasoning without the marker and persists the same prefix", async () => {
+	it("echoes the boundary in place and persists the same prefix", async () => {
 		let captured: Record<string, unknown> | undefined;
 		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation((params: unknown) => {
 			captured = params as Record<string, unknown>;
@@ -867,16 +867,15 @@ describe("fallback-credit continuation after a mid-turn fallback", () => {
 		expect(messages[1]).toEqual({
 			role: "assistant",
 			content: [
+				{ type: "thinking", thinking: "primary plan", signature: "sig-primary" },
+				{ type: "fallback", from: { model: "claude-opus-5-5" }, to: { model: "claude-opus-4-8" } },
 				{ type: "thinking", thinking: "fallback plan", signature: "sig-fallback" },
 				{ type: "text", text: "Partial" },
 			],
 		});
-		// The persisted turn keeps the shape that was sent, so no later replay
-		// can resurrect the two-chain turn.
-		expect(redeemed.content.some(block => block.type === "fallback")).toBe(false);
-		expect(redeemed.content.filter(block => block.type === "thinking").map(block => block.thinkingSignature)).toEqual(
-			["sig-fallback"],
-		);
+		// The persisted turn keeps the boundary, so a later replay that cannot
+		// carry it collapses to one model's reasoning instead of two chains.
+		expect(redeemed.content.map(block => block.type)).toEqual(["thinking", "fallback", "thinking", "text", "text"]);
 	});
 });
 

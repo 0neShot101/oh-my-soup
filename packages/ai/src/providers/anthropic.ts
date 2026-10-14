@@ -1584,15 +1584,12 @@ function unwrapAnthropicThinkingEnvelope(text: string): string | undefined {
  * calls (no matching tool_result) are omitted and a trailing text block is
  * right-trimmed, per the fallback-credit continuation contract.
  *
- * Redemption always deletes `fallbacks` from the frozen body
- * ({@link fallbackCreditRequestBody}) and filters the beta, so a refused turn
- * that fell back mid-response cannot replay its boundary marker here: collapse
- * it to one model's reasoning exactly as the replay converter does
- * ({@link collapseFallbackSegments}). The same prefix is unshifted into the
- * persisted turn, so history keeps the shape that was sent.
+ * A `fallback` boundary stays exactly where it appeared: the API accepts it on
+ * any request, beta or not, and uses its position to validate the thinking
+ * blocks on either side, so the echo must not collapse or move it.
  */
 function refusalContinuationPrefix(content: AssistantMessage["content"]): AssistantMessage["content"] {
-	const prefix = structuredClone(collapseFallbackSegments(content).filter(block => block.type !== "toolCall"));
+	const prefix = structuredClone(content.filter(block => block.type !== "toolCall"));
 	const last = prefix.at(-1);
 	if (last?.type === "text") last.text = last.text.trimEnd();
 	return prefix;
@@ -1617,6 +1614,9 @@ function formatEchoedRefusalContent(content: AssistantMessage["content"]): Conte
 				break;
 			case "redactedThinking":
 				echoed.push({ type: "redacted_thinking", data: block.data });
+				break;
+			case "fallback":
+				echoed.push({ type: "fallback", from: block.from, to: block.to });
 				break;
 			case "anthropicServerTool":
 				echoed.push(block.block);
