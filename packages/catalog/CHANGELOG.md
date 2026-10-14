@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed trailing-dot `localhost.` and `*.local.` custom endpoints losing local-backend compatibility settings ([#15798](https://github.com/can1357/oh-my-pi/issues/15798)).
+
 ## [18.11.0] - 2026-10-14
 
 ### Added
