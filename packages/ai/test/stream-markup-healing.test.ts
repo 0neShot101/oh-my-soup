@@ -1328,4 +1328,61 @@ describe("OpenAI completions provider DSML envelope healing", () => {
 		expect(toolCalls.map(call => call.arguments)).toEqual([{ path: "a.ts" }, { path: "b.ts" }]);
 		expect(result.stopReason).toBe("toolUse");
 	});
+
+	it("keeps one tool call whole when a gateway mints a new id for each argument fragment at index 0", async () => {
+		const model = getBundledModel<"openai-completions">("nanogpt", "deepseek/deepseek-v4-pro");
+		const fetchMock = mockFetch([
+			chunk(model.id, {
+				tool_calls: [
+					{ index: 0, id: "call_1", type: "function", function: { name: "read", arguments: '{"path":' } },
+				],
+			}),
+			chunk(model.id, { tool_calls: [{ index: 0, id: "call_2", function: { arguments: '"a.ts"}' } }] }),
+			chunk(model.id, {}, "tool_calls"),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(
+			model,
+			{ messages: [{ role: "user", content: "Read a.ts", timestamp: Date.now() }], tools: [readTool] },
+			{ apiKey: "test-key", fetch: fetchMock },
+		).result();
+
+		const toolCalls = result.content.filter((b): b is ToolCall => b.type === "toolCall");
+		expect(toolCalls.map(call => ({ name: call.name, arguments: call.arguments }))).toEqual([
+			{ name: "read", arguments: { path: "a.ts" } },
+		]);
+	});
+
+	it("routes id-less continuations at a reused index to the call that resumed by id", async () => {
+		const model = getBundledModel<"openai-completions">("nanogpt", "deepseek/deepseek-v4-pro");
+		const fetchMock = mockFetch([
+			chunk(model.id, {
+				tool_calls: [
+					{ index: 0, id: "call_a", type: "function", function: { name: "read", arguments: '{"path":' } },
+				],
+			}),
+			chunk(model.id, {
+				tool_calls: [
+					{ index: 0, id: "call_b", type: "function", function: { name: "read", arguments: '{"path":"b.ts"}' } },
+				],
+			}),
+			chunk(model.id, { tool_calls: [{ index: 0, id: "call_a", function: { arguments: '"a' } }] }),
+			chunk(model.id, { tool_calls: [{ index: 0, function: { arguments: '.ts"}' } }] }),
+			chunk(model.id, {}, "tool_calls"),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(
+			model,
+			{ messages: [{ role: "user", content: "Read a.ts and b.ts", timestamp: Date.now() }], tools: [readTool] },
+			{ apiKey: "test-key", fetch: fetchMock },
+		).result();
+
+		const toolCalls = result.content.filter((b): b is ToolCall => b.type === "toolCall");
+		expect(toolCalls.map(call => ({ id: call.id, arguments: call.arguments }))).toEqual([
+			{ id: "call_a", arguments: { path: "a.ts" } },
+			{ id: "call_b", arguments: { path: "b.ts" } },
+		]);
+	});
 });
