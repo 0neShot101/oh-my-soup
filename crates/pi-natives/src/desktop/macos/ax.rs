@@ -24,6 +24,7 @@ use super::{
 	super::{
 		ax::{AxBounds, AxHandle, AxProps, WalkBounds, normalize_role_macos},
 		backend::AxBackend,
+		control,
 		error::{CoreResult, DesktopError},
 		types::DesktopWindow,
 	},
@@ -36,6 +37,8 @@ const AX_TIMEOUT_SECONDS: f32 = 2.0;
 const PROBE_TIMEOUT_SECONDS: f32 = 0.5;
 /// Bounded `AXParent` ascent when an element does not expose `AXWindow`.
 const MAX_ANCESTRY_DEPTH: usize = 40;
+/// The action that scrolls an element into its view.
+const SCROLL_TO_VISIBLE: &str = "AXScrollToVisible";
 /// Bounds the search for a sheet, popover, or open menu that `AXWindows` does
 /// not list, matching the snapshot walk's own node and depth budget.
 const MAX_ATTACHED_SEARCH_NODES: usize = 5_000;
@@ -647,14 +650,16 @@ impl AxBackend for MacAx {
 				actions.join(", "),
 			)));
 		}
-		let perform = || element_action_result(&native, send_action(element, &native));
 		// AXRaise is an explicit request to change stacking, including the
 		// takeover preparation path. Other semantic actions must stay background.
 		if native == "AXRaise" {
-			perform()
-		} else {
-			skylight::with_background_guard(element_pid(element)?, perform)
+			return element_action_result(&native, send_action(element, &native));
 		}
+		let pid = element_pid(element)?;
+		let scroll_first = scrolls_before_press(&native, &actions, || process::is_uikit(pid));
+		skylight::with_background_guard(pid, || {
+			press_into_view(&native, scroll_first, |action| send_action(element, action))
+		})
 	}
 
 	fn set_value(&mut self, h: &AxHandle, value: &str) -> CoreResult<()> {
@@ -988,6 +993,28 @@ fn replace_utf16_selection(
 	result.push_str(text);
 	result.push_str(&before[end_byte..]);
 	Some(result)
+}
+
+/// In a Mac Catalyst (`UIKit`) app, pressing a row scrolled out of its view
+/// reports success and does nothing. Scrolling it into view first lets the
+/// press land; for an element already in view the scroll changes nothing.
+fn scrolls_before_press(native: &str, actions: &[String], uikit: impl FnOnce() -> bool) -> bool {
+	native == "AXPress" && actions.iter().any(|action| action == SCROLL_TO_VISIBLE) && uikit()
+}
+
+/// Sends `native`, after [`SCROLL_TO_VISIBLE`] when `scroll_first`. A failed
+/// scroll leaves the action to report its own outcome; a run cancelled during
+/// the scroll sends nothing more.
+fn press_into_view(
+	native: &str,
+	scroll_first: bool,
+	mut send: impl FnMut(&str) -> AXError,
+) -> CoreResult<()> {
+	if scroll_first {
+		let _ = send(SCROLL_TO_VISIBLE);
+		control::check()?;
+	}
+	element_action_result(native, send(native))
 }
 
 fn perform_action(element: &AXUIElement, action: &str) -> CoreResult<()> {
@@ -1521,5 +1548,61 @@ mod tests {
 			frame_matches: true,
 		}];
 		assert!(select_attached(&candidates, 57).is_err());
+	}
+
+	#[test]
+	fn only_a_uikit_press_scrolls_its_element_into_view_first() {
+		use super::scrolls_before_press;
+
+		let actions = |names: &[&str]| {
+			names
+				.iter()
+				.map(|name| (*name).to_owned())
+				.collect::<Vec<_>>()
+		};
+		let row = actions(&["AXPress", "AXScrollToVisible", "AXShowMenu"]);
+		assert!(scrolls_before_press("AXPress", &row, || true));
+		// An AppKit app, another action, or an element that cannot scroll: press
+		// as is.
+		assert!(!scrolls_before_press("AXPress", &row, || false));
+		assert!(!scrolls_before_press("AXShowMenu", &row, || true));
+		assert!(!scrolls_before_press("AXPress", &actions(&["AXPress"]), || true));
+		// The app is only classified when the press could scroll.
+		assert!(!scrolls_before_press("AXShowMenu", &row, || unreachable!()));
+	}
+
+	#[test]
+	fn a_press_follows_its_scroll_unless_the_run_was_cancelled() {
+		use super::{SCROLL_TO_VISIBLE, press_into_view};
+		use crate::desktop::control;
+
+		let run = |scroll_first: bool, scroll_result: AXError, cancel: bool| {
+			let source = control::CancellationSource::default();
+			let token = source.token();
+			let mut sent = Vec::new();
+			let result = control::with_token_for_test(&token, || {
+				press_into_view("AXPress", scroll_first, |action| {
+					sent.push(action.to_owned());
+					if action != SCROLL_TO_VISIBLE {
+						return AXError::Success;
+					}
+					if cancel {
+						source.cancel();
+					}
+					scroll_result
+				})
+			});
+			(result.map_err(|error| error.code), sent)
+		};
+		let both = vec![SCROLL_TO_VISIBLE.to_owned(), "AXPress".to_owned()];
+		assert_eq!(run(true, AXError::Success, false), (Ok(()), both.clone()));
+		// A failed scroll still presses.
+		assert_eq!(run(true, AXError::Failure, false), (Ok(()), both));
+		assert_eq!(run(false, AXError::Success, false), (Ok(()), vec!["AXPress".to_owned()]));
+		// Cancelled while scrolling: the press is never sent.
+		assert_eq!(
+			run(true, AXError::Success, true),
+			(Err(ErrorCode::Cancelled), vec![SCROLL_TO_VISIBLE.to_owned()])
+		);
 	}
 }
