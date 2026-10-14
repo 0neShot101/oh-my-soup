@@ -73,8 +73,6 @@ interface PageRoot {
 
 interface PageShadowRoot {
 	elementFromPoint(x: number, y: number): PageElement | null;
-	querySelectorAll(selector: string): ArrayLike<PageElement>;
-	querySelector(selector: string): PageElement | null;
 }
 
 interface PageElement {
@@ -94,6 +92,8 @@ interface PageElement {
 	/** The slot a light-DOM child renders in, or null when unslotted or inside a closed shadow root. */
 	readonly assignedSlot?: PageElement | null;
 	shadowRoot: PageShadowRoot | null;
+	/** Child nodes, text included; each slotted one names the slot it renders in. */
+	readonly childNodes?: ArrayLike<{ readonly assignedSlot?: PageElement | null }>;
 	getBoundingClientRect(): PageRect;
 	getClientRects(): ArrayLike<PageRect>;
 	readonly offsetWidth?: number;
@@ -184,16 +184,21 @@ function checkClickActionable(
 	}
 	if (style.pointerEvents === "none") return { ok: false as const, reason: "pointer-events:none" };
 	// The browser drops a click on a disabled control, inside a disabled button (also through a slot, as when a
-	// custom element's shadow root wraps its label in one), or under an inert subtree, though hit-testing finds it.
+	// custom element's shadow root wraps the content it slots in one), or under an inert subtree, though
+	// hit-testing finds it.
+	const flatParent = (node: PageElement): PageElement | null =>
+		node.assignedSlot ?? node.parentElement ?? node.getRootNode().host ?? null;
 	const refused = (target: PageElement): "disabled" | "inert" | undefined => {
-		if (target.matches(":disabled") || target.shadowRoot?.querySelector("button:disabled slot")) return "disabled";
-		for (
-			let node: PageElement | null = target;
-			node;
-			node = node.assignedSlot ?? node.parentElement ?? node.getRootNode().host ?? null
-		) {
+		if (target.matches(":disabled")) return "disabled";
+		for (let node: PageElement | null = target; node; node = flatParent(node)) {
 			if (node.inert) return "inert";
 			if (node.matches("button:disabled")) return "disabled";
+		}
+		// A hit retargeted to a host stands for the content the host slots into its shadow root.
+		for (const child of Array.from(target.childNodes ?? [])) {
+			for (let node = child.assignedSlot ?? null; node && node !== target; node = flatParent(node)) {
+				if (node.matches("button:disabled")) return "disabled";
+			}
 		}
 		return undefined;
 	};

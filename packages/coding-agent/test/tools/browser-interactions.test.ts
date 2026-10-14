@@ -884,11 +884,19 @@ return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.e
 <div style="height: 3000px"></div><div inert><button id="inert">Far</button></div>
 <div style="height: 3000px"></div><x-button id="shadowed">Far</x-button>
 <div style="height: 3000px"></div><button id="enabled">Far</button>
+<x-actions id="actions">Go</x-actions>
 <script>
 customElements.define("x-button", class extends HTMLElement {
 	constructor() {
 		super();
 		this.attachShadow({ mode: "open" }).innerHTML = "<button disabled><slot></slot></button>";
+	}
+});
+// A disabled alternate action whose slot holds nothing does not stand for the host's content.
+customElements.define("x-actions", class extends HTMLElement {
+	constructor() {
+		super();
+		this.attachShadow({ mode: "open" }).innerHTML = '<button disabled><slot name="alt"></slot></button><button><slot></slot></button>';
 	}
 });
 </script>`);
@@ -907,6 +915,8 @@ customElements.define("x-button", class extends HTMLElement {
 			// A host whose shadow root renders a disabled button takes no click either.
 			await page.evaluate("scrollTo(0, 0)");
 			expect(await winnerId("#shadowed, #enabled")).toBe("enabled");
+			await page.evaluate("scrollTo(0, 0)");
+			expect(await winnerId("#actions")).toBe("actions");
 		} finally {
 			await page.close().catch(() => undefined);
 			if (browserHandle.browser.connected) await releaseBrowser(browserHandle, { kill: true });
