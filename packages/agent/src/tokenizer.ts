@@ -97,15 +97,6 @@ export interface MessageCountOptions {
 	 * both arms.
 	 */
 	excludeEncryptedReasoning?: boolean;
-	/**
-	 * `message` is the transcript's latest surviving assistant turn, which an
-	 * Anthropic Messages replay keeps byte-for-byte (`transformMessages`): a turn
-	 * whose tool calls ended without a tool-use stop keeps its signatures then,
-	 * so its reasoning is charged. A count of one message cannot see its
-	 * position; a caller walking back from the end of the transcript passes
-	 * this for that turn.
-	 */
-	latestTurn?: boolean;
 }
 
 function byteEstimate(text: string): number {
@@ -304,10 +295,7 @@ export class Tokenizer {
 	 */
 	countMessage(message: AgentMessage, options?: MessageCountOptions): number {
 		const floored = options?.excludeEncryptedReasoning === true;
-		// The latest-turn count differs only for that one turn, so it is not memoized.
-		if (options?.latestTurn === true || !isEstimateCacheable(message)) {
-			return this.#measureMessage(message, floored, options?.latestTurn === true);
-		}
+		if (!isEstimateCacheable(message)) return this.#measureMessage(message, floored, false);
 		const version = messageEstimateVersion(message);
 		let entry = this.#estimates.get(message);
 		if (entry === undefined || entry.version !== version) {
@@ -320,6 +308,19 @@ export class Tokenizer {
 		if (floored) entry.floored = result;
 		else entry.default = result;
 		return result;
+	}
+
+	/**
+	 * {@link countMessage} for the transcript's latest surviving assistant turn
+	 * (`isSurvivingAssistant`), which an Anthropic Messages replay keeps
+	 * byte-for-byte (`transformMessages`): a turn whose tool calls ended without
+	 * a tool-use stop keeps its signatures then, so its reasoning is charged. A
+	 * count of one message cannot see its position; a caller walking back from
+	 * the end of the transcript counts that turn here. Not memoized: it differs
+	 * from {@link countMessage} only for that one turn.
+	 */
+	countLatestTurn(message: AgentMessage, options?: MessageCountOptions): number {
+		return this.#measureMessage(message, options?.excludeEncryptedReasoning === true, true);
 	}
 
 	/** Sum of {@link countMessage} over `messages`. */
@@ -424,7 +425,7 @@ export class Tokenizer {
 				// turn's signatures byte-for-byte (Bedrock's Converse replay strips
 				// them too); a per-message count cannot see position, so it follows
 				// the rule for older turns unless the caller says it is the latest
-				// (`MessageCountOptions.latestTurn`).
+				// (`countLatestTurn`).
 				const content = message.content;
 				const invalidStop = message.stopReason === "aborted" || message.stopReason === "error";
 				const keepsLatestSignatures = latestTurn && message.api === "anthropic-messages";

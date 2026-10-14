@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
 	type BranchSummaryEntry,
@@ -98,37 +98,52 @@ describe("findCutPoint backward scan boundaries", () => {
 		expect(preparation?.recentMessages).toHaveLength(2);
 	});
 
-	test("counts the reasoning the latest turn replays when its tool calls were abandoned", () => {
+	describe("counts the reasoning the latest turn replays when its tool calls were abandoned", () => {
 		// The replay keeps the latest assistant turn byte-for-byte, so a turn
 		// whose tool calls ended on max_tokens still sends its 30,000 tokens of
 		// signed reasoning, and the kept tail must count them.
-		const opus = getBundledModel("anthropic", "claude-opus-5-5") as Model;
-		const latest: AssistantMessage = {
-			...createAssistantMessage(
-				[
-					{ type: "thinking", thinking: "Plan the read.", thinkingSignature: "s".repeat(4000) },
-					{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.ts" } },
-				],
-				"length",
-			),
+		const opus = getBundledModel("anthropic", "claude-opus-5-5");
+		const fromOpus = (content: AssistantMessage["content"], stop: AssistantMessage["stopReason"]) => ({
+			...createAssistantMessage(content, stop),
 			api: opus.api,
 			provider: opus.provider,
 			model: opus.id,
-		};
-		latest.usage = { ...latest.usage, output: 30_000, totalTokens: 30_000 };
+		});
 		const message = (content: SessionMessageEntry["message"]): SessionMessageEntry => ({
 			...base("message"),
 			type: "message",
 			message: content,
 		});
-		const entries = [
+		const abandoned = (): SessionMessageEntry => {
+			const latest = fromOpus(
+				[
+					{ type: "thinking", thinking: "Plan the read.", thinkingSignature: "s".repeat(4000) },
+					{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.ts" } },
+				],
+				"length",
+			);
+			latest.usage = { ...latest.usage, output: 30_000, totalTokens: 30_000 };
+			return message(latest);
+		};
+		const history = () => [
 			message(createUserMessage("x".repeat(40_000))),
 			assistantEntry("first answer"),
 			message(createUserMessage("next question")),
-			message(latest),
 		];
 
-		const cut = findCutPoint(entries, new Tokenizer(opus), 0, entries.length, 20_000);
-		expect(cut.firstKeptEntryIndex).toBe(3);
+		test("as the newest entry", () => {
+			const entries = [...history(), abandoned()];
+			const cut = findCutPoint(entries, new Tokenizer(opus), 0, entries.length, 20_000);
+			expect(cut.firstKeptEntryIndex).toBe(3);
+		});
+
+		test("behind a newer turn the replay drops for its malformed tool call", () => {
+			// The replay drops the malformed call and with it the whole turn, so
+			// the abandoned turn before it is the request's latest.
+			const malformed = fromOpus([{ type: "toolCall", id: "call-2", name: "", arguments: {} }], "toolUse");
+			const entries = [...history(), abandoned(), message(malformed)];
+			const cut = findCutPoint(entries, new Tokenizer(opus), 0, entries.length, 20_000);
+			expect(cut.firstKeptEntryIndex).toBe(4);
+		});
 	});
 });

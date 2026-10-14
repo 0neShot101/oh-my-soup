@@ -34,7 +34,7 @@ import {
 import type { InputItem as CodexInputItem } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
 import { convertTools } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import { buildResponsesInput, resolveOpenAICompatPolicy } from "@oh-my-pi/pi-ai/providers/openai-shared";
-import { shouldDropTruncatedThinkingOnlyAssistant } from "@oh-my-pi/pi-ai/providers/transform-messages";
+import { isSurvivingAssistant } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import { stripOpenAIResponsesOutputOnlyStatusesForReplay } from "@oh-my-pi/pi-ai/utils";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
@@ -541,7 +541,7 @@ export function findCutPoint(
 	let latestTurnIndex = -1;
 	for (let i = entries.length - 1; i >= 0 && latestTurnIndex < 0; i--) {
 		const message = getMessageFromEntry(entries[i]);
-		if (message?.role === "assistant" && !shouldDropTruncatedThinkingOnlyAssistant(message)) latestTurnIndex = i;
+		if (message?.role === "assistant" && isSurvivingAssistant(message)) latestTurnIndex = i;
 	}
 	let cutPointIndex = cutPoints.length - 1;
 	let cutIndex = cutPoints[cutPointIndex];
@@ -550,7 +550,8 @@ export function findCutPoint(
 		const entry = entries[i];
 		const message = getMessageFromEntry(entry);
 		if (message) {
-			accumulatedTokens += tokenizer.countMessage(message, i === latestTurnIndex ? { latestTurn: true } : undefined);
+			accumulatedTokens +=
+				i === latestTurnIndex ? tokenizer.countLatestTurn(message) : tokenizer.countMessage(message);
 		}
 		if (i !== cutPoints[cutPointIndex]) continue;
 		if (accumulatedTokens > keepRecentTokens) break;

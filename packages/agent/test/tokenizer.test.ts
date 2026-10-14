@@ -319,14 +319,14 @@ describe("countMessage replayed thinking", () => {
 			const tokenizer = new Tokenizer(opus);
 			const turn = signedTurn(opus, VISIBLE, SIGNATURE, stop);
 			turn.content = [...turn.content, toolCall];
-			expect(tokenizer.countMessage(turn, { latestTurn: true })).toBe(OUTPUT_TOKENS);
+			expect(tokenizer.countLatestTurn(turn)).toBe(OUTPUT_TOKENS);
 			// An older position, counted after it, still gets the stripped count.
 			expect(tokenizer.countMessage(turn)).toBe(tokenizer.countMessage(turn, { excludeEncryptedReasoning: true }));
 
 			const bedrock = new Tokenizer(bedrockOpus);
 			const bedrockTurn = signedTurn(bedrockOpus, VISIBLE, SIGNATURE, stop);
 			bedrockTurn.content = [...bedrockTurn.content, toolCall];
-			expect(bedrock.countMessage(bedrockTurn, { latestTurn: true })).toBe(bedrock.countMessage(bedrockTurn));
+			expect(bedrock.countLatestTurn(bedrockTurn)).toBe(bedrock.countMessage(bedrockTurn));
 		}
 	});
 
