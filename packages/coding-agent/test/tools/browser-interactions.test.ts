@@ -874,7 +874,7 @@ return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.e
 		}
 	}, 30_000);
 
-	test("skips off-screen text matches that are disabled, inert or stay clipped once scrolled to", async () => {
+	test("skips off-screen text matches that are disabled, inert, disabled inside their shadow root or stay clipped once scrolled to", async () => {
 		const browserHandle = await acquireBrowser({ kind: "headless", headless: true }, { cwd: process.cwd() });
 		if (!("browser" in browserHandle)) throw new Error("Expected a Puppeteer browser");
 		const page = await browserHandle.browser.newPage();
@@ -882,16 +882,31 @@ return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.e
 			await page.setContent(`<div style="height: 3000px"></div><button id="disabled" disabled>Far</button>
 <div style="height: 3000px"></div><div style="overflow: hidden; height: 0"><button id="clipped">Far</button></div>
 <div style="height: 3000px"></div><div inert><button id="inert">Far</button></div>
-<div style="height: 3000px"></div><button id="enabled">Far</button>`);
-			const handles = await page.$$("text/Far");
-			const winner = await resolveActionableQueryHandlerClickTarget(handles);
-			const winnerId = await winner?.evaluate(el => {
-				// Puppeteer's page callback type cannot name DOM globals in this test environment.
-				const element = el as unknown as { id: string };
-				return element.id;
-			});
-			expect(winnerId).toBe("enabled");
-			await Promise.all([winner, ...handles].map(handle => handle?.dispose()));
+<div style="height: 3000px"></div><x-button id="shadowed">Far</x-button>
+<div style="height: 3000px"></div><button id="enabled">Far</button>
+<script>
+customElements.define("x-button", class extends HTMLElement {
+	constructor() {
+		super();
+		this.attachShadow({ mode: "open" }).innerHTML = "<button disabled><slot></slot></button>";
+	}
+});
+</script>`);
+			const winnerId = async (selector: string): Promise<string | undefined> => {
+				const handles = await page.$$(selector);
+				const winner = await resolveActionableQueryHandlerClickTarget(handles);
+				const id = await winner?.evaluate(el => {
+					// Puppeteer's page callback type cannot name DOM globals in this test environment.
+					const element = el as unknown as { id: string };
+					return element.id;
+				});
+				await Promise.all([winner, ...handles].map(handle => handle?.dispose()));
+				return id;
+			};
+			expect(await winnerId("text/Far")).toBe("enabled");
+			// A host whose shadow root renders a disabled button takes no click either.
+			await page.evaluate("scrollTo(0, 0)");
+			expect(await winnerId("#shadowed, #enabled")).toBe("enabled");
 		} finally {
 			await page.close().catch(() => undefined);
 			if (browserHandle.browser.connected) await releaseBrowser(browserHandle, { kill: true });

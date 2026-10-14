@@ -73,6 +73,8 @@ interface PageRoot {
 
 interface PageShadowRoot {
 	elementFromPoint(x: number, y: number): PageElement | null;
+	querySelectorAll(selector: string): ArrayLike<PageElement>;
+	querySelector(selector: string): PageElement | null;
 }
 
 interface PageElement {
@@ -181,15 +183,22 @@ function checkClickActionable(
 		return { ok: false as const, reason: `visibility:${style.visibility}` };
 	}
 	if (style.pointerEvents === "none") return { ok: false as const, reason: "pointer-events:none" };
-	// The browser drops a click on a disabled control or anything under an inert subtree, though hit-testing finds it.
-	if (element.matches(":disabled")) return { ok: false as const, reason: "disabled" };
-	for (
-		let node: PageElement | null = element;
-		node;
-		node = node.assignedSlot ?? node.parentElement ?? node.getRootNode().host ?? null
-	) {
-		if (node.inert) return { ok: false as const, reason: "inert" };
-	}
+	// The browser drops a click on a disabled control, inside a disabled button (also through a slot, as when a
+	// custom element's shadow root wraps its label in one), or under an inert subtree, though hit-testing finds it.
+	const refused = (target: PageElement): "disabled" | "inert" | undefined => {
+		if (target.matches(":disabled") || target.shadowRoot?.querySelector("button:disabled slot")) return "disabled";
+		for (
+			let node: PageElement | null = target;
+			node;
+			node = node.assignedSlot ?? node.parentElement ?? node.getRootNode().host ?? null
+		) {
+			if (node.inert) return "inert";
+			if (node.matches("button:disabled")) return "disabled";
+		}
+		return undefined;
+	};
+	const refusedTarget = refused(element);
+	if (refusedTarget) return { ok: false as const, reason: refusedTarget };
 	// A custom checkbox or radio keeps its real control at opacity:0 under the box it draws; the hit test below decides.
 	if (
 		Number(style.opacity) === 0 &&
@@ -251,6 +260,9 @@ function checkClickActionable(
 			.join("");
 		return { ok: false as const, reason: "covered", coveredBy: `<${tag}${id}${classes}>` };
 	}
+	// The hit may be a disabled control inside the target's shadow root, which takes the click instead.
+	const refusedHit = refused(topElement);
+	if (refusedHit) return { ok: false as const, reason: refusedHit };
 	return { ok: true as const, x: x - rect.left, y: y - rect.top };
 }
 
