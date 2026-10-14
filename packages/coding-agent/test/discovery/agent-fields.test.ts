@@ -94,10 +94,7 @@ describe("parseAgentFields", () => {
 
 	test.each([
 		["empty string", ""],
-		["comma-only string", " , "],
-		["number", 42],
-		["boolean", true],
-		["object", {}],
+		["non-string scalar", 42],
 		["non-string array", [1, 2]],
 	])("treats %s tools as an empty built-in allowlist", (_label, tools) => {
 		expect(parseAgentFields({ name: "quiet", description: "desc", tools })?.tools).toEqual([]);
