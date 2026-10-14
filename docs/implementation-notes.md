@@ -1,0 +1,1 @@
+- Native development build on this Mac lacks Ninja and the pinned nightly Rust toolchain (`rust-toolchain.toml`); parked as environment setup outside the `/restart` profile fix, with runtime tests using the matching published native addon.

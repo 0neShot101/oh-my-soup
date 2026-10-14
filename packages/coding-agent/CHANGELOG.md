@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/restart` losing the active named profile and failing to resume its session.
+
 ## [18.10.1] - 2026-10-12
 
 ### Added
