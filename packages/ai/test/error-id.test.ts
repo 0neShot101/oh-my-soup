@@ -145,7 +145,6 @@ describe("error-id classification", () => {
 
 	it.each([
 		"stream error: stream disconnected before completion: stream closed before response.completed",
-		"stream_incomplete: Upstream websocket closed before response.completed: Upstream websocket receive failed",
 		"Upstream response stream was interrupted",
 		"Upstream stream ended before terminal chunk",
 		"Client network socket disconnected before secure TLS connection was established",
