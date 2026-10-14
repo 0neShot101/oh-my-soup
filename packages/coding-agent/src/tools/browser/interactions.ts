@@ -181,6 +181,15 @@ function checkClickActionable(
 		return { ok: false as const, reason: `visibility:${style.visibility}` };
 	}
 	if (style.pointerEvents === "none") return { ok: false as const, reason: "pointer-events:none" };
+	// The browser drops a click on a disabled control or anything under an inert subtree, though hit-testing finds it.
+	if (element.matches(":disabled")) return { ok: false as const, reason: "disabled" };
+	for (
+		let node: PageElement | null = element;
+		node;
+		node = node.assignedSlot ?? node.parentElement ?? node.getRootNode().host ?? null
+	) {
+		if (node.inert) return { ok: false as const, reason: "inert" };
+	}
 	// A custom checkbox or radio keeps its real control at opacity:0 under the box it draws; the hit test below decides.
 	if (
 		Number(style.opacity) === 0 &&
@@ -419,12 +428,11 @@ interface MeasuredBox {
 	y: number;
 	sized: boolean;
 	onScreen: boolean;
-	disabled: boolean;
 }
 
 /**
  * Runs in the page: the element's document position, whether it has a box, whether any of it shows
- * through the viewport and its clipping ancestors, and whether it is a disabled control.
+ * through the viewport and its clipping ancestors.
  * Self-contained, since Puppeteer serializes it.
  */
 function measureBoxInPage(el: unknown): MeasuredBox {
@@ -513,8 +521,10 @@ function measureBoxInPage(el: unknown): MeasuredBox {
 			continue;
 		}
 		position = style.position;
-		// Overflow does not apply to a non-replaced inline box; paint containment clips like overflow.
-		const paintClip = /paint|strict|content/.test(style.contain);
+		// Overflow does not apply to a non-replaced inline box; paint containment (explicit, or implied by
+		// `content-visibility`) clips like overflow.
+		const paintClip =
+			/paint|strict|content/.test(style.contain) || (style.contentVisibility ?? "visible") !== "visible";
 		const clipX = paintClip || (style.overflowX !== "visible" && style.display !== "inline");
 		const clipY = paintClip || (style.overflowY !== "visible" && style.display !== "inline");
 		if (clipX || clipY) {
@@ -541,8 +551,6 @@ function measureBoxInPage(el: unknown): MeasuredBox {
 			rect.bottom > view.top &&
 			rect.left < view.right &&
 			rect.top < view.bottom,
-		// A disabled native control takes no click, though hit-testing still finds it.
-		disabled: element.matches(":disabled"),
 	};
 }
 
@@ -580,7 +588,7 @@ async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal
 
 /**
  * Scroll an off-screen match into view and report whether a click could reach it (or names what covers it).
- * Hit-testing alone accepts a clipping ancestor and a disabled control, so the match must also show and be enabled.
+ * Hit-testing alone accepts a clipping ancestor, so the match must also show once scrolled to.
  */
 async function scrollToClickable(handle: ElementHandle, signal?: AbortSignal): Promise<boolean> {
 	try {
@@ -591,7 +599,7 @@ async function scrollToClickable(handle: ElementHandle, signal?: AbortSignal): P
 			}),
 		);
 		const box = await untilAborted(signal, () => handle.evaluate(measureBoxInPage));
-		if (!box.onScreen || box.disabled) return false;
+		if (!box.onScreen) return false;
 		const actionable = await isClickActionable(handle, signal);
 		return actionable.ok || actionable.coveredBy !== undefined;
 	} catch (error) {

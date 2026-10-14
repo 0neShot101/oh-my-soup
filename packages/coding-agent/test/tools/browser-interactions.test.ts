@@ -97,7 +97,8 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser click timeouts", () => {
 		const unclickableHtml = `<!doctype html><button id="hidden" style="display:none">Hidden</button><button id="faded" style="opacity:0">Faded</button>
 <button class="multi" style="display:none">First</button><button class="multi">Second</button>
 <button id="swap">Swap</button>
-<button style="pointer-events:none">Twin</button><button>Twin</button>`;
+<button style="pointer-events:none">Twin</button><button>Twin</button>
+<button id="off" disabled>Off</button><div inert><button id="asleep">Asleep</button></div>`;
 		await prelude.invoke(
 			{ action: "open", name: tabName, url: `data:text/html,${encodeURIComponent(unclickableHtml)}` },
 			context,
@@ -129,6 +130,9 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser click timeouts", () => {
 			// Text queries keep the first on-screen match even when it is refused, and report why.
 			expect(await attempt(`tab.click("text/Faded")`)).toContain("last check: opacity:0");
 			expect(await attempt(`tab.click("text/Twin")`)).toContain("last check: pointer-events:none");
+			// The browser drops these clicks, so they are refused rather than reported as done.
+			expect(await attempt(`tab.click("#off")`)).toContain("last check: disabled");
+			expect(await attempt(`tab.click("text/Asleep")`)).toContain("last check: inert");
 			// The count tells the caller the first of several matches is the hidden one.
 			const multi = await attempt(`tab.dblclick(".multi")`);
 			expect(multi).toContain("last check: display:none");
@@ -870,13 +874,14 @@ return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.e
 		}
 	}, 30_000);
 
-	test("skips off-screen text matches that are disabled or stay clipped once scrolled to", async () => {
+	test("skips off-screen text matches that are disabled, inert or stay clipped once scrolled to", async () => {
 		const browserHandle = await acquireBrowser({ kind: "headless", headless: true }, { cwd: process.cwd() });
 		if (!("browser" in browserHandle)) throw new Error("Expected a Puppeteer browser");
 		const page = await browserHandle.browser.newPage();
 		try {
 			await page.setContent(`<div style="height: 3000px"></div><button id="disabled" disabled>Far</button>
 <div style="height: 3000px"></div><div style="overflow: hidden; height: 0"><button id="clipped">Far</button></div>
+<div style="height: 3000px"></div><div inert><button id="inert">Far</button></div>
 <div style="height: 3000px"></div><button id="enabled">Far</button>`);
 			const handles = await page.$$("text/Far");
 			const winner = await resolveActionableQueryHandlerClickTarget(handles);
@@ -952,6 +957,10 @@ return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.e
 			},
 			"clipped by paint containment": {
 				html: `<div style="contain: paint; height: 0"><button id="clipped">Pick</button></div>${later}`,
+				winner: "later",
+			},
+			"clipped by content-visibility": {
+				html: `<div style="content-visibility: auto; height: 0"><button id="clipped">Pick</button></div>${later}`,
 				winner: "later",
 			},
 			"modal dialog escaping a transformed clip": {
