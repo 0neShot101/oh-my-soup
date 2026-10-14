@@ -1045,6 +1045,33 @@ describe("completion() through eval runtimes", () => {
 		expect(result.output.trim()).toBe("hello from the next cell");
 	});
 
+	it("times out waiting on a running completion started in an earlier JavaScript cell", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-completion-cells-timeout-");
+		const options = {
+			cwd: tempDir.path(),
+			sessionId: `js-completion-cells-timeout:${crypto.randomUUID()}`,
+			session: makeSession({ cwd: tempDir.path() }),
+			sessionFile: path.join(tempDir.path(), "session.jsonl"),
+		};
+		// The model call stays running until afterEach releases (aborts) the handle.
+		vi.spyOn(ai, "completeSimple").mockImplementation((_model, _context, opts) => {
+			const { promise, reject } = Promise.withResolvers<AssistantMessage>();
+			opts?.signal?.addEventListener("abort", () => reject(opts.signal?.reason), { once: true });
+			return promise;
+		});
+
+		const started = await executeJs('var handles = [completion("hi", { model: "smol" })];', options);
+		expect(started.exitCode).toBe(0);
+
+		// Real clock: the timeout is enforced by the host `__wait__` bridge across the worker boundary.
+		const result = await executeJs(
+			"try { await wait(handles, { timeout: 0.05 }); } catch (error) { print(error.name); }",
+			options,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("TimeoutError");
+	});
+
 	it("exposes plain and structured completion() in the Python runtime", async () => {
 		const tempDir = TempDir.createSync("@omp-eval-completion-py-");
 		try {
