@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed parallel tool calls overwriting each other on OpenAI-compatible gateways that reuse `index: 0` across separate streamed chunks with distinct tool-call IDs
+
 ## [18.10.4] - 2026-10-13
 
 ### Fixed

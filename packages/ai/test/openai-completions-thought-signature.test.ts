@@ -223,4 +223,85 @@ describe("OpenAI-compatible Gemini thought signatures", () => {
 			tool_calls: [{ id: "call_1", extra_content: { google: { thought_signature: "per-call-sig" } } }],
 		});
 	});
+
+	it("keeps parallel tool calls isolated when separate chunks reuse index 0 with distinct IDs", async () => {
+		const chunks = [
+			{
+				id: "chatcmpl-gemini-parallel",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [
+					{
+						index: 0,
+						delta: {
+							role: "assistant",
+							thought_signature: "parallel-sig",
+							tool_calls: [
+								{
+									index: 0,
+									id: "call_315306",
+									type: "function",
+									function: { name: "read", arguments: '{"i":"1","path":"a.txt"}' },
+								},
+							],
+						},
+					},
+				],
+			},
+			{
+				id: "chatcmpl-gemini-parallel",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [
+					{
+						index: 0,
+						delta: {
+							role: "assistant",
+							tool_calls: [
+								{
+									index: 0,
+									id: "call_315307",
+									type: "function",
+									function: { name: "read", arguments: '{"i":"2","path":"b.txt"}' },
+								},
+							],
+						},
+					},
+				],
+			},
+			{
+				id: "chatcmpl-gemini-parallel",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+			},
+		];
+		const body = `${chunks.map(chunk => `data: ${JSON.stringify(chunk)}`).join("\n\n")}\n\ndata: [DONE]\n\n`;
+		const fetchMock: FetchImpl = Object.assign(
+			async (): Promise<Response> => new Response(body, { headers: { "content-type": "text/event-stream" } }),
+			{ preconnect: fetch.preconnect },
+		);
+
+		const assistant = await streamOpenAICompletions(
+			model,
+			{ messages: [userMessage] },
+			{ apiKey: "test-key", fetch: fetchMock },
+		).result();
+
+		const toolCalls = assistant.content.filter((block): block is ToolCall => block.type === "toolCall");
+		expect(toolCalls).toHaveLength(2);
+		expect(toolCalls[0]).toMatchObject({
+			id: "call_315306",
+			name: "read",
+			arguments: { i: "1", path: "a.txt" },
+		});
+		expect(toolCalls[1]).toMatchObject({
+			id: "call_315307",
+			name: "read",
+			arguments: { i: "2", path: "b.txt" },
+		});
+	});
 });
