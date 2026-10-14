@@ -328,8 +328,16 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 		return null;
 	}
 
-	let tools =
-		Array.isArray(frontmatter.tools) && frontmatter.tools.length === 0 ? [] : parseArrayOrCSV(frontmatter.tools);
+	// Only absent or null tools select defaults; malformed restrictions must not widen access.
+	const rawTools = frontmatter.tools;
+	let tools = rawTools == null ? undefined : (parseArrayOrCSV(rawTools) ?? []);
+	if (tools?.length === 0 && !(Array.isArray(rawTools) && rawTools.length === 0)) {
+		const valueType = Array.isArray(rawTools) ? "array" : typeof rawTools;
+		logger.warn("Agent tools declaration names no tools; using an empty built-in allowlist", {
+			agent: name,
+			valueType,
+		});
+	}
 	if (tools) tools = normalizeToolNames(tools);
 
 	// Parse spawns field (array, "*", or CSV)

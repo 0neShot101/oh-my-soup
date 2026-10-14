@@ -35,7 +35,7 @@ Parsing comes from frontmatter via `parseAgentFields()` (`src/discovery/helpers.
 
 - missing/non-string `name` or `description` => invalid (`null`), caller treats as parse failure
 - `main` and `sub` are reserved names (checked after trimming and lowercasing); definitions using them are invalid
-- `tools` accepts CSV or array; legacy tool aliases are normalized and `yield` is auto-added. An explicit `tools: []` therefore grants `yield`, not the default toolset.
+- `tools` accepts CSV or array; legacy tool aliases are normalized and mixed arrays retain their string entries. Omitted or YAML-null `tools` selects the default built-in toolset. Any other declaration with no tool names (including `tools: []`, empty CSV, or malformed scalar/array values) selects no built-ins. Structured children still receive the required `yield` tool; MCP, extension, and custom tools remain additive.
 - `spawns` accepts `*`, CSV, or array
 - backward-compat behavior: if `spawns` missing but `tools` includes `task`, `spawns` becomes `*`
 - `output` is passed through as opaque schema data
