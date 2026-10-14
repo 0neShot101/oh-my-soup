@@ -1733,7 +1733,7 @@ async fn terminate_run(registry: &process::SpawnRegistry) {
 		}
 		if wave + 1 < WAVES {
 			let pause = if wave == 0 {
-				Duration::from_millis(75)
+				Duration::from_secs(1)
 			} else {
 				Duration::from_millis(150)
 			};

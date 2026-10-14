@@ -112,7 +112,7 @@ impl ChildProcess {
 
 	/// Waits for the process to exit.
 	///
-	/// If a cancellation token is provided and triggered, the process will be killed.
+	/// Cancellation gives the process a bounded TERM grace before killing it.
 	pub async fn wait(
 		&mut self,
 		cancel_token: Option<CancellationToken>,
@@ -150,6 +150,24 @@ impl ChildProcess {
 					break Ok(ProcessWaitResult::Completed(output))
 				},
 				_ = &mut cancelled => {
+					// The embedding host may also terminate the process group/tree.
+					// Do not race that polite wave with an immediate hard kill.
+					#[cfg(unix)]
+					{
+						if let Some(pid) = self.pid {
+							let _ = nix::sys::signal::kill(
+								nix::unistd::Pid::from_raw(pid),
+								nix::sys::signal::Signal::SIGTERM,
+							);
+						}
+						if let Ok(output) = tokio::time::timeout(
+							std::time::Duration::from_secs(1),
+							&mut self.exec_future,
+						).await {
+							let _ = output?;
+							self.reaped = true;
+						}
+					}
 					self.kill();
 					self.write_completion_marker(130);
 					break Ok(ProcessWaitResult::Cancelled)
