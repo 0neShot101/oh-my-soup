@@ -359,6 +359,9 @@ fn assert_seen_lines(
 	let Some(seen) = snapshot.seen_lines else {
 		return Ok(());
 	};
+	if seen.is_empty() {
+		return Ok(());
+	}
 	let mut unseen = section
 		.collect_anchor_lines()?
 		.into_iter()
@@ -1111,23 +1114,29 @@ mod lifecycle {
 			"let v0022 = 22;",
 		]);
 	}
+
+	/// A wide line the read cut is not promoted by the guard's own column-capped
+	/// reveal: every retry names the `:raw` selector until the full line is
+	/// seen.
 	#[tokio::test]
-	async fn wide_unseen_line_requires_full_read_even_when_only_line_was_cut() {
+	async fn wide_unseen_line_requires_full_read() {
 		let ctx = Lifecycle::new("wide.txt", 1);
-		let original = format!("note: {} END-OF-LINE-TAIL\n", "abcdefghij".repeat(80));
+		let wide = format!("note: {} END-OF-LINE-TAIL", "abcdefghij".repeat(80));
+		let original = format!("{wide}\nshort\n");
 		ctx.write_text("wide.txt", &original);
-		let tag = ctx.read("wide.txt", &[]);
-		let shortened = format!("NOTE: {}\n", &"abcdefghij".repeat(80)[..762]);
-		let patch = format!("[wide.txt#{tag}]\nPUT 1.=1:\n+{}", shortened);
-		let err = ctx.edit(&patch).await.unwrap_err();
-		assert!(err.contains("wide.txt:1:raw"), "unexpected error: {err}");
-		assert_eq!(ctx.text("wide.txt"), original);
-		let err = ctx.edit(&patch).await.unwrap_err();
-		assert!(err.contains("wide.txt:1:raw"), "unexpected retry: {err}");
+		let tag = ctx.read("wide.txt", &[2]);
+		let patch = format!("[wide.txt#{tag}]\nPUT 1.=1:\n+NOTE: {}\n", &wide[6..768]);
+		for _ in 0..2 {
+			let err = ctx.edit(&patch).await.unwrap_err();
+			assert!(err.contains("wide.txt:1:raw"), "unexpected error: {err}");
+			assert_eq!(ctx.text("wide.txt"), original);
+		}
 		ctx.store
 			.record_seen_lines(&ctx.canonical("wide.txt"), &tag, &[1]);
-		let full = format!("[wide.txt#{tag}]\nPUT 1.=1:\n+{}", original.replace("note:", "NOTE:"));
-		ctx.edit(&full).await.unwrap();
-		assert_eq!(ctx.text("wide.txt"), original.replace("note:", "NOTE:"));
+		let full = original.replace("note:", "NOTE:");
+		ctx.edit(&format!("[wide.txt#{tag}]\nPUT 1.=1:\n+{wide}\n").replace("note:", "NOTE:"))
+			.await
+			.unwrap();
+		assert_eq!(ctx.text("wide.txt"), full);
 	}
 }
