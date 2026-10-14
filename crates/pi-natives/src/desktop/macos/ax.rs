@@ -720,6 +720,9 @@ impl AxBackend for MacAx {
 			if replace_native_text(element, pid, started_in_background, value)? {
 				return Ok(());
 			}
+			// The probes above can block; a run cancelled meanwhile writes
+			// nothing.
+			control::check()?;
 			set_string_value(element, "AXValue", value)?;
 			verify_text_value(element, value, value)
 		})
