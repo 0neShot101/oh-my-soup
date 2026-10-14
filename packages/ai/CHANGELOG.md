@@ -41,6 +41,9 @@
 ### Fixed
 
 - Fixed Claude on Google Antigravity failing every turn with "image exceeds 5 MB maximum" once a large image entered the conversation; images are now downscaled to the host's limits before sending, as on the Anthropic API ([#15444](https://github.com/can1357/oh-my-pi/pull/15444) by [@will-bogusz](https://github.com/will-bogusz))
+### Fixed
+
+- Removed doubled-pipe DeepSeek DSML markup from assistant text and reasoning on OpenAI-compatible gateways.
 
 ## [18.10.2] - 2026-10-12
 
