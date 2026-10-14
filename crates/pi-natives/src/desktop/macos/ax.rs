@@ -709,11 +709,15 @@ impl AxBackend for MacAx {
 			return set_date_value(element, value, current);
 		}
 		let pid = element_pid(element)?;
+		// Focus is borrowed only from an app already in the background as the
+		// call starts: only then does the guard below watch for the user
+		// and restore the front app.
+		let started_in_background = may_borrow_focus(skylight::front_pid(), pid);
 		skylight::with_background_guard(pid, || {
 			// Apps commit what reaches their field editor; several (Contacts,
 			// Font Book, System Settings search) echo an AXValue write without
 			// ever taking it, so replace the text the way `typeText` inserts it.
-			if replace_native_text(element, value)? {
+			if replace_native_text(element, pid, started_in_background, value)? {
 				return Ok(());
 			}
 			set_string_value(element, "AXValue", value)?;
@@ -896,19 +900,31 @@ fn verify_text_value(element: &AXUIElement, sent: &str, expected: &str) -> CoreR
 
 fn is_secure(element: &AXUIElement) -> bool {
 	secure_subrole(copy_attribute_result(element, "AXSubrole").map(|value| {
-		value
-			.and_then(|value| value.downcast::<CFString>().ok())
-			.map(|value| value.to_string())
+		match value {
+			None => Subrole::Absent,
+			Some(value) => value
+				.downcast::<CFString>()
+				.map_or(Subrole::Malformed, |value| Subrole::Named(value.to_string())),
+		}
 	}))
 }
 
-/// A subrole that could not be read counts as secure, so a timeout never lets
-/// a password into an error; a field without one is not secure.
-fn secure_subrole(read: Result<Option<String>, AXError>) -> bool {
+/// What an element answered for `AXSubrole`.
+enum Subrole {
+	Absent,
+	Named(String),
+	/// A value that is not a string.
+	Malformed,
+}
+
+/// A subrole that could not be read, or was not a string, counts as secure, so
+/// neither a timeout nor a malformed answer lets a password into an error; a
+/// field without one is not secure.
+fn secure_subrole(read: Result<Subrole, AXError>) -> bool {
 	match read {
-		Ok(subrole) => subrole.as_deref() == Some("AXSecureTextField"),
-		Err(AXError::NoValue | AXError::AttributeUnsupported) => false,
-		Err(_) => true,
+		Ok(Subrole::Absent) | Err(AXError::NoValue | AXError::AttributeUnsupported) => false,
+		Ok(Subrole::Named(subrole)) => subrole == "AXSecureTextField",
+		Ok(Subrole::Malformed) | Err(_) => true,
 	}
 }
 
@@ -1035,7 +1051,12 @@ pub(super) fn insert_native_text(pid: libc::pid_t, wid: u32, text: &str) -> Core
 /// Replaces a native text field's whole value through `AXSelectedText`, the
 /// path `typeText` uses, after focusing the field and selecting all of it.
 /// `false` means nothing was written and the caller may write `AXValue`.
-fn replace_native_text(element: &AXUIElement, text: &str) -> CoreResult<bool> {
+fn replace_native_text(
+	element: &AXUIElement,
+	pid: libc::pid_t,
+	may_borrow: bool,
+	text: &str,
+) -> CoreResult<bool> {
 	if !matches!(
 		copy_string(element, "AXRole").as_deref(),
 		Some("AXTextField" | "AXTextArea" | "AXComboBox")
@@ -1043,7 +1064,7 @@ fn replace_native_text(element: &AXUIElement, text: &str) -> CoreResult<bool> {
 	{
 		return Ok(false);
 	}
-	replace_whole_value(&LiveField { element, pid: element_pid(element)? }, text)
+	replace_whole_value(&LiveField { element, pid, may_borrow }, text)
 }
 
 /// The AX steps of a whole-value replacement, kept apart so the order of its
@@ -1138,8 +1159,11 @@ fn replace_whole_value<F: TextField>(field: &F, text: &str) -> CoreResult<bool> 
 }
 
 struct LiveField<'a> {
-	element: &'a AXUIElement,
-	pid:     libc::pid_t,
+	element:    &'a AXUIElement,
+	pid:        libc::pid_t,
+	/// The app was in the background as the call started; see
+	/// `MacAx::set_value`.
+	may_borrow: bool,
 }
 
 impl TextField for LiveField<'_> {
@@ -1154,7 +1178,7 @@ impl TextField for LiveField<'_> {
 	}
 
 	fn in_background(&self) -> bool {
-		may_borrow_focus(skylight::front_pid(), self.pid)
+		self.may_borrow && may_borrow_focus(skylight::front_pid(), self.pid)
 	}
 
 	fn focus(&self) -> AXError {
@@ -1783,10 +1807,13 @@ mod tests {
 	}
 
 	#[test]
-	fn an_unreadable_subrole_counts_as_secure() {
-		assert!(secure_subrole(Ok(Some("AXSecureTextField".to_owned()))));
-		assert!(!secure_subrole(Ok(Some("AXSearchField".to_owned()))));
-		assert!(!secure_subrole(Ok(None)));
+	fn an_unreadable_or_malformed_subrole_counts_as_secure() {
+		use super::Subrole;
+
+		assert!(secure_subrole(Ok(Subrole::Named("AXSecureTextField".to_owned()))));
+		assert!(!secure_subrole(Ok(Subrole::Named("AXSearchField".to_owned()))));
+		assert!(secure_subrole(Ok(Subrole::Malformed)));
+		assert!(!secure_subrole(Ok(Subrole::Absent)));
 		assert!(!secure_subrole(Err(AXError::NoValue)));
 		assert!(!secure_subrole(Err(AXError::AttributeUnsupported)));
 		assert!(secure_subrole(Err(AXError::CannotComplete)));
