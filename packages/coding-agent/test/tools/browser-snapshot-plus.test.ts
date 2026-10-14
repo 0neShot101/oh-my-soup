@@ -221,6 +221,18 @@ await tab.evaluate((s, p, l) => {
 			);
 			expect(restored).toBeTrue();
 
+			// A hidden password field whose page getter throws must not fail the whole snapshot.
+			await invoke({
+				action: "run",
+				name,
+				code: `await tab.evaluate(() => {
+	const input = document.body.appendChild(document.createElement("input"));
+	input.type = "password";
+	input.hidden = true;
+	Object.defineProperty(input, "value", { configurable: true, get() { throw new Error("no value"); } });
+});`,
+			});
+
 			// cmux and frame snapshots run the same bundle in the page's own world, where the page's accessors are
 			// the ones masked and must come back.
 			const pageWorld = valueFrom<{ snapshot: string; kept: boolean; crossRealm: boolean }>(

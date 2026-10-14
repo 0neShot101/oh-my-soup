@@ -77,9 +77,6 @@ function maskAriaNode(node: AriaNode, forms: Array<[string, string]>): void {
 }
 
 export function ariaSnapshot(root: Element | null, request: AriaSnapshotRequest = {}): string {
-	walkElements(el => {
-		if ((el as RefElement)._ariaRef) delete (el as RefElement)._ariaRef;
-	});
 	const target = root ?? document.body ?? document.documentElement;
 	const options = { mode: "ai", depth: request.depth, boxes: request.boxes } as const;
 	// Playwright reads a text input's live value for the textbox's child text and for the
@@ -91,15 +88,20 @@ export function ariaSnapshot(root: Element | null, request: AriaSnapshotRequest 
 	// before the getters are removed; an own \`value\` property the page installed (React
 	// tracks input changes with one) is put back as it was. A value the page made
 	// unpatchable (non-configurable, or a non-extensible input) is masked in the built tree
-	// instead, before rendering escapes it, in its raw and whitespace-normalized forms.
+	// instead, before rendering escapes it, in its raw and whitespace-normalized forms. A
+	// page getter that throws reads as empty here, so one odd field cannot fail the snapshot.
 	const masked: Array<[HTMLInputElement, PropertyDescriptor | undefined]> = [];
 	const pinned: Array<[string, string]> = [];
 	try {
 		walkElements(el => {
+			if ((el as RefElement)._ariaRef) delete (el as RefElement)._ariaRef;
 			const input = el as HTMLInputElement;
 			if (input.localName !== "input" || input.type !== "password") return;
 			const own = Object.getOwnPropertyDescriptor(input, "value");
-			const value = input.value;
+			let value = "";
+			try {
+				value = input.value;
+			} catch {}
 			const bullets = "\\u2022".repeat(value.length);
 			if (own ? !own.configurable : !Object.isExtensible(input)) {
 				for (const form of new Set([value, normalizeWhiteSpace(value)])) if (form) pinned.push([form, bullets]);
