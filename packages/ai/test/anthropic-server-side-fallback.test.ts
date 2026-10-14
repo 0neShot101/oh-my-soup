@@ -817,3 +817,176 @@ describe("mid-turn fallback a gateway opted into", () => {
 		expect(JSON.stringify(requests[1]!.messages)).not.toContain('"type":"thinking"');
 	});
 });
+
+describe("fallback-credit continuation after a mid-turn fallback", () => {
+	// Redeeming a credit always deletes `fallbacks` from the frozen body and
+	// filters the beta, so the echoed refusal prefix can neither carry the
+	// marker nor replay both models' signed reasoning — the latter is the 400
+	// this file is about.
+	const usage = { input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+
+	it("echoes one model's reasoning without the marker and persists the same prefix", async () => {
+		let captured: Record<string, unknown> | undefined;
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation((params: unknown) => {
+			captured = params as Record<string, unknown>;
+			return createMockRequest([
+				{ type: "message_start", message: { id: "msg_credit", usage } },
+				{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+				{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "done" } },
+				{ type: "content_block_stop", index: 0 },
+				{ type: "message_delta", delta: { stop_reason: "end_turn" }, usage },
+				{ type: "message_stop" },
+			]) as never;
+		});
+
+		const redeemed = await streamAnthropic({ ...fableModel, id: "claude-opus-4-8" }, context, {
+			apiKey: "sk-ant-test",
+			fallbackCreditRedemption: {
+				token: "fct_mid_turn_fallback",
+				prefillClaim: true,
+				params: {
+					model: "claude-fable-5",
+					messages: [{ role: "user", content: "Say hi" }],
+					max_tokens: 1024,
+					stream: true,
+					fallbacks: [{ model: "claude-opus-4-8" }],
+				},
+				betas: ["fallback-credit-2026-06-01"],
+				expiresAt: Date.now() + 60_000,
+				refusedContent: [
+					{ type: "thinking", thinking: "primary plan", thinkingSignature: "sig-primary" },
+					{ type: "fallback", from: { model: "claude-opus-5-5" }, to: { model: "claude-opus-4-8" } },
+					{ type: "thinking", thinking: "fallback plan", thinkingSignature: "sig-fallback" },
+					{ type: "text", text: "Partial " },
+				],
+			},
+		}).result();
+
+		expect(captured?.fallbacks).toBeUndefined();
+		const messages = captured?.messages as Array<{ role: string; content: unknown }>;
+		expect(messages[1]).toEqual({
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "fallback plan", signature: "sig-fallback" },
+				{ type: "text", text: "Partial" },
+			],
+		});
+		// The persisted turn keeps the shape that was sent, so no later replay
+		// can resurrect the two-chain turn.
+		expect(redeemed.content.some(block => block.type === "fallback")).toBe(false);
+		expect(redeemed.content.filter(block => block.type === "thinking").map(block => block.thinkingSignature)).toEqual(
+			["sig-fallback"],
+		);
+	});
+});
+
+describe("thinking-led classification with a fallback boundary", () => {
+	// A gateway that falls back before the primary emits any reasoning persists
+	// `[fallback, thinking(fallbackModel), …]`. The marker is bookkeeping, not
+	// output: a `compat.stripThinkingHistory` route that read it as a
+	// thinkingless turn would drop the one reasoning segment the replay keeps.
+	// `stripThinkingHistory` only fires on a budget (`enabled`) thinking route.
+	const strippingModel: Model<"anthropic-messages"> = (() => {
+		const built = buildModel({
+			id: "claude-opus-4-8",
+			name: "Claude Opus 4.8",
+			api: "anthropic-messages",
+			provider: "anthropic",
+			baseUrl: "https://api.anthropic.com",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1_000_000,
+			maxTokens: 128_000,
+		});
+		return {
+			...built,
+			compat: { ...built.compat, stripThinkingHistory: true, disableAdaptiveThinking: true },
+		};
+	})();
+
+	interface Payload {
+		thinking?: { type: string };
+		messages: Array<{ role: string; content: string | Array<{ type: string }> }>;
+	}
+
+	async function payloadFor(messages: Message[]): Promise<Payload> {
+		const controller = new AbortController();
+		controller.abort();
+		let payload: unknown;
+		await streamAnthropic(
+			strippingModel,
+			{ messages },
+			{
+				apiKey: "sk-ant-test",
+				thinkingEnabled: true,
+				signal: controller.signal,
+				onPayload: built => {
+					payload = built;
+				},
+			},
+		).result();
+		if (!payload) throw new Error("expected a built payload");
+		return payload as Payload;
+	}
+
+	function turn(content: AssistantMessage["content"]): Message[] {
+		return [
+			{ role: "user", content: "Read a.txt", timestamp: 0 },
+			{
+				role: "assistant",
+				content,
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-opus-4-8",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: 0,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "toolu_read",
+				toolName: "read",
+				content: [{ type: "text", text: "contents" }],
+				isError: false,
+				timestamp: 0,
+			},
+		];
+	}
+
+	const assistantBlockTypes = (payload: Payload) =>
+		payload.messages
+			.filter(message => message.role === "assistant")
+			.flatMap(message => (Array.isArray(message.content) ? message.content.map(block => block.type) : []));
+
+	it("keeps budget thinking and the replayed reasoning when the marker leads the turn", async () => {
+		const payload = await payloadFor(
+			turn([
+				{ type: "fallback", from: { model: "claude-opus-5-5" }, to: { model: "claude-opus-4-8" } },
+				{ type: "thinking", thinking: "fallback plan", thinkingSignature: "sig-fallback" },
+				{ type: "toolCall", id: "toolu_read", name: "read", arguments: { path: "a.txt" } },
+			]),
+		);
+		expect(payload.thinking?.type).toBe("enabled");
+		expect(assistantBlockTypes(payload)).toEqual(["thinking", "tool_use"]);
+	});
+
+	it("still strips a turn that leads with output after the marker", async () => {
+		const payload = await payloadFor(
+			turn([
+				{ type: "fallback", from: { model: "claude-opus-5-5" }, to: { model: "claude-opus-4-8" } },
+				{ type: "text", text: "Reading it." },
+				{ type: "toolCall", id: "toolu_read", name: "read", arguments: { path: "a.txt" } },
+			]),
+		);
+		expect(payload.thinking).toBeUndefined();
+		expect(assistantBlockTypes(payload)).toEqual(["text", "tool_use"]);
+	});
+});

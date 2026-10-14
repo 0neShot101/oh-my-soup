@@ -1583,9 +1583,16 @@ function unwrapAnthropicThinkingEnvelope(text: string): string | undefined {
  * The refused response's content as the continuation prefix: client tool
  * calls (no matching tool_result) are omitted and a trailing text block is
  * right-trimmed, per the fallback-credit continuation contract.
+ *
+ * Redemption always deletes `fallbacks` from the frozen body
+ * ({@link fallbackCreditRequestBody}) and filters the beta, so a refused turn
+ * that fell back mid-response cannot replay its boundary marker here: collapse
+ * it to one model's reasoning exactly as the replay converter does
+ * ({@link collapseFallbackSegments}). The same prefix is unshifted into the
+ * persisted turn, so history keeps the shape that was sent.
  */
 function refusalContinuationPrefix(content: AssistantMessage["content"]): AssistantMessage["content"] {
-	const prefix = structuredClone(content.filter(block => block.type !== "toolCall"));
+	const prefix = structuredClone(collapseFallbackSegments(content).filter(block => block.type !== "toolCall"));
 	const last = prefix.at(-1);
 	if (last?.type === "text") last.text = last.text.trimEnd();
 	return prefix;
@@ -1610,9 +1617,6 @@ function formatEchoedRefusalContent(content: AssistantMessage["content"]): Conte
 				break;
 			case "redactedThinking":
 				echoed.push({ type: "redacted_thinking", data: block.data });
-				break;
-			case "fallback":
-				echoed.push({ type: "fallback", from: block.from, to: block.to });
 				break;
 			case "anthropicServerTool":
 				echoed.push(block.block);
@@ -5139,6 +5143,23 @@ function wantsAnthropicFastMode(model: Model<"anthropic-messages">, options: Ant
 }
 
 /**
+ * The block that decides whether an assistant turn is thinking-led. A
+ * `fallback` boundary is bookkeeping, not model output: a response that fell
+ * back before the primary emitted any reasoning opens with
+ * `[fallback, thinking(fallbackModel), …]` and is still a thinking-led turn,
+ * so treat the marker as transparent. Tolerates malformed blocks replayed off
+ * disk.
+ */
+function thinkingLedLeadBlock(content: readonly unknown[]): { type?: unknown } | undefined {
+	for (const block of content) {
+		if (block == null || typeof block !== "object") return undefined;
+		const typed = block as { type?: unknown };
+		if (typed.type !== "fallback") return typed;
+	}
+	return undefined;
+}
+
+/**
  * Native Factory Droid history predicate (ported from the CLI's request
  * builder): true when the conversation contains assistant turns but none of
  * them leads with a `thinking`/`redactedThinking` block.
@@ -5149,14 +5170,8 @@ function hasThinkinglessAssistantHistory(messages: readonly Message[]): boolean 
 		if (message.role !== "assistant") continue;
 		if (!Array.isArray(message.content) || message.content.length === 0) continue;
 		hasAssistant = true;
-		const first = message.content[0];
-		if (
-			first != null &&
-			typeof first === "object" &&
-			(first.type === "thinking" || first.type === "redactedThinking")
-		) {
-			return false;
-		}
+		const first = thinkingLedLeadBlock(message.content);
+		if (first?.type === "thinking" || first?.type === "redactedThinking") return false;
 	}
 	return hasAssistant;
 }
@@ -5179,8 +5194,8 @@ function hasNonThinkingTurnAfterLastUser(messages: readonly Message[]): boolean 
 	const next = messages[lastUser + 1];
 	if (next.role !== "assistant") return false;
 	if (!Array.isArray(next.content) || next.content.length === 0) return false;
-	const first = next.content[0];
-	if (first == null || typeof first !== "object") return false;
+	const first = thinkingLedLeadBlock(next.content);
+	if (first === undefined) return false;
 	return first.type !== "thinking" && first.type !== "redactedThinking";
 }
 

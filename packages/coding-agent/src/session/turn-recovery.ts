@@ -1417,7 +1417,11 @@ export class TurnRecovery {
 	isRetryableReasonlessAbort(message: AssistantMessage): boolean {
 		if (
 			(message.stopReason !== "aborted" && message.stopReason !== "error") ||
-			message.content.length !== 0 ||
+			// A `fallback` boundary is bookkeeping, not output: a stream aborted
+			// right after a mid-turn server-side fallback persists `[fallback]`,
+			// which is as replay-safe to retry as an empty turn (`isEmptyErrorTurn`
+			// already counts the marker as no output).
+			message.content.some(block => block.type !== "fallback") ||
 			this.#host.abortInProgress() ||
 			this.#host.isDisposed() ||
 			this.#host.streamingEditAbortTriggered()
