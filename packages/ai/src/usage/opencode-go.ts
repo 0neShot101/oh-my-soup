@@ -14,12 +14,13 @@ import { isRecord } from "../utils";
 import { DAY_MS, HOUR_MS } from "./shared";
 
 const OPENCODE_GO_PROVIDER = "opencode-go";
-const DEFAULT_ENDPOINT = "https://opencode.ai/inference/go";
+const DEFAULT_ENDPOINT = "https://opencode.ai/zen/go";
+const MODEL_ENDPOINT = "https://opencode.ai/inference/go";
 const USAGE_PATH = "/v1/usage";
 
 /**
- * `GET /v1/usage` response windows on the configured Go endpoint. The route
- * is first-party but undocumented, so malformed windows are skipped.
+ * `GET /zen/go/v1/usage` response windows. The account endpoint remains on
+ * Zen even though inference and model discovery use `/inference/go/v1`.
  *
  * Per window: `status` is `"ok" | "rate-limited"`, `percent` is a floored,
  * clamped integer 0-100, and `resetsAt` is an ISO timestamp computed server
@@ -34,10 +35,11 @@ const OPENCODE_GO_WINDOWS = [
 
 function normalizeBaseUrl(baseUrl?: string): string {
 	if (!baseUrl?.trim()) return DEFAULT_ENDPOINT;
-	// Strip `/v1` from either bundled or configured URLs without losing a
-	// path-mounted gateway prefix.
+	// Preserve custom gateway prefixes while mapping first-party model URLs
+	// back to the separate Zen account endpoint.
 	const withoutTrailingSlash = baseUrl.trim().replace(/\/+$/, "");
-	return withoutTrailingSlash.replace(/\/v1$/i, "") || DEFAULT_ENDPOINT;
+	const normalized = withoutTrailingSlash.replace(/\/v1$/i, "");
+	return normalized === MODEL_ENDPOINT ? DEFAULT_ENDPOINT : normalized || DEFAULT_ENDPOINT;
 }
 
 function resolveStatus(windowStatus: unknown, usedFraction: number): UsageStatus {
