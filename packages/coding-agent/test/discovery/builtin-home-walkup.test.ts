@@ -22,7 +22,7 @@ import { __resetDirsFromEnvForTests, removeSyncWithRetries, setAgentDir } from "
 let tempDir: string;
 let home: string;
 // setAgentDir() rewrites these; restore them all so later test files see the original resolver.
-const ENV_KEYS = ["PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE"] as const;
+const ENV_KEYS = ["PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE", "PI_CONFIG_DIR"] as const;
 let savedEnv: Record<(typeof ENV_KEYS)[number], string | undefined>;
 
 function writeFile(filePath: string, content: string): void {
@@ -145,44 +145,48 @@ test("a repo-local session agent directory does not hide native project config o
 	});
 });
 
-test("native project discovery skips a foreign user config root without hiding a workspace above it", async () => {
-	const foreignHome = path.join(tempDir, "alice");
-	const cwd = path.join(foreignHome, "scratch", "work");
-	fs.mkdirSync(cwd, { recursive: true });
-	fs.mkdirSync(path.join(foreignHome, ".omp", "agent"), { recursive: true });
-	fs.mkdirSync(path.join(foreignHome, ".omp", "plugins"), { recursive: true });
-	vi.spyOn(os, "homedir").mockReturnValue(home);
-	for (const [root, name] of [
-		[foreignHome, "foreign"],
-		[tempDir, "workspace"],
-	] as const) {
-		writeFile(path.join(root, ".omp", "SYSTEM.md"), `${name} system prompt\n`);
-		writeFile(path.join(root, ".omp", "RULES.md"), `${name} rule\n`);
-		writeFile(path.join(root, ".omp", "AGENTS.md"), `${name} agents\n`);
-		writeFile(
-			path.join(root, ".omp", "skills", name, "SKILL.md"),
-			`---\nname: ${name}\ndescription: ${name} skill\n---\nbody\n`,
-		);
-	}
-	const ctx: LoadContext = { cwd, home, repoRoot: null };
+test.each([undefined, ".pi"])(
+	"native project discovery skips a foreign user config root without hiding a workspace above it (PI_CONFIG_DIR=%s)",
+	async configDirName => {
+		if (configDirName) process.env.PI_CONFIG_DIR = configDirName;
+		const foreignHome = path.join(tempDir, "alice");
+		const cwd = path.join(foreignHome, "scratch", "work");
+		fs.mkdirSync(cwd, { recursive: true });
+		fs.mkdirSync(path.join(foreignHome, ".omp", "agent"), { recursive: true });
+		fs.mkdirSync(path.join(foreignHome, ".omp", "plugins"), { recursive: true });
+		vi.spyOn(os, "homedir").mockReturnValue(home);
+		for (const [root, name] of [
+			[foreignHome, "foreign"],
+			[tempDir, "workspace"],
+		] as const) {
+			writeFile(path.join(root, ".omp", "SYSTEM.md"), `${name} system prompt\n`);
+			writeFile(path.join(root, ".omp", "RULES.md"), `${name} rule\n`);
+			writeFile(path.join(root, ".omp", "AGENTS.md"), `${name} agents\n`);
+			writeFile(
+				path.join(root, ".omp", "skills", name, "SKILL.md"),
+				`---\nname: ${name}\ndescription: ${name} skill\n---\nbody\n`,
+			);
+		}
+		const ctx: LoadContext = { cwd, home, repoRoot: null };
 
-	const prompts = await loadNative<SystemPrompt>(systemPromptCapability.id, ctx);
-	const rules = await loadNative<Rule>(ruleCapability.id, ctx);
-	const contexts = await loadNative<ContextFile>(contextFileCapability.id, ctx);
-	const skills = await loadNative<Skill>(skillCapability.id, ctx);
+		const prompts = await loadNative<SystemPrompt>(systemPromptCapability.id, ctx);
+		const rules = await loadNative<Rule>(ruleCapability.id, ctx);
+		const contexts = await loadNative<ContextFile>(contextFileCapability.id, ctx);
+		const skills = await loadNative<Skill>(skillCapability.id, ctx);
 
-	expect({
-		prompts: prompts.map(prompt => prompt.path),
-		rules: rules.map(rule => rule.path),
-		contexts: contexts.map(context => context.path),
-		skills: skills.map(skill => skill.path),
-	}).toEqual({
-		prompts: [path.join(tempDir, ".omp", "SYSTEM.md")],
-		rules: [path.join(tempDir, ".omp", "RULES.md")],
-		contexts: [path.join(tempDir, ".omp", "AGENTS.md")],
-		skills: [path.join(tempDir, ".omp", "skills", "workspace", "SKILL.md")],
-	});
-});
+		expect({
+			prompts: prompts.map(prompt => prompt.path),
+			rules: rules.map(rule => rule.path),
+			contexts: contexts.map(context => context.path),
+			skills: skills.map(skill => skill.path),
+		}).toEqual({
+			prompts: [path.join(tempDir, ".omp", "SYSTEM.md")],
+			rules: [path.join(tempDir, ".omp", "RULES.md")],
+			contexts: [path.join(tempDir, ".omp", "AGENTS.md")],
+			skills: [path.join(tempDir, ".omp", "skills", "workspace", "SKILL.md")],
+		});
+	},
+);
 
 test("an overridden discovery home does not make the process home a native project config root", async () => {
 	const cwd = path.join(home, "scratch", "work");

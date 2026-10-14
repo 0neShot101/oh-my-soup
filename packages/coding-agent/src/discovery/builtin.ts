@@ -101,8 +101,8 @@ export function getAncestorDirs(cwd: string, stopAt?: string | null): Array<{ di
 export async function* getProjectAncestorDirs(ctx: LoadContext): AsyncGenerator<{ dir: string; depth: number }> {
 	const home = normalizePathForComparison(ctx.home);
 	for (const ancestor of getAncestorDirs(ctx.cwd, ctx.repoRoot ?? ctx.home)) {
-		if (normalizePathForComparison(ancestor.dir) === home || (await isUserConfigRoot(ancestor.dir))) continue;
-		if (!ctx.repoRoot && (await isForeignUserConfigRoot(ancestor.dir))) continue;
+		if (normalizePathForComparison(ancestor.dir) === home || isUserConfigRoot(ancestor.dir)) continue;
+		if (!ctx.repoRoot && (await isForeignUserConfigRoot(ancestor.dir, PATHS.projectDir))) continue;
 		yield ancestor;
 	}
 }
