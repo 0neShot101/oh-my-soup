@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed `/restart` losing the active named profile and failing to resume its session.
+- Fixed `/restart` losing the active named profile and failing to resume its session ([#15742](https://github.com/can1357/oh-my-pi/pull/15742) by [@sapran](https://github.com/sapran)).
 
 ## [18.10.1] - 2026-10-12
 
