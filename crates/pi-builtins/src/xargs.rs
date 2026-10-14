@@ -187,7 +187,7 @@ impl MaxCharsCommandSizeLimiter {
 			})
 			.sum();
 
-		let mut limiter = Self::new(arg_max - ARG_HEADROOM - env_size);
+		let mut limiter = Self::new(arg_max.saturating_sub(ARG_HEADROOM).saturating_sub(env_size).max(1));
 		// ARG_MAX covers argv pointers as well as strings. Keep -s string-only.
 		limiter.per_arg_overhead = pointer_size;
 		limiter
@@ -1239,30 +1239,45 @@ mod tests {
 	}
 
 	#[cfg(unix)]
-	#[test]
-	fn system_batches_fit_exec_argument_and_environment_storage() {
-		use std::{mem::size_of, os::unix::ffi::OsStrExt};
-
-		let env: HashMap<OsString, OsString> = (0..1000)
-			.map(|i| (format!("XARGS_TEST_{i}").into(), "value".into()))
-			.collect();
-		let mut limiter = MaxCharsCommandSizeLimiter::new_system(&env);
-		let pointer_size = size_of::<*const libc::c_char>();
-		// Each environment entry is one "name=value\0" string and one envp pointer.
-		let mut exec_size: usize = env
-			.iter()
-			.map(|(key, value)| {
-				key.as_bytes().len() + value.as_bytes().len() + 2 + pointer_size
-			})
-			.sum();
-		let path = "./directory/file-with-a-long-name";
-		while limiter.try_arg(make_arg_hard(path), empty_cursor()).is_ok() {
-			exec_size += path.len() + 1 + pointer_size;
-		}
+	#[tokio::test]
+	async fn large_input_is_split_into_successful_external_commands() {
 		let arg_max = unsafe { libc::sysconf(libc::_SC_ARG_MAX) } as usize;
+		// String bytes alone fit, but the argv pointers force multiple batches.
+		// Use a real external executable so an oversized batch surfaces E2BIG.
+		let count = arg_max / 256;
+		let input = format!("{}\n", "x".repeat(255)).repeat(count);
+		let (code, stdout, stderr) = crate::host::run_script(
+			"xargs /bin/sh -c 'printf \"%s\\n\" \"$#\"' sh",
+			&input,
+			&std::env::current_dir().unwrap(),
+		)
+		.await;
+		assert_eq!(code, 0, "{stderr}");
+		assert!(stderr.is_empty(), "{stderr}");
+		let batches: Vec<usize> = stdout.lines().map(|line| line.parse().unwrap()).collect();
+		assert!(batches.len() > 1, "input was not split into multiple commands");
+		assert_eq!(batches.iter().sum::<usize>(), count);
+		assert!(batches.iter().all(|&count| count > 0));
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn oversized_environment_rejects_command_without_panicking() {
+		let arg_max = unsafe { libc::sysconf(libc::_SC_ARG_MAX) } as usize;
+		// These short strings fit on their own, but their envp pointers do not.
+		let env: HashMap<OsString, OsString> = (0..arg_max / 20)
+			.map(|i| (format!("XARGS_{i:08}").into(), OsString::new()))
+			.collect();
+		let mut limiters = LimiterCollection::new();
+		limiters.add(MaxCharsCommandSizeLimiter::new_system(&env));
 		assert!(
-			exec_size <= arg_max - 2048,
-			"batch needs {exec_size} bytes of argv/envp storage, but ARG_MAX is {arg_max}"
+			CommandBuilderOptions::new(
+				ExecAction::Command(vec!["/bin/echo".into()]),
+				limiters,
+				None,
+			)
+			.is_err(),
+			"an environment that exhausts ARG_MAX must reject the base command"
 		);
 	}
 
