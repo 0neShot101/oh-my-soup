@@ -607,10 +607,15 @@ describe("model thinking derivation", () => {
 				["google-vertex", "google-vertex"],
 				["google", "google-generative-ai"],
 			] as const) {
-				const argon = createModel({ id, api, provider });
-				expect(argon.thinking?.mode).toBe("google-level");
-				expect(getSupportedEfforts(argon)).toEqual([Effort.Low, Effort.Medium, Effort.High]);
-				expect(mapEffortToGoogleThinkingLevel(Effort.Medium, argon)).toBe("MEDIUM");
+				// `reasoning: false` mirrors Gemini API discovery, which has no bundled
+				// Argon reference and infers non-reasoning from the id.
+				for (const reasoning of [true, false]) {
+					const argon = createModel({ id, api, provider, reasoning });
+					expect(argon.reasoning).toBe(true);
+					expect(argon.thinking?.mode).toBe("google-level");
+					expect(getSupportedEfforts(argon)).toEqual([Effort.Low, Effort.Medium, Effort.High]);
+					expect(mapEffortToGoogleThinkingLevel(Effort.Medium, argon)).toBe("MEDIUM");
+				}
 			}
 		}
 
