@@ -156,11 +156,12 @@ fn count_osstr_chars_for_exec(s: &OsStr) -> usize {
 struct MaxCharsCommandSizeLimiter {
 	current_size: usize,
 	max_chars:    usize,
+	per_arg_overhead: usize,
 }
 
 impl MaxCharsCommandSizeLimiter {
 	fn new(max_chars: usize) -> Self {
-		Self { current_size: 0, max_chars }
+		Self { current_size: 0, max_chars, per_arg_overhead: 0 }
 	}
 
 	#[cfg(windows)]
@@ -176,13 +177,20 @@ impl MaxCharsCommandSizeLimiter {
 		// can have room to set their own environment variables.
 		const ARG_HEADROOM: usize = 2048;
 		let arg_max = unsafe { libc::sysconf(libc::_SC_ARG_MAX) } as usize;
+		let pointer_size = std::mem::size_of::<*const libc::c_char>();
 
 		let env_size: usize = env
 			.iter()
-			.map(|(var, value)| count_osstr_chars_for_exec(var) + count_osstr_chars_for_exec(value))
+			// The two string terminators account for '=' and '\0'; envp has one pointer.
+			.map(|(var, value)| {
+				count_osstr_chars_for_exec(var) + count_osstr_chars_for_exec(value) + pointer_size
+			})
 			.sum();
 
-		Self::new(arg_max - ARG_HEADROOM - env_size)
+		let mut limiter = Self::new(arg_max - ARG_HEADROOM - env_size);
+		// ARG_MAX covers argv pointers as well as strings. Keep -s string-only.
+		limiter.per_arg_overhead = pointer_size;
+		limiter
 	}
 }
 
@@ -192,7 +200,7 @@ impl CommandSizeLimiter for MaxCharsCommandSizeLimiter {
 		arg: Argument,
 		cursor: LimiterCursor<'_>,
 	) -> Result<Argument, ExhaustedCommandSpace> {
-		let chars = count_osstr_chars_for_exec(&arg.arg);
+		let chars = count_osstr_chars_for_exec(&arg.arg) + self.per_arg_overhead;
 		if self.current_size + chars <= self.max_chars {
 			let arg = cursor.try_next(arg)?;
 			self.current_size += chars;
@@ -1228,6 +1236,34 @@ mod tests {
 				.is_err()
 		);
 		assert!(limiter.try_arg(make_arg_hard("a"), empty_cursor()).is_ok());
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn system_batches_fit_exec_argument_and_environment_storage() {
+		use std::{mem::size_of, os::unix::ffi::OsStrExt};
+
+		let env: HashMap<OsString, OsString> = (0..1000)
+			.map(|i| (format!("XARGS_TEST_{i}").into(), "value".into()))
+			.collect();
+		let mut limiter = MaxCharsCommandSizeLimiter::new_system(&env);
+		let pointer_size = size_of::<*const libc::c_char>();
+		// Each environment entry is one "name=value\0" string and one envp pointer.
+		let mut exec_size: usize = env
+			.iter()
+			.map(|(key, value)| {
+				key.as_bytes().len() + value.as_bytes().len() + 2 + pointer_size
+			})
+			.sum();
+		let path = "./directory/file-with-a-long-name";
+		while limiter.try_arg(make_arg_hard(path), empty_cursor()).is_ok() {
+			exec_size += path.len() + 1 + pointer_size;
+		}
+		let arg_max = unsafe { libc::sysconf(libc::_SC_ARG_MAX) } as usize;
+		assert!(
+			exec_size <= arg_max - 2048,
+			"batch needs {exec_size} bytes of argv/envp storage, but ARG_MAX is {arg_max}"
+		);
 	}
 
 	#[test]
