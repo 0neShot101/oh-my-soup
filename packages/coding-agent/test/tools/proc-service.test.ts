@@ -2,11 +2,13 @@ import { describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { procmgr, setProcessName, TempDir } from "@oh-my-pi/pi-utils";
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "../../src/config/settings";
 import { AsyncJobManager } from "../../src/async/job-manager";
 import { ProcProtocolHandler } from "../../src/internal-urls/proc-protocol";
 import { parseInternalUrl } from "../../src/internal-urls/parse";
 import { AgentRegistry } from "../../src/registry/agent-registry";
+import { SessionManager } from "../../src/session/session-manager";
 import { startDaemonBrokerFromEnvironment } from "../../src/launch/broker";
 import { createDaemonBrokerClient, type DaemonBrokerClient } from "../../src/launch/client";
 import * as daemonClient from "../../src/launch/client";
@@ -77,6 +79,25 @@ function toolSession(cwd: string, manager?: AsyncJobManager, options: { launch?:
 			shellPath: SERVICE_SHELL,
 		}),
 	} as unknown as ToolSession;
+}
+
+function steeringContext(steeringSignal: AbortSignal): AgentToolContext {
+	return {
+		sessionManager: SessionManager.inMemory(),
+		modelRegistry: undefined,
+		model: undefined,
+		isIdle: () => false,
+		hasQueuedMessages: () => true,
+		abort: () => {},
+		toolNames: [],
+		toolCall: {
+			batchId: "batch-1",
+			index: 0,
+			total: 1,
+			toolCalls: [{ id: "service", name: "bash" }],
+			steeringSignal,
+		},
+	} as unknown as AgentToolContext;
 }
 
 describe("proc:// background jobs", () => {
@@ -514,6 +535,55 @@ describe("bash services via proc://", () => {
 			spy.mockRestore();
 		}
 	}, 25_000);
+
+	it("ends the readiness wait on a queued steer and leaves the service starting", async () => {
+		const steering = new AbortController();
+		// The broker answers `start` only once readiness resolves or times out.
+		const readiness = Promise.withResolvers<DaemonRpcResult>();
+		const client = {
+			projectDir: process.cwd(),
+			onCompletion: () => () => {},
+			close() {},
+			async request(operation: DaemonOperation): Promise<DaemonRpcResult> {
+				if (operation.op === "start") {
+					// Steer while the start request is in flight.
+					steering.abort();
+					return readiness.promise;
+				}
+				throw new Error(`Unexpected broker op ${operation.op}`);
+			},
+		} as unknown as DaemonBrokerClient;
+		const spy = vi.spyOn(daemonClient, "daemonClientForProject").mockResolvedValue(client);
+		const bash = new BashTool(toolSession(process.cwd()));
+		try {
+			const result = await bash.execute(
+				"service",
+				{ command: "sleep 600", name: "slow-service", ready: { log: "never-printed", timeout: 300 } },
+				undefined,
+				undefined,
+				steeringContext(steering.signal),
+			);
+			expect(result.details?.service).toMatchObject({ name: "slow-service", state: "starting", ready: false });
+			expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("proc://slow-service");
+			// The abandoned start settling later is harmless.
+			readiness.reject(new Error("readiness failed after the call returned"));
+
+			// A start that already failed still throws, even when the steer is already raised.
+			expect(
+				await rejectionMessage(
+					bash.execute(
+						"bad-regex",
+						{ command: "true", name: "bad-regex", ready: { log: "(", timeout: 300 } },
+						undefined,
+						undefined,
+						steeringContext(steering.signal),
+					),
+				),
+			).toContain("Invalid readiness regex");
+		} finally {
+			spy.mockRestore();
+		}
+	});
 
 	it("keeps empty or default optional fields out of service-mode selection", async () => {
 		const bash = new BashTool(toolSession(process.cwd()));

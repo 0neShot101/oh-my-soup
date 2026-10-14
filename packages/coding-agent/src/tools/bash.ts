@@ -1064,7 +1064,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		}
 
 		if (name !== undefined) {
-			const service = await startService(
+			const start = startService(
 				this.session,
 				{
 					name,
@@ -1075,6 +1075,26 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				},
 				signal,
 			);
+			// Only a readiness wait can outlast a steer; without `ready` the start
+			// returns once the process spawns.
+			const steeringSignal = ready === undefined ? undefined : ctx?.toolCall?.steeringSignal;
+			const settled = steeringSignal
+				? await raceJobSettlement(start, undefined, undefined, steeringSignal)
+				: await start;
+			if ("kind" in settled) {
+				// A queued message arrived mid-wait: return so it injects promptly.
+				// The broker keeps starting the service, inspectable via proc://.
+				return {
+					content: [
+						{
+							type: "text",
+							text: `${name}: starting\nReadiness wait interrupted early to handle an incoming message; the service is still starting and keeps running. Read proc://${name} for status.`,
+						},
+					],
+					details: { service: { name, state: "starting", ready: false, timedOut: false } },
+				};
+			}
+			const service = settled;
 			const daemon = service.daemon;
 			const lines = [
 				`${daemon.name}: ${daemon.state}${daemon.pid === undefined ? "" : ` pid=${daemon.pid}`}${daemon.readyAt === undefined ? "" : " ready"}`,
