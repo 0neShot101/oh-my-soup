@@ -15,6 +15,24 @@ provider "opencode-go" {
 		input-modalities "text" "image"
 		strip-image-input #false
 	}
+	// residue: the ids-only Go roster lists this bare V4.1 Flash alias with no
+	// price, limits or reasoning flag, and neither models.dev nor the bundle has
+	// a row to hydrate it from (#15357). Mirror the gateway's own
+	// `deepseek-v4.1-flash` row; `cost-fallback` yields to any price discovery
+	// reports later.
+	models "deepseek-flash" {
+		thinking-upgrade-neutral #true
+		cost-fallback {
+			input 0.15
+			output 0.6
+			cache-read 0.003
+			cache-write 0.0
+		}
+		limits-patch {
+			context-window 1000000
+			max-tokens 384000
+		}
+	}
 	// Replaces the OpenCode reasoning-model whenThinking fallback object.
 	when-thinking {
 		requires-reasoning-content-for-tool-calls #true
