@@ -467,6 +467,8 @@ interface QueryCandidate {
 	x: number;
 	y: number;
 	onScreen: boolean;
+	/** Shown only as a strip at an edge; see {@link MeasuredBox.edgeOnly}. */
+	edgeOnly: boolean;
 	owned: boolean;
 }
 
@@ -567,10 +569,7 @@ async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal
 		} else await proxy.dispose();
 		const box = await untilAborted(signal, () => candidate.evaluate(measureBoxInPage));
 		if (box.sized) {
-			// An edge-only match counts when a click at its centre is not covered: a scroll container clipping
-			// the rest leaves that point on an ancestor, while an overlay hiding the rest lies over it.
-			const onScreen = box.onScreen || (box.edgeOnly && (await isClickActionable(candidate, signal)).ok);
-			return { handle: candidate, x: box.x, y: box.y, onScreen, owned };
+			return { handle: candidate, x: box.x, y: box.y, onScreen: box.onScreen, edgeOnly: box.edgeOnly, owned };
 		}
 	} catch (error) {
 		if (owned) await candidate.dispose().catch(() => undefined);
@@ -601,7 +600,7 @@ async function probeOffScreen(
 		const reachable = actionable.ok || actionable.coveredBy !== undefined;
 		if (!actionable.ok) return { shown: false, reachable };
 		const box = await untilAborted(signal, () => handle.evaluate(measureBoxInPage));
-		return { shown: box.onScreen || box.edgeOnly, reachable };
+		return { shown: box.onScreen, reachable };
 	} catch (error) {
 		if (signal?.aborted) throw error;
 		return { shown: false, reachable: false };
@@ -609,8 +608,10 @@ async function probeOffScreen(
 }
 
 /**
- * Resolve text-query matches to the first match the browser shows on screen, in document order. When none
- * is on screen, off-screen matches are scrolled into view in document order and the first one shown wins;
+ * Resolve text-query matches to the first match the browser shows on screen, in document order. A match
+ * shown only as a strip at an edge counts once scrolling it into view lets the browser hit its interior,
+ * as with a strip a scroll container leaves; one an overlay covers stays covered there. When none is on
+ * screen, off-screen matches are scrolled into view in document order and the first one shown wins;
  * failing that, the first one a click could be aimed at, then the first match, so the click itself reports
  * what stops it.
  */
@@ -626,7 +627,12 @@ export async function resolveActionableQueryHandlerClickTarget(
 			if (candidate) candidates.push(candidate);
 		}
 		candidates.sort((a, b) => a.y - b.y || a.x - b.x);
-		winner = candidates.find(candidate => candidate.onScreen);
+		for (const candidate of candidates) {
+			if (candidate.onScreen || (candidate.edgeOnly && (await probeOffScreen(candidate.handle, signal)).shown)) {
+				winner = candidate;
+				break;
+			}
+		}
 		if (!winner) {
 			let reachable: QueryCandidate | undefined;
 			for (const candidate of candidates) {

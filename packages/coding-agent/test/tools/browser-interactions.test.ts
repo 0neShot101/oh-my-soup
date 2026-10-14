@@ -880,12 +880,16 @@ return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.e
 		const prelude = createBrowserPrelude(session);
 		const context = { session, toolCallId: "browser-text-click-strip" };
 		const tabName = `text-click-strip-${crypto.randomUUID()}`;
-		// Each first button shows only its edge: 1px of 120px at a scroll panel's edge, or 2px beside a fixed overlay.
+		// Each first button shows only its edge: 1px of 120px at a scroll panel's edge, 2px beside a fixed overlay,
+		// or 2px beside its wrapper's ::after, which hit testing reports as the wrapper, an ancestor.
 		const fixtures = {
 			strip: `<div style="width: 100px; overflow: auto; white-space: nowrap"><span style="display: inline-block; width: 99px"></span><button style="width: 120px" onclick="window.picks.push('strip')">Pick</button></div>
 <button onclick="window.picks.push('later')">Pick</button>`,
 			covered: `<button style="position: absolute; left: 10px; top: 10px; width: 120px" onclick="window.picks.push('covered')">Pick</button>
 <div style="position: fixed; left: 0; top: 0; width: 128px; height: 200px; background: white"><button style="margin-top: 100px" onclick="window.picks.push('overlay')">Pick</button></div>`,
+			pseudo: `<style>#wrap { position: relative; display: inline-block } #wrap::after { content: ""; position: absolute; inset: 0 2px 0 0; background: white }</style>
+<div id="wrap"><button style="width: 120px" onclick="window.picks.push('pseudo')">Pick</button></div>
+<button onclick="window.picks.push('later')">Pick</button>`,
 		};
 		await prelude.invoke({ action: "open", name: tabName, url: "about:blank" }, context);
 		try {
@@ -906,7 +910,7 @@ return picks;`,
 				},
 				context,
 			);
-			expect(valueFrom<unknown>(result)).toEqual({ strip: ["strip"], covered: ["overlay"] });
+			expect(valueFrom<unknown>(result)).toEqual({ strip: ["strip"], covered: ["overlay"], pseudo: ["later"] });
 		} finally {
 			await prelude.invoke({ action: "close", name: tabName, kill: true }, context).catch(() => undefined);
 		}
