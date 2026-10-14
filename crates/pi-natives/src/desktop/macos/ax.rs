@@ -1077,6 +1077,9 @@ trait TextField {
 	fn focus_owner(&self) -> Option<Self::Element>;
 	/// Whether another app is frontmost (`may_borrow_focus`).
 	fn in_background(&self) -> bool;
+	/// Whether an app that was in the background as the call started has since
+	/// come to the front, which means the user is working in it.
+	fn brought_forward(&self) -> bool;
 	fn focus(&self) -> AXError;
 	fn hand_focus_to(&self, owner: &Self::Element) -> AXError;
 	/// The whole value's UTF-16 length, when its selection is settable.
@@ -1114,10 +1117,16 @@ fn replace_whole_value<F: TextField>(field: &F, text: &str) -> CoreResult<bool> 
 	};
 	// Focusing can swap in the field editor, so the length is read afterward.
 	// The user may bring the app forward while those reads or the selection
-	// write block: a borrowed caret is theirs again, so it is neither selected
-	// nor typed over. Nor does a run cancelled meanwhile go on to write.
-	let still_borrowed =
-		|| (previous.is_none() || field.in_background()) && control::check().is_ok();
+	// write block: a borrowed caret is theirs again, and a field the app had
+	// focused is theirs to type in, so neither is selected or typed over. Nor
+	// does a run cancelled meanwhile go on to write.
+	let still_borrowed = || {
+		(if previous.is_none() {
+			!field.brought_forward()
+		} else {
+			field.in_background()
+		}) && control::check().is_ok()
+	};
 	let selected = unanswered.is_none()
 		&& field.selectable_length().is_some_and(|length| {
 			still_borrowed()
@@ -1179,6 +1188,10 @@ impl TextField for LiveField<'_> {
 
 	fn in_background(&self) -> bool {
 		self.may_borrow && may_borrow_focus(skylight::front_pid(), self.pid)
+	}
+
+	fn brought_forward(&self) -> bool {
+		self.may_borrow && !may_borrow_focus(skylight::front_pid(), self.pid)
 	}
 
 	fn focus(&self) -> AXError {
@@ -1878,6 +1891,10 @@ mod tests {
 			!self.switched.get()
 		}
 
+		fn brought_forward(&self) -> bool {
+			self.switched.get()
+		}
+
 		fn focus(&self) -> AXError {
 			self.calls.borrow_mut().push("focus");
 			self.focused.set(true);
@@ -1922,6 +1939,13 @@ mod tests {
 		let field = ScriptedField::new(false, false);
 		assert!(replace_whole_value(&field, "abc").unwrap());
 		assert_eq!(field.calls(), ["focus", "select", "insert"]);
+	}
+
+	#[test]
+	fn a_focused_field_whose_app_comes_forward_during_the_probes_is_not_typed_over() {
+		let field = ScriptedField { focused: Cell::new(true), ..ScriptedField::new(true, false) };
+		assert!(!replace_whole_value(&field, "abc").unwrap());
+		assert!(field.calls().is_empty(), "{:?}", field.calls());
 	}
 
 	#[test]
