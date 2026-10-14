@@ -510,10 +510,17 @@ async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal
 					// <html> and <body> overflow normally applies to the viewport, which is already the starting clip.
 					if (node.tagName === "BODY" || node.tagName === "HTML") break;
 					const style = page.getComputedStyle(node);
+					// Nothing above a top-layer box clips it, whichever box contains the match.
+					const topLayer = inTopLayer(node);
 					// A display:contents node (e.g. a default <slot>) has no box to clip or contain anything.
-					if (style.display === "contents") continue;
-					if (position === "fixed" && !containsFixed(style)) continue;
-					if (position === "absolute" && style.position === "static" && !containsFixed(style)) continue;
+					const skip =
+						style.display === "contents" ||
+						(position === "fixed" && !containsFixed(style)) ||
+						(position === "absolute" && style.position === "static" && !containsFixed(style));
+					if (skip) {
+						if (topLayer) break;
+						continue;
+					}
 					position = style.position;
 					// Overflow does not apply to a non-replaced inline box; paint containment clips like overflow.
 					const paintClip = /paint|strict|content/.test(style.contain);
@@ -530,7 +537,7 @@ async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal
 							view.bottom = Math.min(view.bottom, clip.bottom);
 						}
 					}
-					if (inTopLayer(node)) break;
+					if (topLayer) break;
 				}
 				return {
 					x: rect.left + page.scrollX,

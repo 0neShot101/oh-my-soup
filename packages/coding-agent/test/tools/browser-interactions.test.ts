@@ -935,6 +935,10 @@ return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.e
 				html: `<div style="transform: translateZ(0); overflow: hidden; height: 0"><dialog id="dlg" style="margin: 0"><button id="modal">Pick</button></dialog></div>${later}<script>document.getElementById("dlg").showModal();</script>`,
 				winner: "modal",
 			},
+			"fixed match inside a modal dialog in a transformed clip": {
+				html: `<div style="transform: translateZ(0); overflow: hidden; height: 0"><dialog id="dlg"><button id="modal" style="position: fixed; top: 10px; left: 10px">Pick</button></dialog></div>${later}<script>document.getElementById("dlg").showModal();</script>`,
+				winner: "modal",
+			},
 			"slotted into a clipped shadow wrapper": {
 				html: `<div id="host"><button id="slotted">Pick</button></div>${later}<script>${shadow("host", zeroClip)}</script>`,
 				selector: "#slotted, #later",
