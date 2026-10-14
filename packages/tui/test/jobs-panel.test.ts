@@ -167,7 +167,8 @@ describe("JobsSheet", () => {
 		sheet.handleNativeEvent({ type: "action", key: "cancel", act: "cancel", mods: [] });
 		expect(source.close).not.toHaveBeenCalled();
 
-		// The job and its detail stay; only the way to stop it is gone.
+		// The jobs and the selected detail stay; only the way to stop it is gone.
+		sheet.handleInput(DOWN);
 		const lines = sheet.render(100).join("\n");
 		expect(lines).toContain("cargo test --workspace");
 		expect(lines).toContain("pid 41");
