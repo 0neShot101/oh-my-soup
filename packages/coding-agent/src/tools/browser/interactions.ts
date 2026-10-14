@@ -301,9 +301,10 @@ async function actionableClickPoint(
 
 /**
  * Click an element only after verifying the dispatched point is not occluded, then confirm the browser
- * delivered the click to it. A disabled control, an inert subtree, and anything else the browser refuses
- * receive no `mousedown` (a label's forwarded `click` counts for its control), so a click the page never
- * saw fails instead of reporting success.
+ * delivered the click to it: the target got the `mousedown` or `click` (a label's forwarded `click` counts
+ * for its control), or the page consumed its `pointerdown` with `preventDefault()`, which suppresses the
+ * mouse events after it. A disabled control gets only an unconsumed `pointerdown` and an inert subtree
+ * nothing, so a click the page never saw fails instead of reporting success.
  */
 export async function clickElement(
 	handle: ElementHandle,
@@ -314,29 +315,38 @@ export async function clickElement(
 	const point = await actionableClickPoint(handle, label, signal, options);
 	const watch = await untilAborted(signal, () =>
 		handle.evaluateHandle(el => {
-			type Listen = (
-				type: string,
-				listener: (event: { composedPath(): unknown[] }) => void,
-				capture: boolean,
-			) => void;
+			interface InputEvent {
+				type: string;
+				defaultPrevented: boolean;
+				composedPath(): unknown[];
+			}
+			type Listen = (type: string, listener: (event: InputEvent) => void, capture: boolean) => void;
 			const target = el as unknown as { addEventListener: Listen; removeEventListener: Listen };
 			const page = globalThis as unknown as { addEventListener: Listen; removeEventListener: Listen };
-			const state = { delivered: false, stop: () => {} };
+			const pointerDowns: InputEvent[] = [];
+			const state = {
+				reached: false,
+				// Read after the click: the page's handlers have run by then.
+				delivered: () => state.reached || pointerDowns.some(event => event.defaultPrevented),
+				stop: () => {},
+			};
+			const record = (event: InputEvent) => {
+				if (event.type === "pointerdown") pointerDowns.push(event);
+				else state.reached = true;
+			};
 			// The target's own listener sees events inside a closed shadow root, which the window's path hides;
 			// the window's sees an event a page handler stops before it reaches the target.
-			const onTarget = () => {
-				state.delivered = true;
+			const onPage = (event: InputEvent) => {
+				if (event.composedPath().includes(el)) record(event);
 			};
-			const onPage = (event: { composedPath(): unknown[] }) => {
-				if (event.composedPath().includes(el)) state.delivered = true;
-			};
-			for (const type of ["mousedown", "click"]) {
-				target.addEventListener(type, onTarget, true);
+			const types = ["pointerdown", "mousedown", "click"];
+			for (const type of types) {
+				target.addEventListener(type, record, true);
 				page.addEventListener(type, onPage, true);
 			}
 			state.stop = () => {
-				for (const type of ["mousedown", "click"]) {
-					target.removeEventListener(type, onTarget, true);
+				for (const type of types) {
+					target.removeEventListener(type, record, true);
 					page.removeEventListener(type, onPage, true);
 				}
 			};
@@ -363,7 +373,7 @@ export async function clickElement(
 	const delivered = await untilAborted(signal, () =>
 		watch.evaluate(state => {
 			state.stop();
-			return state.delivered;
+			return state.delivered();
 		}),
 	).catch((error: unknown) => {
 		if (signal?.aborted) throw error;

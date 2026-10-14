@@ -905,18 +905,27 @@ return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.e
 <div style="interactivity: inert"><button id="styled-inert">Styled inert</button></div>
 <span id="shadowed">Shadowed</span>
 <span id="actions">Go<span slot="alt" hidden>Alt</span></span>
+<button id="menu-item">Menu item</button>
 <script>
 document.getElementById("shadowed").attachShadow({ mode: "open" }).innerHTML = "<button disabled><slot></slot></button>";
 document.getElementById("actions").attachShadow({ mode: "open" }).innerHTML =
 	'<button disabled><slot name="alt"></slot></button><button><slot></slot></button>';
+// A menu item acts on pointerdown, consumes it (so no mouse events follow) and closes.
+document.getElementById("menu-item").addEventListener("pointerdown", event => {
+	event.preventDefault();
+	event.currentTarget.remove();
+});
 </script>`);
-			expect(await outcomes(["enabled", "disabled", "inert", "styled-inert", "shadowed", "actions"])).toEqual({
+			expect(
+				await outcomes(["enabled", "disabled", "inert", "styled-inert", "shadowed", "actions", "menu-item"]),
+			).toEqual({
 				enabled: "clicked",
 				disabled: "refused",
 				inert: "refused",
 				"styled-inert": "refused",
 				shadowed: "refused",
 				actions: "clicked",
+				"menu-item": "clicked",
 			});
 			// A modal dialog escapes the inert shell it sits in; the shell lies under its backdrop.
 			await page.setContent(`<div inert><button id="shell">Shell</button><dialog id="dlg"><button id="ok">OK</button></dialog></div>
