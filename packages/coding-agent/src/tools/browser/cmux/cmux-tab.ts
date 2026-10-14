@@ -1462,7 +1462,7 @@ export class CmuxTab implements InProcessRunTab {
 	async text(selector = "body"): Promise<string | null> {
 		return await this.queryElement<string>(
 			selector,
-			`element => (element.innerText || element.textContent || "").trim()`,
+			`element => (typeof element.innerText === "string" ? element.innerText : element.textContent || "").trim()`,
 		);
 	}
 
