@@ -3276,7 +3276,12 @@ function openCodeBaseUrlForApi(api: Api, basePath: string): string {
 // rules (`runtime/behavior.kdl`; #887, #1617, #8957).
 // Runtime-discovered rows cached before model-identity corrections retain
 // stale capability metadata until the authoritative catalog TTL expires.
-const OPENCODE_CACHE_MIGRATION_MODEL_IDS = ["glm-5.3-flash", "longcat-2.5-preview-free", "space-bunny-free"] as const;
+const OPENCODE_CACHE_MIGRATION_MODEL_IDS = [
+	"deepseek-flash",
+	"glm-5.3-flash",
+	"longcat-2.5-preview-free",
+	"space-bunny-free",
+] as const;
 const OPENCODE_ZEN_CACHE_MIGRATION_MODEL_IDS = ["gemini-3.7-flash", "gemini-3.8-flash"] as const;
 
 // Billing-variant suffixes the OpenCode gateways append to a base model id

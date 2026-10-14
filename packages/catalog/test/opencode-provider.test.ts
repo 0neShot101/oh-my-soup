@@ -621,6 +621,66 @@ describe("OpenCode provider discovery", () => {
 		}
 	});
 
+	test("replaces a cached $0 Go Flash alias with the reviewed rate card on upgrade (#15357)", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-opencode-flash-alias-cache-"));
+		const cacheDbPath = path.join(tempDir, "models.db");
+		try {
+			const options = opencodeGoModelManagerOptions({
+				apiKey: "go-account-key",
+				fetch: async () => modelListResponse(["deepseek-flash"]),
+			});
+			const cacheProviderId = options.cacheProviderId;
+			if (!cacheProviderId) throw new Error("OpenCode Go cache provider id is missing");
+			// A fresh snapshot from a binary that predates the rule: the alias row
+			// carries the gateway defaults, under that binary's cache identity.
+			const priorDropIds = options.dropCachedModelIdsOnStaticMismatch?.filter(id => id !== "deepseek-flash");
+			await resolveProviderModels(
+				{
+					...options,
+					cacheDbPath,
+					modelsDev: undefined,
+					dropCachedModelIdsOnStaticMismatch: priorDropIds,
+					fetchDynamicModels: async () => [
+						{
+							id: "deepseek-flash",
+							name: "deepseek-flash",
+							api: "openai-completions",
+							provider: "opencode-go",
+							baseUrl: "https://opencode.ai/zen/go/v1",
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: null,
+							maxTokens: null,
+						},
+					],
+				},
+				"online",
+			);
+			let fetches = 0;
+			const upgraded = await resolveProviderModels(
+				{
+					...options,
+					cacheDbPath,
+					modelsDev: undefined,
+					fetchDynamicModels: async () => {
+						fetches++;
+						return (await options.fetchDynamicModels?.()) ?? [];
+					},
+				},
+				"online-if-uncached",
+			);
+			const alias = upgraded.models.find(model => model.id === "deepseek-flash");
+			if (!alias) throw new Error("Go Flash alias missing after cache upgrade");
+			expect(fetches).toBe(1);
+			expect(alias.cost).toMatchObject({ input: 0.15, output: 0.6, cacheRead: 0.003 });
+			expect(alias.contextWindow).toBe(1_000_000);
+			expect(getSupportedEfforts(alias)).toEqual([Effort.Low, Effort.High, Effort.Max]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
 	test("drops cached Gemini 3.7 Flash effort metadata when refresh fails (#10543)", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-opencode-gemini37-cache-"));
 		const cacheDbPath = path.join(tempDir, "models.db");
@@ -968,6 +1028,24 @@ describe("OpenCode provider discovery", () => {
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
+	});
+
+	test("hydrates the Go bare Flash alias like its V4.1 Flash sibling (#15357)", async () => {
+		// The Go roster lists only ids; the sibling hydrates from its bundled row,
+		// the bare alias from the provider rule.
+		const options = opencodeGoModelManagerOptions({
+			apiKey: "go-account-key",
+			fetch: async () => modelListResponse(["deepseek-flash", "deepseek-v4.1-flash"]),
+		});
+		const models = ((await options.fetchDynamicModels?.()) ?? []).map(spec => buildModel(spec));
+		const alias = models.find(model => model.id === "deepseek-flash");
+		const sibling = models.find(model => model.id === "deepseek-v4.1-flash");
+		if (!alias || !sibling) throw new Error("Go gateway Flash lanes missing");
+		expect(alias.cost).toEqual(sibling.cost);
+		expect(alias.contextWindow).toBe(sibling.contextWindow);
+		expect(alias.maxTokens).toBe(sibling.maxTokens);
+		expect(alias.reasoning).toBe(true);
+		expect(getSupportedEfforts(alias)).toEqual(getSupportedEfforts(sibling));
 	});
 
 	test("serves image input on the OpenCode Go DeepSeek Flash lanes", () => {

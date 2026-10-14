@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenCode Go's `deepseek-flash` alias showing $0, unknown limits, and no reasoning instead of the V4.1 Flash rate card and capabilities ([#15357](https://github.com/can1357/oh-my-pi/issues/15357))
+
 ## [18.10.4] - 2026-10-13
 
 ### Added
