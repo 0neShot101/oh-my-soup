@@ -57,6 +57,8 @@ export class STTController {
 	#resolvedModelKey: SttModelKey | null = null;
 	#toggling = false;
 	#stopAfterStart = false;
+	/** Cancels the start in flight: its model preflight wait and whatever start step follows it. */
+	#startAbort: AbortController | null = null;
 	#disposed = false;
 	readonly #createCapture: CaptureFactory;
 	readonly #settings: Settings;
@@ -117,11 +119,13 @@ export class STTController {
 		await this.#transition(options, () => this.#start(editor, options));
 	}
 
-	/** Stop the running capture and transcribe it. A capture still starting stops as soon as it is
-	 *  up; otherwise a no-op unless recording. */
+	/** Stop the running capture and transcribe it. A capture still starting is cancelled: a pending
+	 *  model preflight stops waiting (the worker keeps loading), otherwise it stops once it is up.
+	 *  A no-op unless starting or recording. */
 	async stop(): Promise<void> {
 		if (this.#toggling) {
 			if (this.#state === "idle" || this.#state === "recording") this.#stopAfterStart = true;
+			if (this.#state === "idle") this.#startAbort?.abort();
 			return;
 		}
 		const callbacks = this.#streamCallbacks;
@@ -160,7 +164,7 @@ export class STTController {
 		return resolveSttModelSpec(model?.id).key;
 	}
 
-	async #ensureDeps(options: SttCallbacks, modelKey = this.#resolveModelKey()): Promise<SttModelKey | null> {
+	async #ensureDeps(options: SttCallbacks, modelKey: SttModelKey, signal: AbortSignal): Promise<SttModelKey | null> {
 		// Keyed on the resolved role model rather than a one-shot flag: changing
 		// modelRoles.dictation mid-session re-runs preflight for the new model.
 		if (this.#resolvedModelKey === modelKey) return modelKey;
@@ -173,11 +177,13 @@ export class STTController {
 			if (!online && (await isSttModelCached(modelKey))) {
 				this.#warmModel(modelKey);
 			} else {
-				await downloadSttModel(modelKey);
+				await downloadSttModel(modelKey, undefined, { signal });
 			}
 			this.#resolvedModelKey = modelKey;
 			return modelKey;
 		} catch (err) {
+			// A cancelled start is not a setup failure; the worker finishes the load for the next start.
+			if (signal.aborted) return null;
 			const msg = err instanceof Error ? err.message : "Failed to setup STT dependencies";
 			options.showWarning(msg);
 			logger.error("STT dependency setup failed", { error: msg });
@@ -202,6 +208,16 @@ export class STTController {
 	}
 
 	async #start(editor: SttTarget, options: SttCallbacks): Promise<void> {
+		const abort = new AbortController();
+		this.#startAbort = abort;
+		try {
+			await this.#startWith(editor, options, abort.signal);
+		} finally {
+			if (this.#startAbort === abort) this.#startAbort = null;
+		}
+	}
+
+	async #startWith(editor: SttTarget, options: SttCallbacks, signal: AbortSignal): Promise<void> {
 		let model = this.#resolveModel();
 		if (model?.api === "openai-transcriptions") {
 			this.#startBuffered(editor, options, model);
@@ -212,8 +228,8 @@ export class STTController {
 			return;
 		}
 
-		let modelKey = await this.#ensureDeps(options, this.#resolveModelKey(model));
-		if (!modelKey || this.#disposed) return;
+		let modelKey = await this.#ensureDeps(options, this.#resolveModelKey(model), signal);
+		if (!modelKey || signal.aborted) return;
 		model = this.#resolveModel();
 		if (model?.api === "openai-transcriptions") {
 			this.#startBuffered(editor, options, model);
@@ -225,8 +241,8 @@ export class STTController {
 		}
 		const startModelKey = this.#resolveModelKey(model);
 		if (startModelKey !== modelKey) {
-			modelKey = await this.#ensureDeps(options, startModelKey);
-			if (!modelKey || this.#disposed) return;
+			modelKey = await this.#ensureDeps(options, startModelKey, signal);
+			if (!modelKey || signal.aborted) return;
 		}
 		await this.#startStreaming(editor, options, modelKey);
 	}
@@ -501,6 +517,7 @@ export class STTController {
 
 	dispose(): void {
 		this.#disposed = true;
+		this.#startAbort?.abort();
 		if (this.#streamAbort) {
 			this.#streamAbort.abort();
 			this.#streamAbort = null;

@@ -67,9 +67,9 @@ While speech-to-text is enabled, non-printable keys and chords assigned to `app.
 
 ### Click to dictate in Tern
 
-With `stt.enabled` on, the native composer shows a microphone beside Send. Click it to start recording without holding a key. The button changes to **Recording · Stop**. Click it again to stop, then wait for **Transcribing…** to finish.
+With `stt.enabled` on, the native composer shows a microphone beside Send. Click it to start recording without holding a key. While the speech model loads, the button shows **Starting…**; click it again to cancel. Once it changes to **Recording · Stop**, click it to stop, then wait for **Transcribing…** to finish.
 
-Dictation started with this button stays in the draft, regardless of `stt.submitTrigger`. Review or edit the text, then press Enter or click Send. Sending is disabled while dictation starts, records, or finishes transcribing.
+Dictation started with this button stays in the draft, regardless of `stt.submitTrigger`. Review or edit the text, then press Enter or click Send. While dictation is recording or transcribing into the draft, Enter and Send do nothing.
 
 For live English transcription, select **Nemotron 0.6B (live streaming, English)** in `omp setup speech`, or set `modelRoles.dictation` to `local/nemotron-streaming-en-0.6b`. Words appear in the draft while you speak. The first recording waits for the model to load before opening the microphone; start speaking when the button says **Recording · Stop**. Later recordings reuse the loaded model. See [local speech models](local-models.md#speech-to-text) for download and language details.
 

@@ -185,6 +185,36 @@ describe("STTController preflight", () => {
 		expect(controller.state).toBe("idle");
 	});
 
+	it("cancels a start still waiting for its model without a warning, then preflights again", async () => {
+		settings.setModelRole("dictation", "local/nemotron-streaming-en-0.6b");
+		const called = Promise.withResolvers<void>();
+		// Like the worker host: an aborted wait ends as a failed download while the worker keeps loading.
+		const download = vi.spyOn(downloader, "downloadSttModel").mockImplementation((_key, _progress, options) => {
+			called.resolve();
+			const { promise, reject } = Promise.withResolvers<void>();
+			options?.signal?.addEventListener("abort", () => reject(new Error("Failed to download speech model")));
+			return promise;
+		});
+		const startCapture = vi.fn(() => ({ stop: vi.fn() }));
+		const options = makeOptions();
+		controller = new STTController(startCapture, { settings, registry });
+
+		const starting = controller.start(makeEditor(), options);
+		await called.promise;
+		await controller.stop();
+		await starting;
+
+		expect(controller.state).toBe("idle");
+		expect(startCapture).not.toHaveBeenCalled();
+		expect(asrClient.sttClient.startStream).not.toHaveBeenCalled();
+		expect(options.showWarning).not.toHaveBeenCalled();
+
+		download.mockResolvedValue();
+		await controller.start(makeEditor(), options);
+		expect(download).toHaveBeenCalledTimes(2);
+		expect(controller.state).toBe("recording");
+	});
+
 	it("uncached model: records only after the foreground download finishes", async () => {
 		vi.spyOn(downloader, "isSttModelCached").mockResolvedValue(false);
 		const called = Promise.withResolvers<void>();

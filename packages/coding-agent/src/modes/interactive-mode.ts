@@ -3826,7 +3826,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			rate: this.#nativeTokenRate(),
 			running: this.loadingAnimation !== undefined || this.session.isStreaming,
 			dictation:
-				cfgSttEnabled.get(this.settings) || this.#dictationStarting || dictation !== "idle"
+				cfgSttEnabled.get(settings) || this.#dictationStarting || dictation !== "idle"
 					? this.#dictationStarting && dictation === "idle"
 						? "starting"
 						: dictation
@@ -8042,12 +8042,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.#readySTTController()?.toggle(this.editor, this.#dictationCallbacks(this.editor));
 	}
 
+	/** The composer microphone: start a draft-only capture, or stop (or cancel the start of) the running one. */
 	async #toggleComposerDictation(): Promise<void> {
-		if (this.#sttController?.state === "recording") {
-			await this.#sttController.stop();
+		if (this.#dictationStarting || this.#sttController?.state === "recording") {
+			await this.#sttController?.stop();
 			return;
 		}
-		if (this.#dictationStarting || this.#sttController?.state === "transcribing") return;
+		if (this.#sttController?.state === "transcribing") return;
 		const controller = this.#readySTTController();
 		if (!controller) return;
 		this.#dictationStarting = true;

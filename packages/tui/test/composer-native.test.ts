@@ -216,16 +216,16 @@ describe("native composer", () => {
 			const send = byRole(root, "omp.composer.send")!;
 			const bar = byRole(root, "omp.composer.bar")!;
 			const children = (bar.c ?? []).filter(isNode);
+			const holdsDraft = state === "recording" || state === "transcribing";
 			expect(children.indexOf(mic)).toBe(children.indexOf(send) - 1);
-			expect(nodes(root).find(n => n.k === "editor")?.p).toMatchObject({ sendable: state === "idle" });
-			expect(send.p?.actions).toEqual(state === "idle" ? { click: "submit" } : undefined);
+			expect(nodes(root).find(n => n.k === "editor")?.p).toMatchObject({ sendable: !holdsDraft });
+			expect(send.p?.actions).toEqual(holdsDraft ? undefined : { click: "submit" });
+			expect(mic.p?.actions).toEqual(state === "transcribing" ? undefined : { click: "dictation.toggle" });
 
 			if (state === "starting" || state === "transcribing") {
 				expect(mic.p).toMatchObject({ tone: "pending" });
-				expect(mic.p?.actions).toBeUndefined();
 				expect(nodes(mic).some(n => n.k === "spinner")).toBe(true);
 			} else {
-				expect(mic.p?.actions).toEqual({ click: "dictation.toggle" });
 				expect(nodes(mic).find(n => n.k === "icon")?.p).toEqual({
 					name: state === "recording" ? "stop" : "mic",
 				});
@@ -238,18 +238,21 @@ describe("native composer", () => {
 		expect(byRole(editor.describe(cx), "omp.composer.dictation")).toBeUndefined();
 	});
 
-	it("routes microphone clicks without keyboard focus, blocks pending actions and keeps transcription as a draft", async () => {
+	it("routes microphone clicks without keyboard focus, cancels a slow start and keeps transcription as a draft", async () => {
 		let dictation: ComposerNativeState["dictation"] = "idle";
 		const editor = new CustomEditor(getEditorTheme());
 		const other = new CustomEditor(getEditorTheme());
 		const toggled: ComposerNativeState["dictation"][] = [];
 		const submitted: string[] = [];
 		editor.composerState = () => ({ running: false, dictation });
+		// Mirrors the host: idle starts, a pending start cancels, recording stops into transcription.
 		editor.onToggleDictation = () => {
 			toggled.push(dictation);
-			dictation = dictation === "idle" ? "starting" : "transcribing";
+			dictation = dictation === "idle" ? "starting" : dictation === "starting" ? "idle" : "transcribing";
 		};
-		editor.onSubmit = text => submitted.push(text);
+		editor.onSubmit = text => {
+			submitted.push(text);
+		};
 		other.onToggleDictation = () => {
 			throw new Error("dictation reached keyboard focus instead of its native owner");
 		};
@@ -267,28 +270,32 @@ describe("native composer", () => {
 			const assertSendBlocked = () => {
 				h.event({ ev: "action", sf: h.terminal.surface!, id: send.id, act: "submit" });
 				h.event({ ev: "send", sf: h.terminal.surface!, id: input.id, text: "must not replace draft" });
+				editor.handleInput("\r");
 				expect(submitted).toEqual([]);
 				expect(editor.getText()).toBe("existing draft");
 				expect(h.byId(input.id)?.p).toMatchObject({ sendable: false });
 			};
 
+			// A start still loading its model can be cancelled, and does not block sending.
 			clickMic();
 			await h.render();
-			expect(toggled).toEqual(["idle"]);
-			expect(dictation).toBe("starting");
+			expect(editor.composerState().dictation).toBe("starting");
+			expect(h.byId(input.id)?.p).toMatchObject({ sendable: true });
 			clickMic();
-			expect(toggled).toEqual(["idle"]);
-			assertSendBlocked();
+			await h.render();
+			expect(toggled).toEqual(["idle", "starting"]);
+			expect(editor.composerState().dictation).toBe("idle");
 
+			clickMic();
 			dictation = "recording";
 			await h.render();
 			assertSendBlocked();
 			clickMic();
 			await h.render();
-			expect(toggled).toEqual(["idle", "recording"]);
-			expect(dictation).toBe("transcribing");
+			expect(toggled).toEqual(["idle", "starting", "idle", "recording"]);
+			expect(editor.composerState().dictation).toBe("transcribing");
 			clickMic();
-			expect(toggled).toEqual(["idle", "recording"]);
+			expect(toggled).toHaveLength(4);
 			assertSendBlocked();
 
 			editor.setText("existing draft dictated words submit");

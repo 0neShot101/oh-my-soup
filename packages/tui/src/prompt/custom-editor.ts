@@ -77,6 +77,11 @@ const FOCUS_ACTION = "focus:";
 
 const IDLE_COMPOSER: ComposerNativeState = { running: false };
 
+/** Recording and transcription still write into the draft, so sending it then would split the dictation. */
+function dictationHoldsDraft(dictation: ComposerNativeState["dictation"]): boolean {
+	return dictation === "recording" || dictation === "transcribing";
+}
+
 /** The composer's controls around the input, rebuilt when what they show changes; the bar adds the rate and facts. */
 interface ComposerControls {
 	readonly focus: NativeNode | undefined;
@@ -1037,10 +1042,10 @@ export class CustomEditor extends Editor {
 		}, CustomEditor.SHIMMER_FRAME_MS);
 		this.#shimmerTimer.unref?.();
 	}
-	/** Editing is available during bootstrap; atomic sends wait until submission is wired and enabled. */
+	/** Editing is available during bootstrap; atomic sends wait until submission is wired and enabled
+	 *  and no dictation is still writing into the draft. */
 	protected override get nativeSendable(): boolean {
-		const { dictation } = this.composerState();
-		return this.onSubmit !== undefined && !this.disableSubmit && (dictation === undefined || dictation === "idle");
+		return this.onSubmit !== undefined && !this.disableSubmit && !dictationHoldsDraft(this.composerState().dictation);
 	}
 	/** The quoted-title placeholder, kept while the title stands so the editor node stays reused. */
 	#titlePlaceholder: { title: string; text: TspText } | undefined;
@@ -1296,7 +1301,8 @@ export class CustomEditor extends Editor {
 					)
 				: undefined;
 		const recording = state.dictation === "recording";
-		const pending = state.dictation === "starting" || state.dictation === "transcribing";
+		const starting = state.dictation === "starting";
+		const transcribing = state.dictation === "transcribing";
 		const dictation =
 			state.dictation === undefined
 				? undefined
@@ -1306,30 +1312,26 @@ export class CustomEditor extends Editor {
 							role: "omp.composer.dictation",
 							gap: "xs",
 							align: "center",
-							tone: recording ? "error" : pending ? "pending" : undefined,
+							tone: recording ? "error" : starting || transcribing ? "pending" : undefined,
 							title: recording
 								? "Stop recording and transcribe"
-								: pending
-									? "Dictation in progress"
-									: "Start dictation",
-							actions: pending ? undefined : { click: "dictation.toggle" },
+								: starting
+									? "Cancel dictation"
+									: transcribing
+										? "Transcribing dictation"
+										: "Start dictation",
+							// The model can take a while to load on first use, so a start stays cancellable.
+							actions: transcribing ? undefined : { click: "dictation.toggle" },
 						},
-						pending
-							? [
-									node(
-										"spinner",
-										{ label: state.dictation === "starting" ? "Starting…" : "Transcribing…" },
-										undefined,
-										"pending",
-									),
-								]
+						starting || transcribing
+							? [node("spinner", { label: starting ? "Starting…" : "Transcribing…" }, undefined, "pending")]
 							: compact([
 									node("icon", { name: recording ? "stop" : "mic" }, undefined, "icon"),
 									recording && node("text", { text: "Recording · Stop", wrap: "none" }, undefined, "label"),
 								]),
 						"dictation",
 					);
-		const dictating = recording || pending;
+		const dictating = dictationHoldsDraft(state.dictation);
 		const submit = state.running
 			? node(
 					"text",
@@ -1412,7 +1414,7 @@ export class CustomEditor extends Editor {
 				return;
 			case "dictation.toggle": {
 				const { dictation } = this.composerState();
-				if (dictation === "idle" || dictation === "recording") this.onToggleDictation?.();
+				if (dictation !== undefined && dictation !== "transcribing") this.onToggleDictation?.();
 				return;
 			}
 			case "submit":
@@ -1610,6 +1612,16 @@ export class CustomEditor extends Editor {
 
 		const parsedKey = parseKey(data);
 		const canonical = parsedKey !== undefined ? canonicalKeyId(parsedKey) : undefined;
+
+		// Enter matches the disabled Send button while dictation still writes into the draft;
+		// dictation's own submit trigger goes through submit(), not this key path.
+		if (
+			canonical !== undefined &&
+			getKeybindings().matchesCanonical(canonical, "tui.input.submit") &&
+			dictationHoldsDraft(this.composerState().dictation)
+		) {
+			return;
+		}
 
 		// Space-hold push-to-talk runs before editor shortcuts so a reserved binding can never
 		// delete, move, submit, or invoke an app action while the gesture is enabled.
