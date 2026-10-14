@@ -11,6 +11,8 @@
 - Fixed turns ending without automatic retry when a gateway forwards Go's `use of closed network connection` transport error; it now retries like other dropped connections ([#15385](https://github.com/can1357/oh-my-pi/issues/15385))
 - Fixed Codex SSE streams failing with an abort instead of retrying when the first event stalls ([#15542](https://github.com/can1357/oh-my-pi/issues/15542))
 - Fixed Codex (ChatGPT subscription) requests with reasoning disabled, such as judges, titles, commit messages, and thinking `off`, leaving effort to the server default; they now send the lowest supported effort, or `none` where the model accepts it ([#15514](https://github.com/can1357/oh-my-pi/issues/15514))
+- Fixed a Codex account whose token OpenAI rejects (401/403) continuing to show its last quota as healthy; `omp usage` now drops the stale report and `omp auth-gateway check` reports the credential as failing ([#15439](https://github.com/can1357/oh-my-pi/issues/15439))
+- Fixed usage reports being served indefinitely while their provider keeps failing; the last successful report is now shown for at most 24 hours after it was fetched ([#15439](https://github.com/can1357/oh-my-pi/issues/15439))
 
 ## [18.10.4] - 2026-10-13
 
