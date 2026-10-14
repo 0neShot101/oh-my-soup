@@ -418,8 +418,10 @@ interface TabApi {
 	dialog(): Promise<DialogState>;
 	handleDialog(opts: { accept: boolean; text?: string }): Promise<void>;
 	setDialogs(policy: DialogPolicy | null): Promise<void>;
-	text(selector: string): Promise<string | null>;
-	html(selector: string): Promise<string | null>;
+	/** Without a selector, reads the page `<body>`. */
+	text(selector?: string): Promise<string | null>;
+	/** Without a selector, reads the page `<body>`. */
+	html(selector?: string): Promise<string | null>;
 	value(selector: string): Promise<string | null>;
 	attr(selector: string, name: string): Promise<string | null>;
 	count(selector: string): Promise<number>;
@@ -2633,11 +2635,11 @@ export class WorkerCore {
 					throwIfAborted(sig);
 					return this.#requireDownloads().list();
 				}),
-			text: selector =>
+			text: (selector = "body") =>
 				op(`tab.text(${JSON.stringify(selector)})`, quickOpMs, sig =>
 					queryText(page, normalizeSelector(selector), sig),
 				),
-			html: selector =>
+			html: (selector = "body") =>
 				op(`tab.html(${JSON.stringify(selector)})`, quickOpMs, sig =>
 					queryHtml(page, normalizeSelector(selector), sig),
 				),
