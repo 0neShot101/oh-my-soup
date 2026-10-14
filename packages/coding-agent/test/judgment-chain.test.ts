@@ -347,11 +347,12 @@ describe("ChainJudge", () => {
 				});
 			}),
 		);
+		const nativeImage: ImageContent = { ...IMAGE_ONE, detail: "original" };
 
 		const result = await new ChainJudge({ settings, registry, purpose: "test" }).judge({
 			state: "look at this",
 			questions: { visible: { type: "noul", instructions: "Is an object visible?" } },
-			images: [IMAGE_ONE],
+			images: [nativeImage],
 		});
 
 		expect(result.answers.visible.noul).toBe(0.75);
@@ -360,7 +361,8 @@ describe("ChainJudge", () => {
 		const serializedInput = JSON.stringify(body?.input);
 		expect(serializedInput).toContain('"type":"input_text"');
 		expect(serializedInput).toContain('"type":"input_image"');
-		expect(serializedInput).toContain(`data:image/png;base64,${IMAGE_ONE.data}`);
+		expect(serializedInput).toContain(`data:image/png;base64,${nativeImage.data}`);
+		expect(serializedInput).toContain('"detail":"original"');
 	});
 
 	it("reports an explicit error when no candidate supports image judgments", async () => {
@@ -412,7 +414,75 @@ describe("ChainJudge", () => {
 		expect(result.answers.visible.noul).toBe(1);
 		expect(native).not.toHaveBeenCalled();
 		expect(chat).toHaveBeenCalledTimes(1);
-		expect(userContent).toEqual(expect.arrayContaining([IMAGE_ONE]));
+		const imageBlocks = Array.isArray(userContent)
+			? userContent.filter((block): block is ImageContent => block.type === "image")
+			: [];
+		expect(imageBlocks).toHaveLength(1);
+		const imageMetadata = await new Bun.Image(Buffer.from(imageBlocks[0]!.data, "base64")).metadata();
+		expect(Math.min(imageMetadata.width, imageMetadata.height)).toBeGreaterThanOrEqual(200);
+		expect(imageBlocks[0]?.data).not.toBe(IMAGE_ONE.data);
+	});
+
+	it("normalizes prompted image inputs for each selected model without mutating originals", async () => {
+		const stbModel = {
+			...VISION_CHAT,
+			id: "stb-vision-chat-judge",
+			name: "STB vision chat judge",
+			imageInputDecoder: "stb",
+		} as Model<Api>;
+		const settings = Settings.isolated({
+			modelRoles: { judge: `${stbModel.provider}/${stbModel.id}` },
+			"retry.fallbackChains": { judge: [`${VISION_CHAT.provider}/${VISION_CHAT.id}`] },
+		});
+		const registry = makeRegistry([stbModel, VISION_CHAT], { [VISION_CHAT.provider]: "vision-key" });
+		const tinyImage: ImageContent = { ...IMAGE_ONE, detail: "original" };
+		const webpBytes = await new Bun.Image(Buffer.from(IMAGE_ONE.data, "base64"))
+			.resize(200, 200, { filter: "nearest" })
+			.webp({ quality: 90 })
+			.bytes();
+		const webpImage: ImageContent = {
+			type: "image",
+			data: Buffer.from(webpBytes).toString("base64"),
+			mimeType: "image/webp",
+			detail: "high",
+		};
+		const attempts: Array<{ model: Model<Api>; images: ImageContent[] }> = [];
+		vi.spyOn(ai, "completeSimple").mockImplementation(async (model, context, options) => {
+			const user = context.messages.find(message => message.role === "user");
+			const images = Array.isArray(user?.content)
+				? user.content.filter((block): block is ImageContent => block.type === "image")
+				: [];
+			attempts.push({ model, images });
+			if (attempts.length === 1) throw new Error("first prompted candidate failed");
+			const response = reply(model, "visible: yes");
+			options?.onAttempt?.(response);
+			return response;
+		});
+
+		const result = await new ChainJudge({ settings, registry, purpose: "test" }).judge({
+			state: "look at this",
+			questions: { visible: { type: "noul", instructions: "Is an object visible?" } },
+			images: [tinyImage, webpImage],
+		});
+
+		expect(result.answers.visible.noul).toBe(1);
+		expect(attempts.map(({ model }) => model.id)).toEqual([stbModel.id, VISION_CHAT.id]);
+		const [stbImages, fallbackImages] = attempts.map(attempt => attempt.images);
+		expect(stbImages).toHaveLength(2);
+		expect(stbImages[0]?.detail).toBe("original");
+		expect(stbImages[0]?.data).not.toBe(tinyImage.data);
+		const tinyMetadata = await new Bun.Image(Buffer.from(stbImages[0]!.data, "base64")).metadata();
+		expect(Math.min(tinyMetadata.width, tinyMetadata.height)).toBeGreaterThanOrEqual(200);
+		expect(stbImages[1]?.mimeType).not.toBe("image/webp");
+		expect(stbImages[1]?.data).not.toBe(webpImage.data);
+		expect(stbImages[1]?.detail).toBe("high");
+		const convertedWebpMetadata = await new Bun.Image(Buffer.from(stbImages[1]!.data, "base64")).metadata();
+		expect(Math.min(convertedWebpMetadata.width, convertedWebpMetadata.height)).toBeGreaterThanOrEqual(200);
+		expect(fallbackImages?.[1]).toEqual(webpImage);
+		expect(fallbackImages?.[0]?.detail).toBe("original");
+		expect(fallbackImages?.[0]?.data).not.toBe(tinyImage.data);
+		expect(tinyImage).toEqual({ ...IMAGE_ONE, detail: "original" });
+		expect(webpImage.mimeType).toBe("image/webp");
 	});
 
 	it("does not prompt after a compatible native image judgment fails", async () => {

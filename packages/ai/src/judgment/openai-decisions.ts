@@ -22,7 +22,8 @@
 import { isRecord, prompt } from "@oh-my-pi/pi-utils";
 import predicateTemplate from "./openai-decisions-predicate.md" with { type: "text" };
 import { type Answer, type Question, tokenUsage } from "./types";
-import { finiteNumber, judgmentImageDataUrl, type JudgmentWire } from "./wire";
+import { embeddedImageDataUrl } from "../images/shared";
+import { finiteNumber, type JudgmentWire } from "./wire";
 
 type DecisionQuestion =
 	| { type: "predicate"; name: string; instructions: string }
@@ -114,7 +115,7 @@ export const openaiDecisionsWire: JudgmentWire = {
 								{ type: "input_text", text: state },
 								...request.images.map(image => ({
 									type: "input_image",
-									image_url: judgmentImageDataUrl(image),
+									image_url: embeddedImageDataUrl(image),
 									...(image.detail !== undefined ? { detail: image.detail } : {}),
 								})),
 							],

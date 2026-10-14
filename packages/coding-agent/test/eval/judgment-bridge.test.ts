@@ -218,7 +218,12 @@ describe("eval judge() bridge", () => {
 			const imageBlocks = Array.isArray(content)
 				? content.filter((block): block is ImageContent => block.type === "image")
 				: [];
-			expect(imageBlocks).toEqual([IMAGE_ONE, embeddedImage]);
+			expect(imageBlocks).toHaveLength(2);
+			for (const [index, image] of imageBlocks.entries()) {
+				const metadata = await new Bun.Image(Buffer.from(image.data, "base64")).metadata();
+				expect(Math.min(metadata.width, metadata.height)).toBeGreaterThanOrEqual(200);
+				expect(image.data).not.toBe(index === 0 ? IMAGE_ONE.data : embeddedImage.data);
+			}
 			expect(imageBlocks[1]?.detail).toBe("original");
 		} finally {
 			tempDir.removeSync();

@@ -10,7 +10,7 @@
  */
 import { type } from "@oh-my-pi/omptype";
 import * as AIError from "../error";
-import { isEmbeddedImageContent } from "../judgment/wire";
+import { isEmbeddedImageContent } from "../images/shared";
 import type { JudgmentRequest, JudgmentResult } from "../judgment/types";
 import type { ImageContent } from "../types";
 /**
@@ -22,6 +22,8 @@ const systemOneImageSchema = type({
 	type: "'image'",
 	data: "string > 0",
 	mimeType: "string > 0",
+	// Leave runtime validation to the shared embedded-image guard.
+	"detail?": "unknown",
 });
 
 const systemOneRequestSchema = type({
@@ -56,14 +58,14 @@ export function parseRequest(body: unknown): SystemOneParsedRequest {
 	// `req.json()` output is JSON by construction, and the typed `Questions`
 	// contract models string instructions only; native judgment wires transform
 	// question fields as needed, while image bytes stay separate from `state`.
-	for (const [index, image] of (parsed.images ?? []).entries()) {
+	const images: ImageContent[] | undefined = parsed.images?.map((image, index) => {
 		if (!isEmbeddedImageContent(image)) {
 			throw new AIError.ValidationError(
 				`systemone: images[${index}] must contain non-empty base64 data and an image MIME type`,
 			);
 		}
-	}
-	const images: ImageContent[] | undefined = parsed.images;
+		return image;
+	});
 	const request = {
 		state: parsed.state,
 		questions: parsed.questions,

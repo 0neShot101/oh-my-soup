@@ -3,10 +3,7 @@
  * encodes, and decodes one request for each API it serves. Internal to the
  * judgment module; `native.ts` maps every judgment API to its dialect.
  */
-import { isRecord } from "@oh-my-pi/pi-utils";
-import * as AIError from "../error";
-import { toDataUrl } from "../images/shared";
-import type { ImageContent, Usage } from "../types";
+import type { Usage } from "../types";
 import type { JudgmentRequest } from "./types";
 
 /** Where one attempt posts and which bearer token it sends. */
@@ -39,27 +36,6 @@ export interface JudgmentWire {
 	supportsImages?: boolean;
 	/** The response's answers and usage; `undefined` when the payload is not this API's response shape. */
 	decode(payload: unknown): DecodedJudgment | undefined;
-}
-
-/** Whether a value is an embedded base64 image accepted by judgment wires. */
-export function isEmbeddedImageContent(image: unknown): image is ImageContent {
-	return (
-		isRecord(image) &&
-		image.type === "image" &&
-		typeof image.data === "string" &&
-		/^[A-Za-z0-9+/]+={0,2}$/.test(image.data) &&
-		image.data.length % 4 !== 1 &&
-		typeof image.mimeType === "string" &&
-		/^image\/[A-Za-z0-9][A-Za-z0-9.+-]*$/i.test(image.mimeType)
-	);
-}
-
-/** Convert one embedded judgment image to a validated inline data URL. */
-export function judgmentImageDataUrl(image: unknown): string {
-	if (!isEmbeddedImageContent(image)) {
-		throw new AIError.ValidationError("Judgment images must contain non-empty base64 data and an image MIME type");
-	}
-	return toDataUrl({ data: image.data, mimeType: image.mimeType.toLowerCase() });
 }
 
 /** `value` when it is a finite number. */

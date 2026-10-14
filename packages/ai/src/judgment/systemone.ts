@@ -18,7 +18,8 @@ import { parseCloudflareCredential } from "@oh-my-pi/pi-catalog/wire/cloudflare"
 import { $env, isRecord } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { tokenUsage } from "./types";
-import { type DecodedJudgment, finiteNumber, judgmentImageDataUrl, type JudgmentWire } from "./wire";
+import { embeddedImageDataUrl } from "../images/shared";
+import { type DecodedJudgment, finiteNumber, type JudgmentWire } from "./wire";
 
 function decodeSystemOne(payload: unknown): DecodedJudgment | undefined {
 	if (!isRecord(payload) || !isRecord(payload.answers)) return undefined;
@@ -63,7 +64,7 @@ export const workersAiWire: JudgmentWire = {
 		state: request.state,
 		model: model.slice(model.lastIndexOf("/") + 1),
 		questions: request.questions,
-		...(request.images?.length ? { images: request.images.map(judgmentImageDataUrl) } : {}),
+		...(request.images?.length ? { images: request.images.map(embeddedImageDataUrl) } : {}),
 	}),
 	decode: payload => (isRecord(payload) ? decodeSystemOne(payload.result) : undefined),
 };

@@ -43,6 +43,7 @@ import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { normalizeModelContextImages } from "../utils/image-loading";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelStringWithRouting, resolveRoleChain, type RoleChainCandidate } from "../config/model-resolver";
 import { roleCandidatePool } from "../config/model-roles";
@@ -286,7 +287,16 @@ export class ChainJudge implements Judge {
 		options: JudgeOptions = {},
 	): Promise<JudgmentResult<Q>> {
 		return this.#withCandidate(
-			candidate => candidate.judge(request, options),
+			async (candidateJudge, kind, model) => {
+				if (kind !== "online" || !request.images?.length) return candidateJudge.judge(request, options);
+				const images = (await normalizeModelContextImages([...request.images], { model }))!;
+				const signal = options.signal;
+				if (signal?.aborted) {
+					const reason = signal.reason;
+					throw reason instanceof Error ? reason : new AIError.AbortError("judgment aborted");
+				}
+				return candidateJudge.judge({ ...request, images }, options);
+			},
 			options,
 			request.images !== undefined && request.images.length > 0,
 		);
@@ -302,11 +312,11 @@ export class ChainJudge implements Judge {
 	}
 
 	async withCandidate<T>(run: (judge: Judge, kind: JudgeKind) => Promise<T>, options: JudgeOptions = {}): Promise<T> {
-		return this.#withCandidate(run, options, false);
+		return this.#withCandidate((judge, kind) => run(judge, kind), options, false);
 	}
 
 	async #withCandidate<T>(
-		run: (judge: Judge, kind: JudgeKind) => Promise<T>,
+		run: (judge: Judge, kind: JudgeKind, model: Model) => Promise<T>,
 		options: JudgeOptions,
 		requiresImages: boolean,
 	): Promise<T> {
@@ -342,7 +352,7 @@ export class ChainJudge implements Judge {
 					continue;
 				}
 				compatibleCandidate = true;
-				return await run(judge, kindOf(candidate));
+				return await run(judge, kindOf(candidate), candidate.model);
 			} catch (error) {
 				if (signal?.aborted) {
 					throw signal.reason instanceof Error ? signal.reason : new AIError.AbortError("judgment aborted");

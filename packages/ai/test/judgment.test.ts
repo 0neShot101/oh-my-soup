@@ -657,6 +657,8 @@ describe("NativeJudge OpenAI Decisions dialect", () => {
 		const wireImages: readonly ImageContent[] = [
 			...IMAGE_REFS,
 			{ type: "image", data: "BwgJ", mimeType: "image/png", detail: "original" },
+			{ type: "image", data: "AQI=", mimeType: "image/png", detail: "auto" },
+			{ type: "image", data: "AQI", mimeType: "image/png" },
 		];
 		const inputs: unknown[] = [];
 		const judge = createNativeJudge(visionLuna, {
@@ -687,13 +689,15 @@ describe("NativeJudge OpenAI Decisions dialect", () => {
 						{ type: "input_image", image_url: "data:image/png;base64,AQID" },
 						{ type: "input_image", image_url: "data:image/jpeg;base64,BAUG" },
 						{ type: "input_image", image_url: "data:image/png;base64,BwgJ", detail: "original" },
+						{ type: "input_image", image_url: "data:image/png;base64,AQI=", detail: "auto" },
+						{ type: "input_image", image_url: "data:image/png;base64,AQI" },
 					],
 				},
 			],
 		]);
 	});
 
-	it("rejects invalid base64 length and MIME before fetching", async () => {
+	it("rejects malformed base64, MIME, and image detail before fetching", async () => {
 		const visionLuna = { ...luna, input: ["text" as const, "image" as const] };
 		let calls = 0;
 		const judge = createNativeJudge(visionLuna, {
@@ -705,6 +709,13 @@ describe("NativeJudge OpenAI Decisions dialect", () => {
 		});
 
 		for (const image of [
+			{ type: "image", data: "A==", mimeType: "image/png" },
+			{ type: "image", data: "AAAA==", mimeType: "image/png" },
+			{ type: "image", data: "AQ=I", mimeType: "image/png" },
+			{ type: "image", data: "AQ===", mimeType: "image/png" },
+			{ type: "image", data: "", mimeType: "image/png" },
+			{ type: "image", data: "AB==", mimeType: "image/png" },
+			{ type: "image", data: "AAB=", mimeType: "image/png" },
 			{ type: "image", data: "AAAAA", mimeType: "image/png" },
 			{ type: "image", data: "AQID", mimeType: "text/plain" },
 		] as const) {
@@ -713,6 +724,17 @@ describe("NativeJudge OpenAI Decisions dialect", () => {
 					state: "Inspect this image.",
 					questions: { urgent: { type: "noul", instructions: "Is it urgent?" } },
 					images: [image],
+				})
+				.catch((caught: unknown) => caught);
+			expect(error).toBeInstanceOf(ValidationError);
+		}
+
+		for (const detail of ["medium", null, 0, false, {}]) {
+			const error = await judge
+				.judge({
+					state: "Inspect this image.",
+					questions: { urgent: { type: "noul", instructions: "Is it urgent?" } },
+					images: [{ type: "image", data: "AQ==", mimeType: "image/png", detail } as unknown as ImageContent],
 				})
 				.catch((caught: unknown) => caught);
 			expect(error).toBeInstanceOf(ValidationError);

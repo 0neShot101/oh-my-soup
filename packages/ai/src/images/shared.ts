@@ -1,9 +1,10 @@
 import type { FetchImpl, Model, Usage } from "@oh-my-pi/pi-catalog/types";
-import { parseImageMetadata, USER_AGENT } from "@oh-my-pi/pi-utils";
+import { isRecord, parseImageMetadata, USER_AGENT } from "@oh-my-pi/pi-utils";
 import type { ApiKey } from "../auth-retry";
 import { withAuth } from "../auth-retry";
 import * as AIError from "../error";
-import type { GeneratedImage } from "./types";
+import type { ImageContent } from "../types";
+import type { GeneratedImage, ImageInput } from "./types";
 
 export class ImageApiError extends AIError.ProviderHttpError {
 	override readonly name = "ImageApiError";
@@ -185,8 +186,91 @@ export function sniffBase64ImageMimeType(base64: string): string | undefined {
 	return parseImageMetadata(Buffer.from(base64.slice(0, 64), "base64"))?.mimeType;
 }
 
-export function toDataUrl(image: GeneratedImage): string {
+export function validateImageInput(image: ImageInput): void {
+	if (!isRecord(image) || typeof image.data !== "string") {
+		throw new AIError.ValidationError("invalid base64 image data");
+	}
+	const reason = base64ImageDataFailureReason(image.data);
+	if (reason) throw new AIError.ValidationError(reason);
+	if (!isImageMimeType(image.mimeType)) throw new AIError.ValidationError("invalid image MIME type");
+}
+
+export function toDataUrl(image: ImageInput): string {
+	validateImageInput(image);
 	return `data:${image.mimeType};base64,${image.data}`;
+}
+
+export type Base64ImageDecodeResult =
+	| { bytes: Buffer; reason?: never }
+	| { bytes?: never; reason: "invalid base64 image data" | "empty image data" };
+
+const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+function base64ImageDataFailureReason(data: string): "invalid base64 image data" | "empty image data" | undefined {
+	if (data.length === 0) return "empty image data";
+
+	const match = /^([A-Za-z0-9+/]+)(={0,2})$/.exec(data);
+	if (!match) return "invalid base64 image data";
+	const encoded = match[1];
+	const paddingLength = match[2].length;
+	const remainder = encoded.length % 4;
+	if (
+		(remainder === 1 && paddingLength === 0) ||
+		(paddingLength === 1 && remainder !== 3) ||
+		(paddingLength === 2 && remainder !== 2)
+	) {
+		return "invalid base64 image data";
+	}
+
+	const lastSextet = BASE64_ALPHABET.indexOf(encoded[encoded.length - 1]);
+	if ((remainder === 2 && (lastSextet & 0b1111) !== 0) || (remainder === 3 && (lastSextet & 0b11) !== 0)) {
+		return "invalid base64 image data";
+	}
+	return undefined;
+}
+
+/** Decode standard base64 image data, accepting omitted padding but only canonical trailing bits. */
+export function decodeBase64ImageData(data: string): Base64ImageDecodeResult {
+	const reason = base64ImageDataFailureReason(data);
+	if (reason) return { reason };
+
+	const bytes = Buffer.from(data, "base64");
+	return bytes.length > 0 ? { bytes } : { reason: "empty image data" };
+}
+
+const IMAGE_MIME_TYPE = /^image\/[A-Za-z0-9][A-Za-z0-9.+-]*$/i;
+const IMAGE_DETAILS: Record<string, true> = {
+	auto: true,
+	low: true,
+	high: true,
+	original: true,
+};
+
+function isImageMimeType(value: unknown): value is string {
+	return typeof value === "string" && IMAGE_MIME_TYPE.test(value);
+}
+
+function isEmbeddedImageShape(image: unknown): image is ImageContent {
+	return (
+		isRecord(image) &&
+		image.type === "image" &&
+		typeof image.data === "string" &&
+		isImageMimeType(image.mimeType) &&
+		(image.detail === undefined || (typeof image.detail === "string" && Object.hasOwn(IMAGE_DETAILS, image.detail)))
+	);
+}
+
+/** Whether a value is an embedded image with valid base64 data, MIME type, and detail. */
+export function isEmbeddedImageContent(image: unknown): image is ImageContent {
+	return isEmbeddedImageShape(image) && base64ImageDataFailureReason(image.data) === undefined;
+}
+
+/** Convert one validated embedded image to a lowercase-MIME inline data URL. */
+export function embeddedImageDataUrl(image: unknown): string {
+	if (!isEmbeddedImageShape(image)) {
+		throw new AIError.ValidationError("Judgment images must contain non-empty base64 data and an image MIME type");
+	}
+	return toDataUrl({ data: image.data, mimeType: image.mimeType.toLowerCase() });
 }
 
 export function resolveOpenAIImageSize(aspectRatio?: string, imageSize?: string): string | undefined {

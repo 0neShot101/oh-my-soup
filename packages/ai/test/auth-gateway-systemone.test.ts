@@ -198,6 +198,29 @@ describe("auth-gateway POST /v1/systemone", () => {
 		});
 	});
 
+	it("accepts valid padded and unpadded image data and a supported detail value", async () => {
+		harness = await boot(() => Response.json(OPENAI_ANSWER));
+		for (const fixture of [
+			{ data: "AQI=", detail: "high" },
+			{ data: "AQI", detail: undefined },
+		]) {
+			const image = { type: "image", data: fixture.data, mimeType: "image/png", detail: fixture.detail };
+			const response = await post(harness.url, "/v1/systemone", {
+				model: "openai-vision",
+				...REQUEST,
+				images: [image],
+			});
+			expect(response.status).toBe(200);
+			const forwarded = JSON.parse(String(harness.upstream.at(-1)?.init?.body));
+			expect(forwarded.input[0].content.at(-1)).toEqual({
+				type: "input_image",
+				image_url: `data:image/png;base64,${fixture.data}`,
+				...(fixture.detail === undefined ? {} : { detail: fixture.detail }),
+			});
+		}
+		expect(harness.upstream).toHaveLength(2);
+	});
+
 	it("rejects image input for a model without image capability before upstream", async () => {
 		harness = await boot(() => Response.json(OPENAI_ANSWER));
 		const response = await post(harness.url, "/v1/systemone", {
@@ -245,6 +268,9 @@ describe("auth-gateway POST /v1/systemone", () => {
 		const badImages = [
 			[{ type: "text", data: PNG_DATA, mimeType: "image/png" }],
 			[{ type: "image", data: "https://example.test/image.png", mimeType: "image/png" }],
+			[{ type: "image", data: "A==", mimeType: "image/png" }],
+			[{ type: "image", data: "AAAA==", mimeType: "image/png" }],
+			[{ type: "image", data: "AQ=I", mimeType: "image/png" }],
 			[{ type: "image", data: PNG_DATA, mimeType: "text/plain" }],
 		];
 		for (const images of badImages) {
@@ -254,6 +280,14 @@ describe("auth-gateway POST /v1/systemone", () => {
 				images,
 			});
 			expect(invalidImage.status).toBe(422);
+		}
+		for (const detail of ["medium", null, 42, {}]) {
+			const invalidDetail = await post(harness.url, "/v1/systemone", {
+				model: "jev-latest",
+				...REQUEST,
+				images: [{ type: "image", data: PNG_DATA, mimeType: "image/png", detail }],
+			});
+			expect(invalidDetail.status).toBe(422);
 		}
 		expect(harness.upstream).toHaveLength(0);
 	});

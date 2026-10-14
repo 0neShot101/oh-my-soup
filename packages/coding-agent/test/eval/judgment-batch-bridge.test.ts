@@ -121,6 +121,14 @@ function reply(text: string): AssistantMessage {
 	};
 }
 
+async function expectUpscaledImage(images: unknown[] | undefined, original: ImageContent): Promise<void> {
+	expect(images).toHaveLength(1);
+	const image = images![0] as ImageContent;
+	expect(image.data).not.toBe(original.data);
+	const metadata = await new Bun.Image(Buffer.from(image.data, "base64")).metadata();
+	expect(Math.min(metadata.width, metadata.height)).toBeGreaterThanOrEqual(200);
+}
+
 /** Route each completion by the state text embedded in the prompt; gated states block until released. */
 function mockJudge(answers: Record<string, string | Promise<string>>): void {
 	vi.spyOn(ai, "completeSimple").mockImplementation(async (_model, context, options) => {
@@ -296,8 +304,12 @@ describe("judge_batch bridge", () => {
 		expect(items.find(item => item.key === 0)?.answers).toEqual({ tests: { type: "bool", bool: 1 } });
 		expect(items.find(item => item.key === 1)?.answers).toEqual({ tests: { type: "bool", bool: 1 } });
 		expect(complete).toHaveBeenCalledTimes(2);
-		expect(completions.find(item => item.prompt.includes("state-zero"))?.images).toEqual([IMAGE_ONE]);
-		expect(completions.find(item => item.prompt.includes("state-one"))?.images).toEqual([IMAGE_TWO]);
+		for (const [state, original] of [
+			["state-zero", IMAGE_ONE],
+			["state-one", IMAGE_TWO],
+		] as const) {
+			await expectUpscaledImage(completions.find(item => item.prompt.includes(state))?.images, original);
+		}
 	});
 
 	it("keeps malformed images as per-item failures without dropping valid sibling judgments", async () => {
@@ -338,7 +350,7 @@ describe("judge_batch bridge", () => {
 			expect(complete).toHaveBeenCalledTimes(1);
 			expect(completions).toHaveLength(1);
 			expect(completions[0]?.prompt).toContain("state-valid");
-			expect(completions[0]?.images).toEqual([IMAGE_ONE]);
+			await expectUpscaledImage(completions[0]?.images, IMAGE_ONE);
 		} finally {
 			tempDir.removeSync();
 		}
@@ -534,7 +546,8 @@ describe("judge_batch bridge", () => {
 		expect(item?.answers).toEqual({ tests: { type: "bool", bool: 1 } });
 		// Three off-format turns exhaust the first judgment; the retry answers on its first turn.
 		expect(attempts).toBe(4);
-		expect(imageAttempts).toEqual([[IMAGE_ONE], [IMAGE_ONE], [IMAGE_ONE], [IMAGE_ONE]]);
+		expect(imageAttempts).toHaveLength(4);
+		for (const images of imageAttempts) await expectUpscaledImage(images, IMAGE_ONE);
 	});
 
 	it("raises from drain only after the cursor is exhausted when min_ok is unmet", async () => {
@@ -655,7 +668,7 @@ describe("judgeBatch() JS runtime", () => {
 			expect(complete).toHaveBeenCalledTimes(1);
 			expect(completions).toHaveLength(1);
 			expect(completions[0]?.prompt).toContain("state-zero");
-			expect(completions[0]?.images).toEqual([IMAGE_ONE]);
+			await expectUpscaledImage(completions[0]?.images, IMAGE_ONE);
 		} finally {
 			tempDir.removeSync();
 		}
@@ -679,7 +692,7 @@ async function runPythonJudgeBatchInSubprocess(tempDir: TempDir): Promise<Python
 		"items = sorted(first + second, key=lambda kv: kv[0])",
 		"single = await judge('write tests', Q)",
 		`image_batch = judge_batch({1.0: "image-float-one", "1": "image-string-one", 1.25: "image-fractional", 2.5: "image-invalid"}, Q, images={1.0: [${JSON.stringify(IMAGE_ONE)}], "1": [${JSON.stringify(IMAGE_TWO)}], 1.25: [${JSON.stringify(IMAGE_TWO)}], 2.5: "not an image list"}, retries=0)`,
-		"image_items = await image_batch.drain(timeout=30)",
+		"image_items = [entry async for entry in image_batch.drain_iter(timeout=30)]",
 		"image_results = {repr(k): [i.ok, i.answers or i.error] for k, i in image_items}",
 		"image_batch.close()",
 		"try:",
@@ -791,15 +804,20 @@ describe("judge_batch() Python prelude", () => {
 			expect(one.unknown_image_error).toBe('images contains unknown input key "unknown"');
 			const imageReport = result.output.split("\n").find(line => line.startsWith("__IMAGE_BLOCKS__"));
 			expect(imageReport).toBeDefined();
-			const imageCaptures = JSON.parse(imageReport?.slice("__IMAGE_BLOCKS__".length) ?? "null");
+			const imageCaptures = JSON.parse(imageReport?.slice("__IMAGE_BLOCKS__".length) ?? "null") as Array<{
+				prompt: string;
+				images: unknown[];
+			}>;
 			expect(imageCaptures).toHaveLength(3);
-			expect(imageCaptures).toEqual(
-				expect.arrayContaining([
-					expect.objectContaining({ prompt: expect.stringContaining("image-float-one"), images: [IMAGE_ONE] }),
-					expect.objectContaining({ prompt: expect.stringContaining("image-string-one"), images: [IMAGE_TWO] }),
-					expect.objectContaining({ prompt: expect.stringContaining("image-fractional"), images: [IMAGE_TWO] }),
-				]),
-			);
+			for (const [prompt, original] of [
+				["image-float-one", IMAGE_ONE],
+				["image-string-one", IMAGE_TWO],
+				["image-fractional", IMAGE_TWO],
+			] as const) {
+				const capture = imageCaptures.find(item => item.prompt.includes(prompt));
+				expect(capture).toBeDefined();
+				await expectUpscaledImage(capture?.images, original);
+			}
 		} finally {
 			tempDir.removeSync();
 		}
