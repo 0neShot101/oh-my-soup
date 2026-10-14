@@ -93,6 +93,34 @@ describe("loadImageAttachmentInput", () => {
 		}
 	});
 
+	it("normalizes supported attachment MIME types case-insensitively", async () => {
+		const image = {
+			type: "image" as const,
+			data: paddedPng,
+			mimeType: "IMAGE/PNG",
+			detail: "high" as const,
+		};
+		const attachment = {
+			image,
+			label: "fixture.png",
+			uri: "fixture",
+			autoResize: false,
+		};
+
+		const result = await loadImageAttachmentInput(attachment);
+		expect(result?.mimeType).toBe("image/png");
+		expect(result?.data).toBe(paddedPng);
+		expect(result?.bytes).toBe(Buffer.from(paddedPng, "base64").byteLength);
+		expect(attachment.image).toBe(image);
+		expect(image).toEqual({
+			type: "image",
+			data: paddedPng,
+			mimeType: "IMAGE/PNG",
+			detail: "high",
+		});
+		expect(await load(paddedPng, "IMAGE/HEIC")).toBeNull();
+	});
+
 	it("rejects malformed base64 padding before image decoding", async () => {
 		for (const data of [paddedPng.slice(0, -1), `${paddedPng}=`, `${paddedPng.slice(0, 8)}=${paddedPng.slice(8)}`]) {
 			await expect(load(data)).rejects.toMatchObject({
