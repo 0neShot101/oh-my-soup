@@ -880,11 +880,10 @@ return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.e
 		const prelude = createBrowserPrelude(session);
 		const context = { session, toolCallId: "browser-text-click-strip" };
 		const tabName = `text-click-strip-${crypto.randomUUID()}`;
-		// Only 8 of the first button's 120px show at the panel's right edge, outside every interior probe.
+		// The panel shows 8px, then 1px, of the first button's 120px at its right edge, outside every interior probe.
 		const stripHtml = `<!doctype html>
-<div id="panel" style="width: 100px; overflow: auto; white-space: nowrap"><span style="display: inline-block; width: 92px"></span><button style="width: 120px" onclick="window.picks.push('strip')">Pick</button></div>
-<button onclick="window.picks.push('later')">Pick</button>
-<script>window.picks = [];</script>`;
+<div id="panel" style="width: 100px; overflow: auto; white-space: nowrap"><span id="spacer" style="display: inline-block"></span><button style="width: 120px" onclick="window.picks.push('strip')">Pick</button></div>
+<button onclick="window.picks.push('later')">Pick</button>`;
 		await prelude.invoke(
 			{ action: "open", name: tabName, url: `data:text/html,${encodeURIComponent(stripHtml)}` },
 			context,
@@ -894,13 +893,22 @@ return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.e
 				{
 					action: "run",
 					name: tabName,
-					code: `await tab.click("text/Pick");
-return await tab.evaluate(() => window.picks);`,
+					code: `const picks = {};
+for (const shown of [8, 1]) {
+	await tab.evaluate(shown => {
+		document.querySelector("#spacer").style.width = 100 - shown + "px";
+		document.querySelector("#panel").scrollLeft = 0;
+		window.picks = [];
+	}, shown);
+	await tab.click("text/Pick");
+	picks[shown + "px"] = await tab.evaluate(() => window.picks);
+}
+return picks;`,
 					timeout: 20,
 				},
 				context,
 			);
-			expect(valueFrom<unknown>(result)).toEqual(["strip"]);
+			expect(valueFrom<unknown>(result)).toEqual({ "8px": ["strip"], "1px": ["strip"] });
 		} finally {
 			await prelude.invoke({ action: "close", name: tabName, kill: true }, context).catch(() => undefined);
 		}
