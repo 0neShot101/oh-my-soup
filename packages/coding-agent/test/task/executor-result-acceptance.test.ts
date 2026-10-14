@@ -5,9 +5,12 @@
  * and on an autonomous IRC wake turn.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import { resetRegisteredArtifactDirsForTests } from "@oh-my-pi/pi-coding-agent/internal-urls/registry-helpers";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import type { LoadExtensionsResult } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
@@ -24,7 +27,9 @@ import {
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { WaitTool } from "@oh-my-pi/pi-coding-agent/tools/wait";
+import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { TempDir } from "@oh-my-pi/pi-utils";
 
 const AGENT_ID = "accepted-result";
 
@@ -355,6 +360,85 @@ describe("runSubprocess result acceptance", () => {
 			expect(delivered[1]).toContain("broadcast-ok");
 		} finally {
 			await manager.dispose({ timeoutMs: 1000 });
+		}
+	});
+
+	it("reads the latest message-result completion after an IRC wake instead of the first result", async () => {
+		const tempDir = TempDir.createSync("@omp-latest-agent-result-");
+		const artifactsDir = tempDir.path();
+		const harness = createHarness();
+		harness.session.sessionManager.getArtifactsDir = () => artifactsDir;
+		registerRunning(harness.session);
+		attachIrcWakeTurnMonitor(harness.session, {
+			id: AGENT_ID,
+			agent: baseAgent,
+			structured: false,
+			artifactsDir,
+		});
+		const observer = harness.wakeObserver();
+		if (!observer) throw new Error("wake-turn observer was not registered");
+		const reader = new ReadTool({
+			cwd: artifactsDir,
+			hasUI: false,
+			getArtifactsDir: () => artifactsDir,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			settings: Settings.isolated(),
+		});
+
+		try {
+			// A completed first run left a structured payload on disk.
+			await Bun.write(path.join(artifactsDir, `${AGENT_ID}.md`), '{"reports":[{"verdict":"round-1"}]}');
+			await Bun.write(path.join(artifactsDir, `${AGENT_ID}.json`), '{"reports":[{"verdict":"round-1"}]}');
+			const finish = observer([
+				{
+					role: "custom",
+					customType: "irc:incoming",
+					content: "review the revised patch",
+					display: false,
+					attribution: "agent",
+					timestamp: Date.now(),
+				} as unknown as AgentMessage,
+			]);
+			harness.emitAssistantText('{"reports":[{"verdict":"round-2"}]}');
+			await finish?.(undefined);
+			AgentRegistry.global().setStatus(AGENT_ID, "idle");
+
+			const resolved = await InternalUrlRouter.instance().resolve(`agent://${AGENT_ID}`);
+			expect(resolved.content).toBe('{"reports":[{"verdict":"round-2"}]}');
+			const read = await reader.execute("latest-result", { path: `agent://${AGENT_ID}` });
+			expect(read.content).toEqual(
+				expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining("round-2") })]),
+			);
+			expect(JSON.stringify(read.content)).not.toContain("round-1");
+			// The previous structured sidecar must not shadow the new message result.
+			const extracted = await InternalUrlRouter.instance().resolve(`agent://${AGENT_ID}/reports/0/verdict`);
+			expect(extracted.content).toBe("round-2");
+		} finally {
+			InternalUrlRouter.resetForTests();
+			resetRegisteredArtifactDirsForTests();
+			tempDir.removeSync();
+		}
+	});
+
+	it("preserves the completed structured result when a wake answers without yielding", async () => {
+		const tempDir = TempDir.createSync("@omp-structured-agent-result-");
+		const artifactsDir = tempDir.path();
+		const harness = createHarness();
+		harness.session.sessionManager.getArtifactsDir = () => artifactsDir;
+		registerRunning(harness.session);
+		attachIrcWakeTurnMonitor(harness.session, { id: AGENT_ID, agent: baseAgent, artifactsDir });
+		const observer = harness.wakeObserver();
+		if (!observer) throw new Error("wake-turn observer was not registered");
+
+		try {
+			await Bun.write(path.join(artifactsDir, `${AGENT_ID}.md`), "accepted structured result");
+			const finish = observer([]);
+			harness.emitAssistantText("acknowledged");
+			await finish?.(undefined);
+			expect(await Bun.file(path.join(artifactsDir, `${AGENT_ID}.md`)).text()).toBe("accepted structured result");
+		} finally {
+			tempDir.removeSync();
 		}
 	});
 
