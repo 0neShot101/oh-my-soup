@@ -1121,7 +1121,8 @@ export interface AnthropicOptions extends StreamOptions {
 	 * header is auto-attached; the response parser then honors mid-stream
 	 * `fallback` content blocks and `usage.iterations` for served-model
 	 * promotion and per-attempt pricing. Opt-in ONLY — leaving this
-	 * undefined preserves the pre-fallback behavior on every code path.
+	 * undefined sends neither and keeps both off; a `fallback` block in the
+	 * response (a gateway opted in) is still persisted as a replay boundary.
 	 */
 	fallbacks?: FallbackParam[];
 }
@@ -2972,15 +2973,15 @@ const streamAnthropicOnce = (
 							}
 							if (!firstTokenTime) firstTokenTime = performance.now();
 							if (event.content_block.type === "fallback") {
-								// Fallback boundary is only meaningful when the request
-								// opted into the beta chain — silently drop otherwise so
-								// unopted-in sessions never see the block persisted or
-								// influence downstream converters.
+								// The boundary between the primary's output and the
+								// fallback model's. Persist it even when this request did
+								// not opt into the beta chain: a gateway can opt in on the
+								// client's behalf, and without the marker the replay
+								// converter cannot tell the two models' signed reasoning
+								// apart (see `collapseFallbackSegments`).
 								const fallback = parseAnthropicFallbackWireBlock(event.content_block);
-								if (!serverSideFallback || !fallback) {
-									if (!fallback) {
-										reportAnthropicEnvelopeAnomaly("fallback content_block missing model refs");
-									}
+								if (!fallback) {
+									reportAnthropicEnvelopeAnomaly("fallback content_block missing model refs");
 									openBlocks.set(event.index, { contentIndex: -1, kind: "ignored" });
 									continue;
 								}
@@ -2994,8 +2995,9 @@ const streamAnthropicOnce = (
 								// classifier block on the primary was retried on the
 								// fallback model. Adopt the served id immediately so
 								// pricing decisions downstream (final usage.iterations may
-								// arrive before/after) see the right model.
-								output.model = fallback.to.model;
+								// arrive before/after) see the right model. Served-model
+								// promotion and per-iteration pricing stay opt-in.
+								if (serverSideFallback) output.model = fallback.to.model;
 								continue;
 							}
 							if (event.content_block.type === "text") {
@@ -5614,13 +5616,45 @@ function toWellFormedDeep(value: unknown): unknown {
 }
 
 /**
+ * Collapse a server-side-fallback turn for a request that cannot carry the
+ * `fallback` boundary marker: drop the markers and keep reasoning from one
+ * model only — the last segment that has any. Each model signed its reasoning
+ * against the turn's original prefix; replayed back-to-back without the
+ * marker, Anthropic validates them as one chain and rejects the latest turn
+ * with "`thinking` or `redacted_thinking` blocks in the latest assistant
+ * message cannot be modified". A turn whose reasoning sits in one segment
+ * keeps all of it.
+ */
+function collapseFallbackSegments(content: AssistantMessage["content"]): AssistantMessage["content"] {
+	let segments = 0;
+	let reasoningSegment = 0;
+	for (const block of content) {
+		if (block.type === "fallback") segments++;
+		else if (block.type === "thinking" || block.type === "redactedThinking") reasoningSegment = segments;
+	}
+	if (segments === 0) return content;
+	const collapsed: AssistantMessage["content"] = [];
+	let segment = 0;
+	for (const block of content) {
+		if (block.type === "fallback") {
+			segment++;
+			continue;
+		}
+		if ((block.type === "thinking" || block.type === "redactedThinking") && segment !== reasoningSegment) continue;
+		collapsed.push(block);
+	}
+	return collapsed;
+}
+
+/**
  * Serialize omp {@link Message}s to Anthropic wire messages.
  *
  * `opts.serverSideFallbackEnabled` — when the CURRENT request itself
- * opts into the server-side-fallback beta chain. Only then may a persisted
- * `fallback` content block from a prior turn be replayed on the wire;
- * otherwise the block is dropped to avoid a 400 on non-fallback requests
- * that don't send the beta.
+ * opts into the server-side-fallback beta chain. Only then, and only on the
+ * official endpoint, may a persisted `fallback` content block from a prior
+ * turn be replayed on the wire; otherwise the block is dropped to avoid a 400
+ * on requests that don't send the beta, and its turn keeps one model's
+ * reasoning (see {@link collapseFallbackSegments}).
  *
  * `opts.replayCompaction` — replay a user-role compaction summary that
  * carries an {@link AnthropicCompactionPayload} from this provider as a
@@ -5789,7 +5823,14 @@ export function convertAnthropicMessages(
 			params.push(param);
 		} else if (msg.role === "assistant") {
 			const blocks: ContentBlockParam[] = [];
-			const hasSignedThinking = msg.content.some(
+			// The fallback boundary replays ONLY when both sides are aligned: the
+			// current request opted into the beta chain, and the target is
+			// official Anthropic (the only endpoint that accepts the block).
+			const content =
+				opts?.serverSideFallbackEnabled && model.compat.officialEndpoint
+					? msg.content
+					: collapseFallbackSegments(msg.content);
+			const hasSignedThinking = content.some(
 				block =>
 					block.type === "thinking" && !!block.thinkingSignature && block.thinkingSignature.trim().length > 0,
 			);
@@ -5807,7 +5848,7 @@ export function convertAnthropicMessages(
 				blocks.push(compactionBlockParam(msg.providerPayload));
 			}
 
-			for (const block of msg.content) {
+			for (const block of content) {
 				if (block.type === "text") {
 					if (block.text.trim().length === 0) continue;
 					blocks.push({
@@ -5868,13 +5909,7 @@ export function convertAnthropicMessages(
 				} else if (block.type === "anthropicServerTool") {
 					blocks.push(block.block);
 				} else if (block.type === "fallback") {
-					// Replay ONLY when both sides are aligned: the current
-					// request opted into the beta chain, and the target is
-					// official Anthropic (the only endpoint that accepts the
-					// block on the wire). `transformMessages` already drops
-					// the block for cross-provider / non-official replays, so
-					// this is defense-in-depth for direct convert calls.
-					if (!opts?.serverSideFallbackEnabled || !model.compat.officialEndpoint) continue;
+					// Present only when this request can carry it (see `content`).
 					blocks.push({
 						type: "fallback",
 						from: block.from,

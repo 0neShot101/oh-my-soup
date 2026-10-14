@@ -8,11 +8,12 @@
  *   • Opt-in path — request carries `fallbacks`; response promotes the served
  *     model, persists the fallback content block, and prices the turn per the
  *     cookbook (cache-read for the served attempt's input).
- *   • Opt-out path — a stray `fallback` content block or `usage.iterations`
- *     leave the message untouched: `output.model` stays the requested id, no
- *     fallback block is persisted, cost uses the requested model.
+ *   • Opt-out path — a `fallback` content block is still persisted as the
+ *     replay boundary, but `output.model` stays the requested id and
+ *     `usage.iterations` are ignored: cost uses the requested model.
  *   • `convertAnthropicMessages` replays a persisted `fallback` block only when
- *     the current request also opts in AND the target is official Anthropic.
+ *     the current request also opts in AND the target is official Anthropic;
+ *     otherwise it drops the marker and keeps one model's reasoning.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { convertAnthropicMessages, streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
@@ -200,7 +201,7 @@ describe("anthropic server-side fallback opt-in", () => {
 		expect(result.usage.cost.cacheRead).toBeCloseTo(0.000012, 10);
 	});
 
-	it("stays inert when opted out: fallback content_block is dropped, model stays requested id", async () => {
+	it("persists the boundary when opted out, without promoting the model or pricing per iteration", async () => {
 		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(
 			() => createMockRequest(createFallbackServedEvents("continued", "claude-opus-4-8")) as never,
 		);
@@ -212,9 +213,11 @@ describe("anthropic server-side fallback opt-in", () => {
 		const result = await s.result();
 
 		expect(result.model).toBe(fableModel.id);
-		// The fallback content_block is dropped; only the continuation text
-		// survives.
-		expect(JSON.parse(JSON.stringify(result.content))).toEqual([{ type: "text", text: "continued" }]);
+		// The boundary survives for replay; the served model is not adopted.
+		expect(JSON.parse(JSON.stringify(result.content))).toEqual([
+			{ type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" } },
+			{ type: "text", text: "continued" },
+		]);
 		// Without opt-in, usage.iterations is ignored and cost uses the
 		// request model at normal input rates. Top-level `input_tokens: 12`
 		// bills at Fable's $10/M input = $0.00012 (i.e. NOT the fallback
@@ -273,13 +276,15 @@ describe("anthropic fallback content-block replay policy", () => {
 	// UNLESS the current request also opts into the beta chain AND the target
 	// is official Anthropic.
 
-	function priorFallbackAssistant(): AssistantMessage {
+	function priorFallbackAssistant(
+		content: AssistantMessage["content"] = [
+			{ type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" } },
+			{ type: "text", text: "continued" },
+		],
+	): AssistantMessage {
 		return {
 			role: "assistant",
-			content: [
-				{ type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" } },
-				{ type: "text", text: "continued" },
-			],
+			content,
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude-opus-4-8",
@@ -327,6 +332,34 @@ describe("anthropic fallback content-block replay policy", () => {
 			{ serverSideFallbackEnabled: true },
 		);
 		expect(params[0]?.content).toEqual([{ type: "text", text: "continued" }]);
+	});
+
+	it("keeps one model's reasoning when the marker cannot go on the wire", () => {
+		// Each model signed its reasoning against the turn's original prefix.
+		// Back to back without the marker, Anthropic rejects the latest turn:
+		// "`thinking` or `redacted_thinking` blocks in the latest assistant
+		// message cannot be modified".
+		const history = [
+			priorFallbackAssistant([
+				{ type: "thinking", thinking: "primary plan", thinkingSignature: "sig-primary" },
+				{ type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" } },
+				{ type: "thinking", thinking: "fallback plan", thinkingSignature: "sig-fallback" },
+				{ type: "text", text: "continued" },
+			]),
+			{ role: "user", content: "next", timestamp: 0 } as const,
+		];
+		const optedIn = convertAnthropicMessages(history, fableModel, false, { serverSideFallbackEnabled: true });
+		expect(optedIn[0]?.content).toEqual([
+			{ type: "thinking", thinking: "primary plan", signature: "sig-primary" },
+			{ type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" } },
+			{ type: "thinking", thinking: "fallback plan", signature: "sig-fallback" },
+			{ type: "text", text: "continued" },
+		]);
+		const optedOut = convertAnthropicMessages(history, fableModel, false);
+		expect(optedOut[0]?.content).toEqual([
+			{ type: "thinking", thinking: "fallback plan", signature: "sig-fallback" },
+			{ type: "text", text: "continued" },
+		]);
 	});
 });
 
@@ -579,5 +612,91 @@ describe("anthropic assistant replay block ordering (tool_use partition)", () =>
 		}
 		// Convergence: partition (a) and fast path (b) yield identical final content.
 		expect(a[poisonedIdx]).toEqual(b[poisonedIdx]);
+	});
+});
+
+describe("mid-turn fallback a gateway opted into", () => {
+	// A gateway can opt into the beta chain on the client's behalf, so a request
+	// without `fallbacks` still streams a `fallback` boundary between two models'
+	// signed reasoning. Live repro (claude-opus-5-5 → claude-opus-4-8 after a
+	// refusal): replaying both reasoning blocks without the marker failed every
+	// later request with "`thinking` or `redacted_thinking` blocks in the latest
+	// assistant message cannot be modified".
+	const gatewayModel: Model<"anthropic-messages"> = buildModel({
+		id: "claude-opus-5-5",
+		name: "Claude Opus 5.5 (gateway)",
+		api: "anthropic-messages",
+		provider: "gateway",
+		baseUrl: "https://llm-gateway.example.com/v1",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 1_000_000,
+		maxTokens: 128_000,
+	});
+	const usage = { input_tokens: 10, output_tokens: 8, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+	const fallbackTurnEvents: MockAnthropicEvent[] = [
+		{ type: "message_start", message: { id: "msg_turn", model: "claude-opus-5-5", usage } },
+		{ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+		{ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "primary plan" } },
+		{ type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig-primary" } },
+		{ type: "content_block_stop", index: 0 },
+		{
+			type: "content_block_start",
+			index: 1,
+			content_block: {
+				type: "fallback",
+				from: { model: "claude-opus-5-5" },
+				to: { model: "claude-opus-4-8" },
+				trigger: { type: "refusal", category: "cyber" },
+			},
+		},
+		{ type: "content_block_stop", index: 1 },
+		{ type: "content_block_start", index: 2, content_block: { type: "thinking", thinking: "" } },
+		{ type: "content_block_delta", index: 2, delta: { type: "thinking_delta", thinking: "fallback plan" } },
+		{ type: "content_block_delta", index: 2, delta: { type: "signature_delta", signature: "sig-fallback" } },
+		{ type: "content_block_stop", index: 2 },
+		{ type: "content_block_start", index: 3, content_block: { type: "text", text: "" } },
+		{ type: "content_block_delta", index: 3, delta: { type: "text_delta", text: "Reading it." } },
+		{ type: "content_block_stop", index: 3 },
+		{
+			type: "content_block_start",
+			index: 4,
+			content_block: { type: "tool_use", id: "toolu_read", name: "read", input: {} },
+		},
+		{ type: "content_block_delta", index: 4, delta: { type: "input_json_delta", partial_json: '{"path":"a.txt"}' } },
+		{ type: "content_block_stop", index: 4 },
+		{ type: "message_delta", delta: { stop_reason: "tool_use" }, usage },
+		{ type: "message_stop" },
+	];
+	const nextTurnEvents: MockAnthropicEvent[] = [
+		{ type: "message_start", message: { id: "msg_next", usage } },
+		{ type: "message_delta", delta: { stop_reason: "end_turn" }, usage },
+		{ type: "message_stop" },
+	];
+
+	it("replays only the fallback model's reasoning on the next request", async () => {
+		const requests: Array<{ messages: MessageParam[] }> = [];
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation((params: unknown) => {
+			requests.push(params as { messages: MessageParam[] });
+			return createMockRequest(requests.length === 1 ? fallbackTurnEvents : nextTurnEvents) as never;
+		});
+		const options = { apiKey: "sk-gateway", thinkingEnabled: true };
+		const user = { role: "user", content: "Read a.txt", timestamp: 0 } as const;
+		const turn = await streamAnthropic(gatewayModel, { messages: [user] }, options).result();
+		const result: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: "toolu_read",
+			toolName: "read",
+			content: [{ type: "text", text: "contents" }],
+			isError: false,
+			timestamp: 0,
+		};
+		await streamAnthropic(gatewayModel, { messages: [user, turn, result] }, options).result();
+
+		const replayed = requests[1]?.messages.find(message => message.role === "assistant")?.content;
+		if (!Array.isArray(replayed)) throw new Error("expected the fallback turn on the wire");
+		expect(replayed.map(block => block.type)).toEqual(["thinking", "text", "tool_use"]);
+		expect(replayed[0]).toMatchObject({ thinking: "fallback plan", signature: "sig-fallback" });
 	});
 });
