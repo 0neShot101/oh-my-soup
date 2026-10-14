@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `listWorkspace` can now fail on unreadable directories with `failOnDirectoryError`, so callers can distinguish failed scans from complete listings ([#15769](https://github.com/can1357/oh-my-pi/issues/15769)).
+
 ## [18.11.0] - 2026-10-14
 
 ### Fixed

@@ -55,26 +55,19 @@ export async function buildDirectoryTree(cwd: string, options: BuildDirectoryTre
 	const perDirLimit = options.perDirLimit === undefined ? null : options.perDirLimit;
 	const rootLimit = options.rootLimit === undefined ? perDirLimit : options.rootLimit;
 
-	let entries: readonly GlobMatch[];
-	let nativeTruncated: boolean;
-	try {
-		const result = await listWorkspace({
-			path: rootPath,
-			maxDepth,
-			hidden: true,
-			gitignore: false,
-		});
-		entries = result.entries;
-		nativeTruncated = result.truncated;
-	} catch {
-		return emptyTree(rootPath);
-	}
+	const result = await listWorkspace({
+		path: rootPath,
+		maxDepth,
+		hidden: true,
+		gitignore: false,
+		failOnDirectoryError: true,
+	});
 
-	return assembleTree(rootPath, entries, {
+	return assembleTree(rootPath, result.entries, {
 		perDirLimit,
 		rootLimit,
 		lineCap: options.lineCap === undefined ? null : options.lineCap,
-		nativeTruncated,
+		nativeTruncated: result.truncated,
 		// Tool output (read tool directory listing), not a cached prefix —
 		// the human-friendly relative "ago" is appropriate here.
 		ageMode: "relative",

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Directory reads now report unreadable roots, inaccessible children, and scan failures instead of showing an empty or incomplete listing ([#15769](https://github.com/can1357/oh-my-pi/issues/15769)).
+
 ## [18.11.0] - 2026-10-14
 
 ### Added

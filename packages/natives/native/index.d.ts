@@ -2459,6 +2459,8 @@ export interface ListWorkspaceOptions {
    * to find them. Default: false.
    */
   collectAgentsMd?: boolean
+  /** Fail instead of skipping unreadable directories. Default: false for startup discovery. */
+  failOnDirectoryError?: boolean
   /** Timeout in milliseconds for the operation. */
   timeoutMs?: number
   /** Abort signal for cancelling the operation. */

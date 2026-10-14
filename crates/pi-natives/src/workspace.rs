@@ -50,21 +50,24 @@ static EXCLUDED_DIR_SET: LazyLock<HashSet<&'static str>> =
 #[napi(object)]
 pub struct ListWorkspaceOptions<'env> {
 	/// Directory to scan.
-	pub path:              String,
+	pub path:                    String,
 	/// Maximum depth for returned tree entries. Root children are depth 1.
-	pub max_depth:         u32,
+	pub max_depth:               u32,
 	/// Include hidden files and directories. Default: false.
-	pub hidden:            Option<bool>,
+	pub hidden:                  Option<bool>,
 	/// Respect .gitignore files. Default: true.
-	pub gitignore:         Option<bool>,
+	pub gitignore:               Option<bool>,
 	/// Also surface AGENTS.md files in directories at depth 1..=4, even when
 	/// gitignore would otherwise hide the file. Walks deeper than `maxDepth`
 	/// to find them. Default: false.
-	pub collect_agents_md: Option<bool>,
+	pub collect_agents_md:       Option<bool>,
+	/// Fail instead of skipping unreadable directories. Default: false for
+	/// startup discovery.
+	pub fail_on_directory_error: Option<bool>,
 	/// Timeout in milliseconds for the operation.
-	pub timeout_ms:        Option<u32>,
+	pub timeout_ms:              Option<u32>,
 	/// Abort signal for cancelling the operation.
-	pub signal:            Option<Unknown<'env>>,
+	pub signal:                  Option<Unknown<'env>>,
 }
 
 /// Result payload returned by a workspace scan.
@@ -80,12 +83,13 @@ pub struct ListWorkspaceResult {
 }
 
 struct WorkspaceConfig {
-	root:              PathBuf,
-	max_depth:         usize,
-	walk_max_depth:    usize,
-	include_hidden:    bool,
-	use_gitignore:     bool,
-	collect_agents_md: bool,
+	root:                    PathBuf,
+	max_depth:               usize,
+	walk_max_depth:          usize,
+	include_hidden:          bool,
+	use_gitignore:           bool,
+	collect_agents_md:       bool,
+	fail_on_directory_error: bool,
 }
 
 #[derive(Default)]
@@ -129,7 +133,11 @@ fn build_workspace_walk_request(config: &WorkspaceConfig) -> pi_walker::WalkRequ
 		.order(pi_walker::WalkOrder::Path)
 		.emit_root(false)
 		.depth(1, config.walk_max_depth)
-		.directory_errors(pi_walker::DirectoryErrorMode::SkipSkippable)
+		.directory_errors(if config.fail_on_directory_error {
+			pi_walker::DirectoryErrorMode::Visit
+		} else {
+			pi_walker::DirectoryErrorMode::SkipSkippable
+		})
 		.cache(false)
 }
 
@@ -220,7 +228,13 @@ fn run_list_workspace(
 				}
 				Ok(pi_walker::WalkDecision::Include)
 			},
-			|_| Ok(pi_walker::WalkDecision::Include),
+			|error| {
+				Err(Error::from_reason(format!(
+					"Native directory scan failed for {}: {}",
+					error.path.display(),
+					error.error
+				)))
+			},
 		)
 		.map_err(iofs::map_walker_error)?;
 
@@ -244,6 +258,7 @@ pub fn list_workspace(options: ListWorkspaceOptions<'_>) -> task::Promise<ListWo
 		hidden,
 		gitignore,
 		collect_agents_md,
+		fail_on_directory_error,
 		timeout_ms,
 		signal,
 	} = options;
@@ -265,6 +280,7 @@ pub fn list_workspace(options: ListWorkspaceOptions<'_>) -> task::Promise<ListWo
 				include_hidden: hidden.unwrap_or(false),
 				use_gitignore: gitignore.unwrap_or(true),
 				collect_agents_md,
+				fail_on_directory_error: fail_on_directory_error.unwrap_or(false),
 			},
 			ct,
 		)
