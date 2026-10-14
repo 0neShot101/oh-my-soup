@@ -23,10 +23,15 @@ import type { Skill } from "./skills";
 const MAX_PREVIEW_CHARS = 100;
 const MAX_COMPRESSED_CHARS = 160;
 const MAX_COMPRESSED_WORDS = 12;
+// Leave ample room for other cleanup under postmortem's 10-second deadline.
+const STORE_CLOSE_GRACE_MS = 4_000;
 const inFlight = new Map<string, Promise<void>>();
 const compressionSlots = new Semaphore(4);
 
 export type SkillDescriptionCompressor = (name: string, description: string, request: string) => Promise<string>;
+
+/** A completed request exhausted its output budget, rather than failing in transit. */
+class SkillDescriptionLengthError extends Error {}
 
 /**
  * Resolve the configured fast role for each background request, without using the foreground model.
@@ -72,6 +77,9 @@ export function createSkillDescriptionCompressor(
 			},
 			{ telemetry: getTelemetry?.(), oneshotKind: "skill_description" },
 		);
+		if (response.stopReason === "length") {
+			throw new SkillDescriptionLengthError("Model stopped: length");
+		}
 		if (response.stopReason !== "stop") {
 			throw new Error(`Model stopped: ${response.stopReason} ${response.errorMessage ?? ""}`);
 		}
@@ -108,6 +116,11 @@ function validCompression(text: string): string | null {
 	if (!line || /[\r\n]/.test(line) || line.length > MAX_COMPRESSED_CHARS) return null;
 	if (line.split(/\s+/).length > MAX_COMPRESSED_WORDS) return null;
 	return line;
+}
+
+function pendingForStore(store: SkillDescriptionStore): Promise<void>[] {
+	const prefix = `${store.path}:`;
+	return [...inFlight].filter(([key]) => key.startsWith(prefix)).map(([, pending]) => pending);
 }
 
 let shared: SkillDescriptionStore | null | undefined;
@@ -197,13 +210,15 @@ function adoptLegacyDatabase(legacyPath: string, dbPath: string): void {
 	}
 }
 
-/** SQLite store of model-compressed skill descriptions, keyed by prompt + skill content hash. */
+/** SQLite store of compressed descriptions or fallback previews, keyed by prompt + skill content hash. */
 export class SkillDescriptionStore {
 	/** Database file; scopes in-flight compression jobs shared by catalogs on this store. */
 	readonly path: string;
 	readonly #db: Database;
 	readonly #select: Statement<{ description: string }, [string]>;
 	readonly #upsert: Statement<unknown, [string, string]>;
+	#closeCall?: Promise<void>;
+	#closed = false;
 
 	private constructor(dbPath: string, db: Database) {
 		this.path = dbPath;
@@ -243,7 +258,45 @@ export class SkillDescriptionStore {
 		this.#upsert.run(key, description);
 	}
 
-	close(): void {
+	get isClosing(): boolean {
+		return this.#closeCall !== undefined;
+	}
+
+	get isClosed(): boolean {
+		return this.#closed;
+	}
+
+	/** Stop admitting requests and give already-running compressions a bounded chance to persist. */
+	close(): Promise<void> {
+		if (!this.#closeCall) {
+			const pending = pendingForStore(this);
+			if (pending.length === 0) {
+				this.#closeDatabase();
+				this.#closeCall = Promise.resolve();
+			} else {
+				this.#closeCall = this.#closeAfterPending(pending);
+			}
+		}
+		return this.#closeCall;
+	}
+
+	async #closeAfterPending(pending: Promise<void>[]): Promise<void> {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([
+				Promise.all(pending),
+				new Promise<void>(resolve => {
+					timer = setTimeout(resolve, STORE_CLOSE_GRACE_MS);
+				}),
+			]);
+		} finally {
+			clearTimeout(timer);
+			this.#closeDatabase();
+		}
+	}
+
+	#closeDatabase(): void {
+		this.#closed = true;
 		// Unfinalized statements keep the file handle open on Windows.
 		this.#select.finalize();
 		this.#upsert.finalize();
@@ -251,7 +304,7 @@ export class SkillDescriptionStore {
 	}
 
 	[Symbol.dispose](): void {
-		this.close();
+		void this.close();
 	}
 }
 
@@ -300,12 +353,11 @@ export class SkillDescriptionCatalog {
 	/** Await background writes already scheduled by this catalog (for shutdown or tests). */
 	async waitForPending(): Promise<void> {
 		if (!this.#store) return;
-		const prefix = `${this.#store.path}:`;
-		await Promise.all([...inFlight].filter(([key]) => key.startsWith(prefix)).map(([, pending]) => pending));
+		await Promise.all(pendingForStore(this.#store));
 	}
 
 	#schedule(store: SkillDescriptionStore, key: string, skill: Skill): void {
-		if (!this.#compress) return;
+		if (!this.#compress || store.isClosing) return;
 		const job = `${store.path}:${key}`;
 		if (inFlight.has(job)) return;
 		// Defer model work until the current synchronous prompt rendering has finished.
@@ -313,13 +365,22 @@ export class SkillDescriptionCatalog {
 			try {
 				await compressionSlots.acquire();
 				try {
+					if (store.isClosing) return;
 					const request = prompt.render(compressDescriptionPrompt, {
 						name: skill.name,
 						description: skill.description,
 					});
-					const result = validCompression(await this.#compress!(skill.name, skill.description, request));
-					if (!result) throw new Error("Invalid single-line skill description (max 12 words, 160 chars)");
-					store.put(key, result);
+					let result: string | null = null;
+					try {
+						result = validCompression(await this.#compress!(skill.name, skill.description, request));
+					} catch (error) {
+						if (!(error instanceof SkillDescriptionLengthError)) throw error;
+					}
+					if (result === null) {
+						// Skill or prompt edits change the key, so an unusable answer retries naturally then.
+						logger.warn("Skill description compression unusable; caching the preview", { skill: skill.name });
+					}
+					if (!store.isClosed) store.put(key, result ?? previewSkillDescription(skill.description));
 				} finally {
 					compressionSlots.release();
 				}
