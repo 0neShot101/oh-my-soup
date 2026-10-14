@@ -33,9 +33,8 @@ import {
 	piTimeout,
 	shellTimeoutSeconds,
 } from "@oh-my-pi/pi-ai/providers/cursor-pi-args";
-import { readImageMetadata, sanitizeText } from "@oh-my-pi/pi-utils";
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { cursorMcpPrefersReplaceEdit, normalizeCursorReplaceArgs } from "./cursor-bridge-tools";
-import { InternalUrlRouter } from "./internal-urls";
 import type { MCPResourceReadResult } from "./mcp/types";
 import { resolveApproval, resolveApprovalFromContext } from "./tools/approval";
 import {
@@ -48,9 +47,6 @@ import type { TodoPhase, TodoStatus } from "@oh-my-pi/pi-tui/tools/todo";
 
 /** Phase used for Cursor-owned tasks with no local phase grouping. */
 const CURSOR_TODO_PHASE = "Tasks";
-
-/** Header bytes that decide whether a file is an image; every format `parseImageMetadata` knows is identified within 12. */
-const IMAGE_SNIFF_BYTES = 16;
 
 /**
  * A tool instance the bridge can run, matching the erased shape the session's
@@ -245,6 +241,11 @@ function createToolResultMessage(
  * The agent loop never sees these calls, so the bridge installs its own
  * `addAdditionalContext` sink and attaches what the call reported to the
  * result message; `Agent` injects it after the buffered Cursor results.
+ *
+ * Also sets `rawImages`: both read frames compose `:raw` for gutter-free text,
+ * and `read` must still answer an image file with the image. The flag rides on
+ * the caller's context only, because a missing context is what lets the
+ * extension wrapper fall back to the session's approval settings.
  */
 function createBridgeToolContext(options: CursorExecBridgeOptions): {
 	context: AgentToolContext | undefined;
@@ -255,6 +256,7 @@ function createBridgeToolContext(options: CursorExecBridgeOptions): {
 	return {
 		context: base && {
 			...base,
+			rawImages: true,
 			addAdditionalContext: (value: string) => {
 				reported.push(value);
 			},
@@ -453,31 +455,6 @@ async function resolveCursorReadOffset(
 	}
 }
 
-/**
- * The `read` path a Cursor read frame executes.
- *
- * Both read frames carry `:raw` (see `cursorRawReadPath`) so text arrives
- * without hashline gutters. `:raw` also disables `read`'s image routing, so an
- * image came back as its bytes decoded to UTF-8 text — tens of kilobytes of
- * mojibake that Cursor then rejects on every following request (#15630). An
- * image is therefore read bare: `read` returns the image block, and line
- * selectors mean nothing for it anyway. Unreadable paths keep the composed
- * selector so `read` reports the failure itself.
- */
-async function cursorReadToolPath(options: CursorExecBridgeOptions, readPath: string): Promise<string> {
-	// Routed URLs are not filesystem paths; let ReadTool resolve their selectors.
-	if (InternalUrlRouter.instance().canResolve(readPath)) return readPath;
-	const cwd = options.getCwd?.() ?? options.cwd;
-	try {
-		const { path: filePath, sel } = await splitPathAndSelPreferringLiteral(readPath, cwd);
-		if (sel === undefined) return readPath;
-		const image = await readImageMetadata(await resolveReadPathAsync(filePath, cwd), IMAGE_SNIFF_BYTES);
-		return image ? filePath : readPath;
-	} catch {
-		return readPath;
-	}
-}
-
 function decodeToolCallId(toolCallId?: string): string {
 	return toolCallId && toolCallId.length > 0 ? toolCallId : randomUUID();
 }
@@ -564,9 +541,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		if (composed === null) {
 			return createToolResultMessage(toolCallId, "read", { content: [{ type: "text", text: "" }] }, false);
 		}
-		return await executeTool(this.options, "read", toolCallId, {
-			path: await cursorReadToolPath(this.options, composed),
-		});
+		return await executeTool(this.options, "read", toolCallId, { path: composed });
 	}
 
 	async ls(args: Parameters<NonNullable<ICursorExecHandlers["ls"]>>[0]) {
@@ -772,9 +747,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		if (composed === null) {
 			return createToolResultMessage(call.toolCallId, "read", { content: [{ type: "text", text: "" }] }, false);
 		}
-		return await executeTool(this.options, "read", call.toolCallId, {
-			path: await cursorReadToolPath(this.options, cursorRawReadPath(composed)),
-		});
+		return await executeTool(this.options, "read", call.toolCallId, { path: cursorRawReadPath(composed) });
 	}
 
 	async piBash(call: Parameters<NonNullable<ICursorExecHandlers["piBash"]>>[0]) {

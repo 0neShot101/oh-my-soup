@@ -2198,6 +2198,7 @@ describe("CursorExecHandlers Pi frame translation", () => {
 		const handlers = new CursorExecHandlers({
 			cwd,
 			tools: new Map<string, Tool>([["read", new ReadTool(createTestSession(cwd))]]),
+			getToolContext: () => yoloToolContext(),
 		});
 		const results: ToolResultMessage[] = [];
 		const written: Buffer[] = [];
@@ -2243,6 +2244,10 @@ describe("CursorExecHandlers Pi frame translation", () => {
 		if (legacy.case !== "success" || legacy.value.output.case !== "content") throw new Error("expected read content");
 
 		const modern = await handlers.piRead({ toolCallId: "pi-image-read", args: { path: "shot.png" } } as never);
+		const ranged = await handlers.piRead({
+			toolCallId: "pi-image-range",
+			args: { path: "shot.png", offset: 1, limit: 20 },
+		} as never);
 		const piFrame = buildPiReadResult(modern);
 		if (piFrame.result.case !== "success") throw new Error("expected pi_read success");
 
@@ -2250,7 +2255,7 @@ describe("CursorExecHandlers Pi frame translation", () => {
 			expect(output).not.toContain("IHDR");
 			expect(output).toMatch(/\[image\/\w+ image\]/);
 		}
-		for (const result of [results[0], modern]) {
+		for (const result of [results[0], modern, ranged]) {
 			expect(result?.isError).toBe(false);
 			expect(result?.content.some(part => part.type === "image")).toBe(true);
 		}
