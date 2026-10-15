@@ -4,6 +4,7 @@ import { Image, type ImageBudget } from "../components/image";
 import { ImageProtocol, TERMINAL } from "../terminal-capabilities";
 import {
 	type DefaultTextStyle,
+	holdPartialTableRow,
 	Markdown,
 	type MarkdownTheme,
 	rewriteMarkdownLinkDestinations,
@@ -891,7 +892,9 @@ export class AssistantMessageComponent extends Container {
 				const streaming = live && index === tailIndex;
 				if (content.type === "text" && canonicalizeMessage(content.text)) {
 					answered = true;
-					const source = content.text.trim();
+					// A native terminal sizes table columns by every row it gets: send a growing row once
+					// its line ends. Hold before trimming, which would drop the newline ending a finished row.
+					const source = (streaming ? holdPartialTableRow(content.text) : content.text).trim();
 					// The terminal renders this source itself and would resolve a relative
 					// link against its own idea of the cwd: hand it the session-resolved
 					// targets (resolved once the segment closes, so never while streaming).
