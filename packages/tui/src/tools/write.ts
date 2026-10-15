@@ -7,6 +7,7 @@ import { getLanguageFromPath } from "../lang-from-path";
 import { createHighlightStream, highlightCode, type Theme } from "../theme/theme";
 import { fileHyperlink, renderStatusLine } from "../render";
 import { framedToolCard } from "../render/tool-card";
+import { wrapPrefixedLine } from "../render/hanging-wrap";
 import {
 	cachedRenderedString,
 	createRenderedStringCache,
@@ -165,7 +166,7 @@ function describeFigure(figure: ToolFigure | undefined): NativeNode | undefined 
 /** The written content as numbered code, keyed so it keeps its node as the figure above it comes and goes. */
 function describeSource(rawPath: string, content: string): NativeNode {
 	const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
-	return { ...code(content, { lang, numbers: true }), key: "source" };
+	return { ...code(content, { lang, numbers: true, wrap: true }), key: "source" };
 }
 
 function countLines(text: string): number {
@@ -386,6 +387,15 @@ function formatStreamingContent(
 	// expanded preview could never scroll-append mid-stream.
 	const spinner = spinnerFrame !== undefined ? `${formatStatusIcon("running", uiTheme, spinnerFrame)} ` : "";
 	return `${bodyText}${spinner}${uiTheme.fg("dim", `… (streaming)`)}`;
+}
+
+function wrapWritePreviewRows(lines: string[], width: number): string[] {
+	return lines.flatMap(line => {
+		const gutter = /^(\x1b\[[0-9;]*m)( *\d+ )(\x1b\[[0-9;]*m)(.*)$/.exec(line);
+		if (!gutter) return line;
+		const prefix = `${gutter[1]}${gutter[2]}${gutter[3]}`;
+		return wrapPrefixedLine(prefix, " ".repeat(Bun.stringWidth(gutter[2]!)), gutter[4] ?? "", width);
+	});
 }
 
 function renderContentPreview(
@@ -637,40 +647,49 @@ export const writeToolRenderer = {
 		// back to the normalizing stringify.
 		const content = typeof args.content === "string" ? args.content : normalizeDisplayText(args.content);
 		const streamingCache = createRenderedStringCache();
-		return framedToolCard(uiTheme, () => {
-			const body = content
-				? formatStreamingContent(
-						content,
-						Boolean(options?.expanded),
-						lang,
-						uiTheme,
-						options?.spinnerFrame,
-						streamingCache,
-						// `options` is the ToolExecutionComponent's persistent
-						// render-state object — a stable identity across reveal ticks
-						// that keys the incremental preview state. `argsComplete`
-						// flushes the trailing line through the highlighter once.
-						options,
-						options?.argsComplete,
-					)
-				: "";
-			const bodyLines = body ? body.split("\n") : [];
-			while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
-			return {
-				header,
-				sections: bodyLines.length > 0 ? [{ content: bodyLines }] : [],
-				phase: "pending",
-				borderColor: "borderMuted",
-			};
-		});
+		return framedToolCard(
+			uiTheme,
+			({ contentWidth }) => {
+				const body = content
+					? formatStreamingContent(
+							content,
+							Boolean(options?.expanded),
+							lang,
+							uiTheme,
+							options?.spinnerFrame,
+							streamingCache,
+							// `options` is the ToolExecutionComponent's persistent
+							// render-state object — a stable identity across reveal ticks
+							// that keys the incremental preview state. `argsComplete`
+							// flushes the trailing line through the highlighter once.
+							options,
+							options?.argsComplete,
+						)
+					: "";
+				const bodyLines = body ? body.split("\n") : [];
+				while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
+				return {
+					header,
+					sections: bodyLines.length > 0 ? [{ content: wrapWritePreviewRows(bodyLines, contentWidth) }] : [],
+					phase: "pending",
+					borderColor: "borderMuted",
+				};
+			},
+			// The highlighted body in `streamingCache` does not depend on width, and re-highlighting every committed
+			// card on each resize replay costs seconds; only the incremental highlighter state goes.
+			{ onReleaseRenderCaches: () => delete options?.[writeStreamingPreviewStateKey] },
+		);
 	},
 
 	renderResult(
 		result: WriteResult,
-		options: RenderResultOptions & { renderContext?: WriteRenderContext },
+		options: RenderResultOptions & WriteStreamingPreviewStateCarrier & { renderContext?: WriteRenderContext },
 		uiTheme: Theme,
 		args?: WriteRenderArgs,
 	): Component {
+		// Write merges call and result, so this builder runs once per display rebuild after the result arrives and the
+		// call card never renders again: its incremental highlighter state is dead from here on.
+		delete options[writeStreamingPreviewStateKey];
 		const cardPath =
 			typeof args?.path === "string" ? args.path : typeof args?.file_path === "string" ? args.file_path : "";
 		const routed = writeUrlCard(cardPath, result.details);
@@ -732,36 +751,41 @@ export const writeToolRenderer = {
 		const diagnostics = result.details?.diagnostics;
 
 		const previewCache = createRenderedStringCache();
-		return framedToolCard(uiTheme, () => {
-			const { expanded } = options;
-			let body = renderContentPreview(fileContent, expanded, lang, uiTheme, previewCache);
-			if (isPartial && progressText) {
-				const safeProgressText = truncateToWidth(
-					replaceTabs(progressText),
-					TRUNCATE_LENGTHS.LINE,
-					Ellipsis.Unicode,
-				);
-				body = `${uiTheme.fg("muted", safeProgressText)}${body ? `\n${body}` : ""}`;
-			}
-			if (!isPartial && diagnostics) {
-				const diagText = formatDiagnostics(diagnostics, expanded, uiTheme, fp =>
-					uiTheme.getLangIcon(getLanguageFromPath(fp)),
-				);
-				if (diagText.trim()) {
-					const diagLines = diagText.split("\n");
-					const firstNonEmpty = diagLines.findIndex(line => line.trim());
-					if (firstNonEmpty >= 0) body += `\n${diagLines.slice(firstNonEmpty).join("\n")}`;
+		return framedToolCard(
+			uiTheme,
+			({ contentWidth }) => {
+				const { expanded } = options;
+				let body = renderContentPreview(fileContent, expanded, lang, uiTheme, previewCache);
+				if (isPartial && progressText) {
+					const safeProgressText = truncateToWidth(
+						replaceTabs(progressText),
+						TRUNCATE_LENGTHS.LINE,
+						Ellipsis.Unicode,
+					);
+					body = `${uiTheme.fg("muted", safeProgressText)}${body ? `\n${body}` : ""}`;
 				}
-			}
-			const bodyLines = body.split("\n");
-			while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
-			return {
-				header,
-				sections: bodyLines.length > 0 ? [{ content: bodyLines }] : [],
-				phase: isPartial ? "partial" : "success",
-				borderColor: "borderMuted",
-			};
-		});
+				if (!isPartial && diagnostics) {
+					const diagText = formatDiagnostics(diagnostics, expanded, uiTheme, fp =>
+						uiTheme.getLangIcon(getLanguageFromPath(fp)),
+					);
+					if (diagText.trim()) {
+						const diagLines = diagText.split("\n");
+						const firstNonEmpty = diagLines.findIndex(line => line.trim());
+						if (firstNonEmpty >= 0) body += `\n${diagLines.slice(firstNonEmpty).join("\n")}`;
+					}
+				}
+				const bodyLines = body.split("\n");
+				while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
+				return {
+					header,
+					sections: bodyLines.length > 0 ? [{ content: wrapWritePreviewRows(bodyLines, contentWidth) }] : [],
+					phase: isPartial ? "partial" : "success",
+					borderColor: "borderMuted",
+				};
+			},
+			// No release hook: `previewCache` holds the width-independent highlighted preview, which resize replay
+			// would otherwise re-highlight for every committed card.
+		);
 	},
 	describeCall(
 		args: WriteRenderArgs,
