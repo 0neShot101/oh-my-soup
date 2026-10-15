@@ -149,11 +149,18 @@ describe("extendRecallWithLegacyBanks edge cases", () => {
 
 	// An unfinalized prepared statement makes close() fail silently (the probe swallows
 	// it), leaving the bank database open until GC; on Windows that blocks deleting it.
-	it.skipIf(!fsSync.existsSync("/proc/self/fd"))("closes every legacy bank database it probes", () => {
+	const canObserveOpenFiles = process.platform === "win32" || fsSync.existsSync("/proc/self/fd");
+	it.skipIf(!canObserveOpenFiles)("closes every legacy bank database it probes", () => {
 		const cwd = path.join(rootDir.path(), "projects", "fd-leak");
 		createBankFixture("fd-leak-A", [{ cwd }]);
 		createBankFixture("fd-leak-B", [{ cwd }]);
-		extendRecallWithLegacyBanks(["active"], mainDbPath, cwd);
+		expect(extendRecallWithLegacyBanks(["active"], mainDbPath, cwd)).toEqual(["active", "fd-leak-A", "fd-leak-B"]);
+		const probed = ["fd-leak-A", "fd-leak-B"].map(bank => path.join(banksDir, bank, "mnemopi.db"));
+		if (process.platform === "win32") {
+			// Windows refuses to delete a file another handle still holds open.
+			for (const dbPath of probed) fsSync.rmSync(dbPath);
+			return;
+		}
 		const open = fsSync
 			.readdirSync("/proc/self/fd")
 			.map(fd => {
@@ -163,7 +170,7 @@ describe("extendRecallWithLegacyBanks edge cases", () => {
 					return "";
 				}
 			})
-			.filter(target => target.startsWith(banksDir) && target.endsWith("mnemopi.db"));
+			.filter(target => probed.includes(target));
 		expect(open).toEqual([]);
 	});
 });
