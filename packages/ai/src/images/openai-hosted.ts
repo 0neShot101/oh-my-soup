@@ -7,7 +7,7 @@ import {
 	OPENAI_HEADERS,
 	URL_PATHS,
 } from "@oh-my-pi/pi-catalog/wire/codex";
-import { readSseJson, USER_AGENT } from "@oh-my-pi/pi-utils";
+import { prompt, readSseJson, USER_AGENT } from "@oh-my-pi/pi-utils";
 import { withAuth } from "../auth-retry";
 import * as AIError from "../error";
 import { applySessionHeader } from "../providers/inference-headers";
@@ -20,6 +20,7 @@ import {
 	toDataUrl,
 	usageFromWire,
 } from "./shared";
+import codexFormatDirective from "./codex-format-directive.md" with { type: "text" };
 import type { GeneratedImage, ImageGenerationOptions, ImageGenerationRequest, ImageGenerationResult } from "./types";
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -155,8 +156,13 @@ function withCodexFormatDirective(request: ImageGenerationRequest): string {
 	const width = Number(match[1]);
 	const height = Number(match[2]);
 	const shape = width === height ? "square" : width > height ? "landscape" : "portrait";
-	const measure = dimensions ? `${width}x${height} pixels` : `${width}:${height} aspect ratio`;
-	return `${request.prompt}\n\nOutput format: ${shape} image, ${measure}.`;
+	return prompt.render(codexFormatDirective, {
+		prompt: request.prompt,
+		shape,
+		width,
+		height,
+		pixels: dimensions !== undefined,
+	});
 }
 
 export async function generateHostedImage(
@@ -170,8 +176,8 @@ export async function generateHostedImage(
 		throw new AIError.ValidationError(`Hosted image carrier API ${carrier.api} is unsupported`);
 	}
 	const stream = carrier.api === "openai-codex-responses";
-	const prompt = stream ? withCodexFormatDirective(request) : request.prompt;
-	const content: Array<Record<string, unknown>> = [{ type: "input_text", text: prompt }];
+	const inputText = stream ? withCodexFormatDirective(request) : request.prompt;
+	const content: Array<Record<string, unknown>> = [{ type: "input_text", text: inputText }];
 	for (const image of request.inputImages ?? []) {
 		content.push({ type: "input_image", detail: "auto", image_url: toDataUrl(image) });
 	}
