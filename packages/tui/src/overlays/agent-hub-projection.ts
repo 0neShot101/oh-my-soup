@@ -207,6 +207,13 @@ export function hubFallbackStatsSession<TRecord extends AgentRecordLike>(
 	return session && typeof session.getSessionStats === "function" ? session : undefined;
 }
 
+/**
+ * Shared row policy for the Agent Hub and the status-line cost total.
+ * Non-cost metrics come from live progress, then persisted history, then the retained
+ * snapshot (parked rows only), then the live session. Cost always overlays the cumulative
+ * direct-session bill: live, then `history.directCost` (written at park), then retained.
+ * Persisted `history.metrics.cost` is a leaf-scoped snapshot, so it never wins.
+ */
 function projectRowMetrics<TMetrics extends AgentCostSnapshot>(
 	ref: AgentRecordLike,
 	observed: ObservableSession | undefined,
@@ -221,11 +228,7 @@ function projectRowMetrics<TMetrics extends AgentCostSnapshot>(
 	return metrics && cost !== undefined ? { ...metrics, cost } : metrics;
 }
 
-/**
- * Preserve progress/history for non-cost metrics, overlaying cumulative direct-session cost.
- * Persisted `history.metrics.cost` is a leaf-scoped snapshot, so it never overrides live
- * progress; only the cumulative direct-cost sources do.
- */
+/** Full Agent Hub row metrics; see {@link projectRowMetrics} for source precedence. */
 export function hubRowMetrics<TRecord extends AgentRecordLike>(
 	ref: TRecord,
 	observed: ObservableSession | undefined,
