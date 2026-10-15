@@ -7463,19 +7463,19 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * Unlike `/jobs` it adds nothing to the transcript, so a click mid-turn
 	 * leaves no deferred command preview above the editor.
 	 *
-	 * It lists the viewed session's jobs, as the pill counts them. A focused
+	 * It lists the viewed session's jobs and its subagents' as a tree. A focused
 	 * subagent view opens it without the Cancel action: the view only watches
 	 * that agent, as `/jobs kill` stays main-session only.
 	 */
 	showJobsSheet(): void {
 		if (this.#jobsSheetHandle) return;
 		const session = this.viewSession;
-		if (!session.getAsyncJobSnapshot()) {
+		if (!session.getAsyncJobTree()) {
 			this.showWarning("Async background jobs are unavailable in this session.");
 			return;
 		}
 		const sheet = new JobsSheet({
-			load: () => session.getAsyncJobSnapshot({ recentLimit: 5 }) ?? { running: [], recent: [] },
+			load: () => session.getAsyncJobTree() ?? { running: [], recent: [] },
 			inspect: id => session.inspectAsyncJob(id),
 			cancel: this.focusedAgentId
 				? undefined
