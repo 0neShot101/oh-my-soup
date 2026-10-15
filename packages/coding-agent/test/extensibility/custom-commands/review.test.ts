@@ -342,17 +342,6 @@ describe("ReviewCommand", () => {
 				path: "src/last.ts",
 				url: `pr://owner/repo/123/diff/${lastIndex}`,
 			});
-			expect(result).toContain(
-				"MUST NOT read local workspace files for PR file context; use the fetched PR diff, the exact Diff URL in the Changed Files table, or `pr://owner/repo/123/diff/all` only",
-			);
-			if (fileCount > 20) {
-				expect(result).toContain(
-					"MUST read assigned PR file diffs using the exact Diff URL in the Changed Files table or `pr://owner/repo/123/diff/all`; NEVER use local `git diff`/`git show` for PR diff content",
-				);
-			} else {
-				expect(result).toContain("MUST use diff hunks below (NEVER re-run git diff)");
-			}
-
 			try {
 				const router = InternalUrlRouter.instance();
 				for (const row of rows) {

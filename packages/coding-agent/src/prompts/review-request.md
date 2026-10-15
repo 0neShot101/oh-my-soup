@@ -22,7 +22,6 @@ Index is the file's 1-based position in the full PR diff; excluded files leave g
 _No files to review._
 {{/if}}
 
-
 {{#if excluded.length}}
 ### Excluded Files ({{len excluded}})
 
