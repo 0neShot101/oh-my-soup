@@ -686,6 +686,43 @@ describe("Anthropic request fingerprint alignment", () => {
 		}).result();
 		expect(proxy.beta()).not.toContain("extended-cache-ttl-2025-04-11");
 	});
+	it("uses 1h cache TTL on Vertex without sending the extended-cache beta", async () => {
+		let capturedHeader = "";
+		let capturedBody: {
+			system?: Array<{ cache_control?: { type?: string; ttl?: string } }>;
+			messages?: Array<{ content?: Array<{ cache_control?: { type?: string; ttl?: string } }> | string }>;
+			anthropic_beta?: string[];
+		} = {};
+		const fetchMock = (async (_input: string | URL | Request, init?: RequestInit) => {
+			capturedHeader = new Headers(init?.headers).get("anthropic-beta") ?? "";
+			capturedBody = JSON.parse(String(init?.body ?? "{}"));
+			return new Response(
+				JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "captured" } }),
+				{ status: 400, headers: { "Content-Type": "application/json" } },
+			);
+		}) as typeof fetch;
+		const vertexModel: Model<"anthropic-messages"> = buildModel({
+			...ANTHROPIC_MODEL_SPEC,
+			id: "claude-opus-5-5@default",
+			name: "Claude Opus 5.5 via Vertex",
+			provider: "google-vertex",
+			baseUrl:
+				"https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/publishers/anthropic/models/claude-opus-5-5@default:streamRawPredict",
+		});
+
+		await streamAnthropic(
+			vertexModel,
+			{ systemPrompt: ["Stay concise."], messages: [{ role: "user", content: "Hi", timestamp: Date.now() }] },
+			{ apiKey: "vertex-adc", cacheRetention: "long", fetch: fetchMock },
+		).result();
+
+		const breakpoint = capturedBody.messages
+			?.flatMap(message => (Array.isArray(message.content) ? message.content : []))
+			.find(block => block.cache_control)?.cache_control;
+		expect(breakpoint).toEqual({ type: "ephemeral", ttl: "1h" });
+		expect(capturedHeader).not.toContain("extended-cache-ttl-2025-04-11");
+		expect(capturedBody.anthropic_beta ?? []).not.toContain("extended-cache-ttl-2025-04-11");
+	});
 
 	it("retries once with the version a claude_code_version_too_old rejection requires", async () => {
 		const tooOld = JSON.stringify({
