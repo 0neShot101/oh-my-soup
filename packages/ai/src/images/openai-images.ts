@@ -27,7 +27,8 @@ export async function generateOpenAIImage(
 	const size = resolveOpenAIImageSize(request.aspectRatio, request.imageSize);
 	const count = request.count ?? 1;
 	const wireModelId = model.requestModelId ?? model.id;
-	const isGptImage = model.identity.family === "gpt-image";
+	// Hand-built image models (SDK callers, tests) may skip `buildModel` and carry no identity.
+	const isGptImage = model.identity?.family === "gpt-image";
 	const isXAI = model.provider === "xai" || model.provider === "xai-oauth";
 	const generationBody = isXAI
 		? {

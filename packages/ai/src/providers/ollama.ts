@@ -254,8 +254,8 @@ function convertMessages(model: Model<"ollama-chat">, context: Context): OllamaM
 	const messages: Message[] = [...systemMessages, ...context.messages];
 	// Model rows cached or bundled before Ollama had a compat record carry none;
 	// stripping is the replay-safe answer for them until they are rebuilt.
-	const stripThinkingHistory =
-		(model.compat as Partial<typeof model.compat> | undefined)?.stripThinkingHistory ?? true;
+	const compat: Partial<typeof model.compat> | undefined = model.compat;
+	const stripThinkingHistory = compat?.stripThinkingHistory ?? true;
 	const supportsImages = model.input.includes("image");
 	const converted = transformMessages(messages, model).map((msg, index) => {
 		// Real `systemPrompt` entries (always emitted first) stay on Ollama's
