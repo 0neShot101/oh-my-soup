@@ -119,7 +119,8 @@ const MAX_PATHS_PER_ENTRY: usize = 8;
 struct Binding {
 	path:    Box<str>,
 	current: bool,
-	/// [`Cache::clock`] when this became the path's current version.
+	/// Lookup ticket ([`Cache::clock`] at lookup) of the read that made this
+	/// the path's current version, so concurrent parses order by request.
 	since:   u64,
 }
 
@@ -199,7 +200,7 @@ impl Cache {
 			let tree = entry.tree.clone();
 			self.hits += 1;
 			if let Some(path) = path {
-				self.advance_path(*key, path);
+				self.advance_path(*key, path, stamp);
 			}
 			return Lookup::Hit(tree);
 		}
@@ -221,8 +222,8 @@ impl Cache {
 		Lookup::Miss(base)
 	}
 
-	/// Whether `path` got a newer current version after the lookup that
-	/// issued `ticket`.
+	/// Whether `path` got its current version from a lookup newer than the
+	/// one that issued `ticket`.
 	fn path_moved_since(&self, lang: SupportLang, path: &str, ticket: u64) -> bool {
 		self.entries.iter().any(|(key, entry)| {
 			key.lang == lang
@@ -249,7 +250,7 @@ impl Cache {
 		// The path now holds `code`; its version before last is dead whether
 		// or not this tree fits.
 		if let Some(path) = path {
-			self.advance_path(key, path);
+			self.advance_path(key, path, ticket);
 		}
 		if let Some(entry) = self.entries.get_mut(&key)
 			&& &*entry.source == code
@@ -277,23 +278,26 @@ impl Cache {
 			source: Arc::from(code),
 			tree: tree.clone(),
 			bindings: path.map_or_else(Vec::new, |path| {
-				vec![Binding { path: Box::from(path), current: true, since: self.clock }]
+				vec![Binding { path: Box::from(path), current: true, since: ticket }]
 			}),
 			cost,
 			stamp: self.clock,
 		});
 	}
 
-	/// Make `key` (resident or not) `path`'s current version: the old current
-	/// version becomes the previous one, and the old previous version loses
-	/// its binding — and its slot, unless another path still binds it.
-	fn advance_path(&mut self, key: Key, path: &str) {
-		if self
-			.entries
-			.get(&key)
-			.and_then(|entry| entry.binding(path))
-			.is_some_and(|binding| binding.current)
+	/// Make `key` (resident or not) `path`'s current version as of lookup
+	/// `since`: the old current version becomes the previous one, and the old
+	/// previous version loses its binding — and its slot, unless another path
+	/// still binds it.
+	fn advance_path(&mut self, key: Key, path: &str, since: u64) {
+		if let Some(binding) = self.entries.get_mut(&key).and_then(|entry| {
+			entry
+				.bindings
+				.iter_mut()
+				.find(|binding| &*binding.path == path)
+		}) && binding.current
 		{
+			binding.since = binding.since.max(since);
 			return;
 		}
 		let mut released: Option<Key> = None;
@@ -321,7 +325,6 @@ impl Cache {
 			self.retained_bytes -= dead.cost;
 			self.superseded += 1;
 		}
-		let since = self.clock;
 		let Some(entry) = self.entries.get_mut(&key) else {
 			return;
 		};
@@ -554,11 +557,18 @@ mod tests {
 			.expect("parse produces a tree")
 	}
 
+	/// The ticket a fresh lookup would issue, as `parse_cached` captures it.
+	fn lookup_ticket(cache: &mut Cache) -> u64 {
+		cache.clock += 1;
+		cache.clock
+	}
+
 	/// Parse `code` as TypeScript and store it under `path`; returns its cost.
 	fn put(cache: &mut Cache, code: &str, path: Option<&str>) -> usize {
 		let tree = tree_of(code, TS);
 		let cost = tree_cost(code, &tree, TS);
-		cache.insert(key_for(code, TS), code, &tree, path, cost, cache.clock);
+		let ticket = lookup_ticket(cache);
+		cache.insert(key_for(code, TS), code, &tree, path, cost, ticket);
 		cost
 	}
 
@@ -820,7 +830,7 @@ mod tests {
 		let tree = tree_of(shared, TS);
 		let cost = tree_cost(shared, &tree, TS);
 		// Both lookups miss before either parse lands.
-		let ticket = cache.clock;
+		let ticket = lookup_ticket(&mut cache);
 		cache.insert(key_for(shared, TS), shared, &tree, Some("a.ts"), cost, ticket);
 		cache.insert(key_for(shared, TS), shared, &tree_of(shared, TS), Some("b.ts"), cost, ticket);
 
@@ -835,7 +845,7 @@ mod tests {
 		let (old, new) = ("const a = 1;\n", "const a = 2;\n");
 		// A background parse of `old` looks up, then a newer read of `new` lands
 		// before it finishes.
-		let stale_ticket = cache.clock;
+		let stale_ticket = lookup_ticket(&mut cache);
 		put(&mut cache, new, Some("a.ts"));
 		let tree = tree_of(old, TS);
 		let cost = tree_cost(old, &tree, TS);
@@ -844,6 +854,22 @@ mod tests {
 		assert_eq!(reparse_base(&mut cache, "a.ts").as_deref(), Some(new), "`new` stays current");
 		assert!(hit(&mut cache, old).is_some(), "the stale tree is still cached");
 		assert!(hit(&mut cache, new).is_some());
+	}
+
+	#[test]
+	fn concurrent_parses_of_one_path_order_by_request_not_completion() {
+		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
+		let (first, second) = ("const a = 1;\n", "const a = 2;\n");
+		let first_ticket = lookup_ticket(&mut cache);
+		let second_ticket = lookup_ticket(&mut cache);
+		// The earlier request also finishes first.
+		for (code, ticket) in [(first, first_ticket), (second, second_ticket)] {
+			let tree = tree_of(code, TS);
+			let cost = tree_cost(code, &tree, TS);
+			cache.insert(key_for(code, TS), code, &tree, Some("a.ts"), cost, ticket);
+		}
+
+		assert_eq!(reparse_base(&mut cache, "a.ts").as_deref(), Some(second));
 	}
 
 	#[test]
