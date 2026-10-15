@@ -398,12 +398,35 @@ Average Latency: 1,240 ms
 			}
 		});
 
+		it("measures a streaming table's finished last row even without its trailing newline", () => {
+			// Assistant text reaches Markdown trimmed, so a finished row is told apart by its closing `|`.
+			const text =
+				"| PR | Title |\n| --- | --- |\n| #1 | short |\n| #2 | a considerably longer finished title here |";
+			const streaming = new Markdown(text, 0, 0, defaultMarkdownTheme);
+			streaming.transientRenderCache = true;
+			clearRenderCache();
+			const rendered = streaming.render(80);
+			clearRenderCache();
+			expect(rendered).toEqual(new Markdown(text, 0, 0, defaultMarkdownTheme).render(80));
+		});
+
 		describe("holdPartialTableRow", () => {
 			const table = "Intro.\n\n| PR | Title |\n| --- | :-: |\n| #1 | one |";
 
-			it("drops only the growing row of a table, so a native terminal never measures it", () => {
-				expect(holdPartialTableRow(`${table}\n| [#2](https://exa`)).toBe(table);
-				expect(holdPartialTableRow(`> | a |\n> | - |\n> | b`)).toBe("> | a |\n> | - |");
+			it("drops only the growing row of a table, keeping the newline before it", () => {
+				expect(holdPartialTableRow(`${table}\n| [#2](https://exa`)).toBe(`${table}\n`);
+				expect(holdPartialTableRow(`${table}\n`)).toBe(`${table}\n`);
+			});
+
+			it("only grows while a blockquote table streams, whatever the chunk boundaries", () => {
+				const stream = "> | h |\n> | - |\n> | a |\n> | b |\n> after";
+				let sent = "";
+				for (let length = 1; length <= stream.length; length++) {
+					const next = holdPartialTableRow(stream.slice(0, length));
+					expect(next.startsWith(sent)).toBe(true);
+					sent = next;
+				}
+				expect(sent).toBe(stream);
 			});
 
 			it("keeps pipe lines that are not a table: no delimiter row yet, or inside an open code fence", () => {
@@ -419,7 +442,7 @@ Average Latency: 1,240 ms
 
 			it("holds a table row again once the fence before it closes", () => {
 				expect(holdPartialTableRow(`\`\`\`ts\nx\n\`\`\`\n\n${table}\n| #2`)).toBe(
-					`\`\`\`ts\nx\n\`\`\`\n\n${table}`,
+					`\`\`\`ts\nx\n\`\`\`\n\n${table}\n`,
 				);
 			});
 		});

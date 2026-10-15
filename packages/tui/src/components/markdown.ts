@@ -66,8 +66,12 @@ export function streamingMarkdownSource(text: string): string {
 
 // A pipe-table line: optional indent / blockquote markers, then a leading `|`.
 const TABLE_LINE_AT = /[ \t>]*\|/y;
+// An unterminated last line that may be a table row: a pipe line, or only indentation / `>` markers so far.
+const GROWING_ROW_AT = /[ \t>]*(?:\|[^\n]*)?$/y;
 // A whole GFM delimiter row (`| --- | :-: |`) with a leading pipe.
 const DELIMITER_ROW_AT = /[ \t>]*\|[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*\r?(?=\n|$)/y;
+const UNESCAPED_PIPE = /(?<!\\)\|/g;
+const UNESCAPED_PIPE_END = /(?<!\\)\|$/;
 // A fence line (opener or closer), possibly inside a list item or blockquote.
 const FENCE_LINE = /^[ \t>]*(`{3,}|~{3,})([^\n]*)$/gm;
 
@@ -95,16 +99,18 @@ function fenceOpenAt(text: string, end: number): boolean {
 /**
  * Streaming `md` source for a native terminal, minus a still-growing table row:
  * the unterminated last line when it continues a pipe table (a run of `|` lines
- * holding a header and its delimiter row) outside any open code fence. The
- * terminal sizes columns by every row it gets, so a half-streamed row (an
+ * holding a header and its delimiter row) outside any open code fence. A last
+ * line of only indentation or `>` markers counts too, since a row may follow.
+ * The terminal sizes columns by every row it gets, so a half-streamed row (an
  * unclosed link shows its whole URL) would rewrap the table each frame, and TSP
- * cannot ask it to skip one. The result is a prefix of `text` and of every
- * append to it, so streaming stays append-only. Apply to the full source only:
- * a second pass would drop the completed row above.
+ * cannot ask it to skip one. The result keeps the newline before the held line,
+ * so it is a prefix of `text` and of the result for every append to it:
+ * streaming stays append-only. Pass untrimmed source: trimming first drops the
+ * newline that marks the last row finished, so that row would be held too.
  */
 export function holdPartialTableRow(text: string): string {
 	const lastBreak = text.lastIndexOf("\n");
-	if (lastBreak <= 0 || !matchesAt(TABLE_LINE_AT, text, lastBreak + 1)) return text;
+	if (lastBreak <= 0 || !matchesAt(GROWING_ROW_AT, text, lastBreak + 1)) return text;
 	// Walk up the run of pipe lines above the growing row to a delimiter row with a header above it.
 	let lineStart = text.lastIndexOf("\n", lastBreak - 1) + 1;
 	let table = false;
@@ -119,7 +125,20 @@ export function holdPartialTableRow(text: string): string {
 		lineStart = above;
 	}
 	if (!table || fenceOpenAt(text, lineStart)) return text;
-	return text.slice(0, lastBreak);
+	return text.slice(0, lastBreak + 1);
+}
+
+/**
+ * Index of the cell a streaming table's last row is still writing: the cell
+ * after its last `|`, or -1 when a newline or trailing `|` closed the row.
+ * `raw` is the table token's source; GFM splits cells on every unescaped pipe.
+ */
+function growingTableCell(raw: string): number {
+	if (raw.endsWith("\n")) return -1;
+	const line = raw.slice(raw.lastIndexOf("\n") + 1).trimEnd();
+	if (UNESCAPED_PIPE_END.test(line)) return -1;
+	const pipes = line.match(UNESCAPED_PIPE)?.length ?? 0;
+	return matchesAt(TABLE_LINE_AT, line, 0) ? pipes - 1 : pipes;
 }
 
 /** The longest suffix of `text` a future append could still complete into a
@@ -4112,19 +4131,21 @@ export class Markdown implements Component {
 			naturalWidths[i] = Math.max(...headerLineWidths, 0);
 			minWordWidths[i] = Math.max(1, this.#getLongestWordWidth(headerText, maxUnbrokenWordWidth));
 		}
-		// While streaming, an unterminated last row is still growing (an unclosed
+		// While streaming, the last row's open cell is still growing (an unclosed
 		// link even shows its whole URL): sizing columns by it would rewrap every
-		// row above it on each frame. Lay it out in the finished rows' widths
-		// instead; it joins the measurement once its line ends. The first data
-		// row has no finished rows to borrow from, so it still counts.
-		const growingRow =
-			this.#transientRenderCache &&
-			!this.#renderingStablePrefix &&
-			token.rows.length > 1 &&
-			!token.raw.endsWith("\n");
-		const measuredRows = growingRow ? token.rows.slice(0, -1) : token.rows;
-		for (const row of measuredRows) {
+		// row above it on each frame. Lay that cell out in the measured widths
+		// instead; it counts once a `|` or newline closes it. The row's closed
+		// cells are final and count already. The first data row has no finished
+		// rows to borrow from, so it counts whole.
+		const openCell =
+			this.#transientRenderCache && !this.#renderingStablePrefix && token.rows.length > 1
+				? growingTableCell(token.raw)
+				: -1;
+		const lastRow = token.rows.length - 1;
+		for (let rowIndex = 0; rowIndex <= lastRow; rowIndex++) {
+			const row = token.rows[rowIndex];
 			for (let i = 0; i < row.length; i++) {
+				if (rowIndex === lastRow && i === openCell) continue;
 				const cellText = this.#renderInlineTokens(row[i].tokens || [], styleContext);
 				const cellLineWidths = this.#terminalLineWidths(cellText);
 				naturalWidths[i] = Math.max(naturalWidths[i] || 0, ...cellLineWidths);

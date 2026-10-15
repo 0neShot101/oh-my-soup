@@ -127,9 +127,16 @@ describe("native transcript", () => {
 		const md = h.find(node => node.k === "md");
 		expect(md?.p).toMatchObject({ text: table, stream: true });
 
+		// A finished last row is sent once its newline arrives and stays sent while a tool call streams after it.
 		const before = h.frames.length;
 		const row = "\n| [#2](https://example.com/pull/2) | b |";
-		component.updateContent(assistant([{ type: "text", text: `${table}${row}\n|` }]), { transient: true });
+		component.updateContent(
+			assistant([
+				{ type: "text", text: `${table}${row}\n` },
+				{ type: "toolCall", id: "call-1", name: "lookup_thing", arguments: {} },
+			]),
+			{ transient: true },
+		);
 		await h.render();
 		expect(opsSince(h, before)).toContainEqual(["text", md!.id, "append", row]);
 
