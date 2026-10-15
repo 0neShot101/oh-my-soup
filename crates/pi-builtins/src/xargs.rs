@@ -1261,23 +1261,22 @@ mod tests {
 	}
 
 	#[cfg(unix)]
-	#[test]
-	fn oversized_environment_rejects_command_without_panicking() {
+	#[tokio::test]
+	async fn oversized_environment_rejects_command_without_panicking() {
 		let arg_max = unsafe { libc::sysconf(libc::_SC_ARG_MAX) } as usize;
 		// These short strings fit on their own, but their envp pointers do not.
-		let env: HashMap<OsString, OsString> = (0..arg_max / 20)
-			.map(|i| (format!("XARGS_{i:08}").into(), OsString::new()))
-			.collect();
-		let mut limiters = LimiterCollection::new();
-		limiters.add(MaxCharsCommandSizeLimiter::new_system(&env));
+		let exports: String = (0..arg_max / 20).map(|i| format!(" XARGS_{i:08}=")).collect();
+		let (code, stdout, stderr) = crate::host::run_script(
+			&format!("export{exports}; xargs /bin/echo"),
+			"x\n",
+			&std::env::temp_dir(),
+		)
+		.await;
+		assert_eq!(code, 1, "{stderr}");
+		assert_eq!(stdout, "");
 		assert!(
-			CommandBuilderOptions::new(
-				ExecAction::Command(vec!["/bin/echo".into()]),
-				limiters,
-				None,
-			)
-			.is_err(),
-			"an environment that exhausts ARG_MAX must reject the base command"
+			stderr.contains("Base command and environment are too large"),
+			"an environment that exhausts ARG_MAX must reject the base command: {stderr}"
 		);
 	}
 

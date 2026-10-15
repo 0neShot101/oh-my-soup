@@ -335,15 +335,10 @@ function collectLineWindowFromBuffer(
 	maxLinesToCollect: number,
 	maxBytes: number,
 	selectedLineLimit: number,
-	includeTerminalNewline: boolean,
 ): ReadLineWindow {
 	const { bytes, rawSegments, endsWithNewline } = file;
-	// A trailing LF closes the last line rather than opening an empty one, except
-	// in raw mode where that terminal sentinel is addressable.
-	const totalFileLines =
-		endsWithNewline && !includeTerminalNewline && rawSegments.length > 1
-			? rawSegments.length - 1
-			: rawSegments.length;
+	// A trailing LF closes the last addressable line.
+	const totalFileLines = endsWithNewline && rawSegments.length > 1 ? rawSegments.length - 1 : rawSegments.length;
 	const window: ReadLineWindow = {
 		lines: [],
 		totalFileLines,
@@ -436,7 +431,6 @@ function sameSeekFileIdentity(identity: SeekFileIdentity, stat: SeekFileIdentity
 }
 
 interface StreamFileLinesOptions {
-	includeTerminalNewline?: boolean;
 	stopScanAfterCollect?: boolean;
 	/**
 	 * Start scanning at byte `byte`, which begins 0-indexed line `line` (`line <= startLine`).
@@ -455,7 +449,7 @@ async function streamLinesFromFile(
 	signal?: AbortSignal,
 	options: StreamFileLinesOptions = {},
 ): Promise<ReadLineWindow> {
-	const { includeTerminalNewline = false, stopScanAfterCollect = false, seek } = options;
+	const { stopScanAfterCollect = false, seek } = options;
 	const bufferChunk = Buffer.allocUnsafe(READ_CHUNK_SIZE);
 	const collectedLines: string[] = [];
 	let lineIndex = seek?.line ?? 0;
@@ -642,7 +636,7 @@ async function streamLinesFromFile(
 		}
 	}
 
-	if (reachedEof && (currentLineLength > 0 || !sawAnyByte || (endedWithNewline && includeTerminalNewline))) {
+	if (reachedEof && (currentLineLength > 0 || !sawAnyByte)) {
 		finalizeLine();
 	}
 
@@ -692,9 +686,8 @@ async function resolveFileTailSelector(
 	signal?: AbortSignal,
 ): Promise<ResolvedFileTail> {
 	if (parsed.kind !== "tail") return { sel: parsed };
-	const includeTerminalNewline = parsed.raw === true;
 	if (buffered) {
-		const totalLines = collectLineWindowFromBuffer(buffered, 0, 0, 0, 0, includeTerminalNewline).totalFileLines;
+		const totalLines = collectLineWindowFromBuffer(buffered, 0, 0, 0, 0).totalFileLines;
 		return { sel: resolveTailSelector(parsed, totalLines) };
 	}
 
@@ -729,11 +722,9 @@ async function resolveFileTailSelector(
 	}
 	// A write during the scan leaves offsets that the identity no longer vouches for.
 	if (position !== identity.size) identity = { ...identity, ino: -1 };
-	// Mirror the streamer's final-line rule: an empty file, an unterminated last
-	// line, or (raw mode) the empty segment after a terminal newline is a line.
-	const endsWithNewline = lastByte === LF_BYTE;
-	const hasFinalLine = position === 0 || !endsWithNewline || includeTerminalNewline;
-	const totalLines = newlines + (hasFinalLine ? 1 : 0);
+	// Mirror the streamer's final-line rule: an empty file or an unterminated
+	// last line contributes one line; a terminal newline closes the last line.
+	const totalLines = newlines + (position === 0 || lastByte !== LF_BYTE ? 1 : 0);
 	return {
 		sel: resolveTailSelector(parsed, totalLines),
 		seekTo: line =>
@@ -1446,7 +1437,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (!imageInput) {
 				throw new ToolError(
 					imageKind === "svg"
-						? "The ':img' selector only supports .svg and .svgz files."
+						? "The ':img' selector only rasterizes .svg and .svgz files. Read a raster image such as PNG or JPEG without ':img'."
 						: `Read image file [${mimeType}] failed: unsupported image format.`,
 				);
 			}
@@ -1554,23 +1545,28 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 			// The file is already in memory for everything within the snapshot byte
 			// cap, so slice ranges out of it instead of re-streaming per range. Raw
-			// mode cannot use the addressable lines (it keeps CR bytes and the
-			// terminal newline sentinel) but still slices the same buffer.
+			// mode keeps CR bytes, so it slices the original segments instead.
 			let collectedLines: string[];
 			let totalFileLines: number;
+			let endsAtTerminalNewline = false;
 			const maxBytesForRead = Math.max(DEFAULT_MAX_BYTES, maxLines * 512);
 			if (fullLines) {
 				totalFileLines = fullLines.length;
 				collectedLines = fullLines.slice(rangeStart, rangeStart + maxLines);
 			} else {
 				const window = buffered
-					? collectLineWindowFromBuffer(buffered, rangeStart, maxLines, maxBytesForRead, maxLines, rawSelector)
+					? collectLineWindowFromBuffer(buffered, rangeStart, maxLines, maxBytesForRead, maxLines)
 					: await streamLinesFromFile(absolutePath, rangeStart, maxLines, maxBytesForRead, maxLines, signal, {
-							includeTerminalNewline: rawSelector,
 							stopScanAfterCollect: fileSize > SNAPSHOT_MAX_BYTES,
 						});
 				totalFileLines = window.totalFileLines;
 				collectedLines = window.lines;
+				// An open raw range that reaches EOF keeps the file's terminal newline, as single-range reads do.
+				endsAtTerminalNewline =
+					range.endLine === undefined &&
+					window.reachedEof &&
+					window.hasTrailingNewline &&
+					rangeStart + collectedLines.length === totalFileLines;
 			}
 
 			if (rangeStart >= totalFileLines) {
@@ -1602,7 +1598,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					displayLineByNumber.set(range.startLine + i, displayLines[i] ?? "");
 				}
 				if (!fullLines || rawSelector) {
-					const blockText = displayLines.join("\n");
+					const blockText = displayLines.join("\n") + (rawSelector && endsAtTerminalNewline ? "\n" : "");
 					blocks.push(formatTextWithMode(blockText, range.startLine, shouldAddHashLines, shouldAddLineNumbers));
 				}
 			}
@@ -2349,7 +2345,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 								maxLinesToCollect,
 								maxBytesForRead,
 								selectedLineLimit,
-								rawSelector,
 							)
 						: await streamLinesFromFile(
 								absolutePath,
@@ -2359,7 +2354,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 								selectedLineLimit,
 								undefined, // plain-file read: deterministic and fast, never abort mid-read
 								{
-									includeTerminalNewline: rawSelector,
 									stopScanAfterCollect: fileSize > SNAPSHOT_MAX_BYTES,
 									seek: tailSeekTo?.(startLine),
 								},
@@ -2424,7 +2418,16 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					const bracketContextFullLines = rawSelector ? undefined : buffered?.addressableLines;
 					const displayedEndLine = startLineDisplay + Math.max(0, displayLines.length - 1);
 
-					const selectedContent = displayLines.join("\n");
+					let selectedContent = displayLines.join("\n");
+					if (
+						rawSelector &&
+						limit === undefined &&
+						reachedEof &&
+						hasTrailingNewline &&
+						startLine + displayLines.length === totalFileLines
+					) {
+						selectedContent += "\n";
+					}
 					const userLimitedLines = collectedLines.length;
 
 					const totalSelectedLines = totalFileLines - startLine;
@@ -2590,7 +2593,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 								maxBytesForRead,
 								`${selectorBase}:raw:${lineNumber}-${lineNumber}`,
 							)}`;
-						} else {
+						} else if (!rawSelector || limit === undefined || userLimitedLines < limit) {
 							outputText += `\n\n[More lines in file (${formatBytes(
 								fileSize,
 							)} total; not scanned to EOF). Use ${selectorBase}:${nextOffset} to continue]`;
@@ -2619,7 +2622,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 								maxBytes: maxBytesForRead,
 							},
 						};
-					} else if (startLine + userLimitedLines < totalFileLines) {
+					} else if (!rawSelector && startLine + userLimitedLines < totalFileLines) {
 						const nextOffset = startLine + userLimitedLines + 1;
 
 						outputText = formatBracketAwareText() ?? formatText(selectedContent, startLineDisplay);

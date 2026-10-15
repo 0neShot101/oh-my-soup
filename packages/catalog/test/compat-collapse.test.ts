@@ -1669,6 +1669,38 @@ describe("antigravity discovery collapsing", () => {
 		expect(models?.[0]?.baseUrl).toBe(ANTIGRAVITY_PRIMARY_ENDPOINT);
 	});
 
+	it("drops roster rows the backend marks disabled", async () => {
+		// Antigravity lists unservable models with `disabled: true`, a
+		// `MODEL_PLACEHOLDER_*` enum and `tagTitle: "Unavailable"` (e.g.
+		// `gemini-4-argon-disabled` on accounts without Argon); requesting one
+		// answers "Cloud Code Assist API error (404): Requested entity was not found."
+		const fetcher = Object.assign(
+			(input: string | URL | Request, _init?: RequestInit) =>
+				Promise.resolve(
+					String(input).includes(":fetchAvailableModels")
+						? Response.json({
+								models: {
+									"gemini-4-argon-disabled": {
+										displayName: "Gemini 4 Argon",
+										disabled: true,
+										tagTitle: "Unavailable",
+										model: "MODEL_PLACEHOLDER_M421",
+										supportsThinking: true,
+									},
+									"gemini-3.1-flash-lite": { displayName: "Gemini 3.1 Flash Lite", supportsThinking: true },
+								},
+							})
+						: new Response("version: 2.19.1\n"),
+				),
+			{ preconnect: fetch.preconnect },
+		);
+
+		const models = (await fetchAntigravityDiscoveryModels({ token: "t", fetcher }))?.models;
+
+		expect(models?.some(model => model.id.includes("argon"))).toBe(false);
+		expect(models?.some(model => model.id === "gemini-3.1-flash-lite")).toBe(true);
+	});
+
 	it("drops bundled rows the account roster does not serve, and keeps them when discovery fails", async () => {
 		const roster = {
 			models: {
