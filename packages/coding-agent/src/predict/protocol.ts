@@ -2,33 +2,33 @@
  * Cross-process contract for the machine-global text-prediction daemon.
  *
  * One daemon per agent directory runs under the `text-predict` global daemon
- * broker (`omp ps --global text-predict`) and serves ghost-text word
- * completion to every omp process over newline-delimited JSON on a native IPC
+ * broker (`oms ps --global text-predict`) and serves ghost-text word
+ * completion to every oms process over newline-delimited JSON on a native IPC
  * endpoint (`ipcEndpoint`). Each request carries a numeric `id` echoed by its
  * response; responses may arrive out of order.
  */
 import * as path from "node:path";
-import { ipcEndpoint, type PredictedWord } from "@oh-my-pi/pi-natives";
+import { ipcEndpoint, type PredictedWord } from "@oh-my-soup/pi-natives";
 export { TEXT_PREDICT_WORKER_ARG } from "../cli/worker-selectors";
 
 /** Global broker scope owning the daemon. */
 export const TEXT_PREDICT_BROKER_SCOPE = "text-predict";
 
 /** Environment key carrying the endpoint the daemon listens on. */
-export const TEXT_PREDICT_SOCKET_ENV = "OMP_TEXT_PREDICT_SOCKET";
+export const TEXT_PREDICT_SOCKET_ENV = "OMS_TEXT_PREDICT_SOCKET";
 
 /** Environment key carrying the agent directory whose history and state the daemon serves. */
-export const TEXT_PREDICT_AGENT_DIR_ENV = "OMP_TEXT_PREDICT_AGENT_DIR";
+export const TEXT_PREDICT_AGENT_DIR_ENV = "OMS_TEXT_PREDICT_AGENT_DIR";
 
 /** Broker readiness regex matched against {@link textPredictReadyBanner}. */
-export const TEXT_PREDICT_READY_PATTERN = String.raw`omp text-predict listening on \S+`;
+export const TEXT_PREDICT_READY_PATTERN = String.raw`oms text-predict listening on \S+`;
 
 /** Engines the daemon can open (`TextPredictor` methods); clients resolve `auto` before asking. */
 export type TextPredictMethod = "ngram" | "smollm" | "apple";
 
 /** Banner printed on stdout once the daemon accepts connections. */
 export function textPredictReadyBanner(endpoint: string): string {
-	return `omp text-predict listening on ${endpoint}`;
+	return `oms text-predict listening on ${endpoint}`;
 }
 
 /**
@@ -38,7 +38,7 @@ export function textPredictReadyBanner(endpoint: string): string {
  */
 export function textPredictDaemon(runtimeDir: string, agentDir: string): { name: string; endpoint: string } {
 	const key = Bun.hash.wyhash(path.resolve(agentDir)).toString(16).padStart(16, "0").slice(0, 12);
-	return { name: `omp.text-predict.${key}`, endpoint: ipcEndpoint(runtimeDir, `text-predict-${key}`) };
+	return { name: `oms.text-predict.${key}`, endpoint: ipcEndpoint(runtimeDir, `text-predict-${key}`) };
 }
 
 /** Client → daemon request. */
@@ -56,7 +56,7 @@ export type TextPredictRequest =
 	  }
 	/** Ingest history rows newer than each open engine's cursor. */
 	| { id: number; op: "sync" }
-	/** Persist and exit (a client found a daemon from another omp version). */
+	/** Persist and exit (a client found a daemon from another oms version). */
 	| { id: number; op: "shutdown" };
 
 /** Daemon → client response. */

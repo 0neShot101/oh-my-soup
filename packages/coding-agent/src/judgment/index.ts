@@ -16,7 +16,7 @@ import {
 	type AgentTelemetryConfig,
 	recordJudgmentTelemetry,
 	resolveTelemetry,
-} from "@oh-my-pi/pi-agent-core";
+} from "@oh-my-soup/pi-agent-core";
 import {
 	type Answer,
 	type AssistantMessage,
@@ -38,12 +38,12 @@ import {
 	TYPESAFE_PROVIDER,
 	tokenUsage,
 	type Usage,
-} from "@oh-my-pi/pi-ai";
-import * as AIError from "@oh-my-pi/pi-ai/error";
-import { isEmbeddedImageContent } from "@oh-my-pi/pi-ai/images/shared";
-import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
-import { calculateCost } from "@oh-my-pi/pi-catalog/models";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+} from "@oh-my-soup/pi-ai";
+import * as AIError from "@oh-my-soup/pi-ai/error";
+import { isEmbeddedImageContent } from "@oh-my-soup/pi-ai/images/shared";
+import { sendsImageInputOnWire } from "@oh-my-soup/pi-ai/providers/vision-guard";
+import { calculateCost } from "@oh-my-soup/pi-catalog/models";
+import { logger, prompt } from "@oh-my-soup/pi-utils";
 import { normalizeModelContextImages } from "../utils/image-loading";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelStringWithRouting, resolveRoleChain, type RoleChainCandidate } from "../config/model-resolver";

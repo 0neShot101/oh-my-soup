@@ -1,6 +1,6 @@
 import type { Component } from "../index";
 import { Markdown, Text } from "../index";
-import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { sanitizeText } from "@oh-my-soup/pi-utils";
 import type {
 	NativeToolHead,
 	NativeToolView,
@@ -8,7 +8,7 @@ import type {
 	RenderResultOptions,
 	ToolRenderer,
 } from "./renderer";
-import type { TspSpan } from "@oh-my-pi/pi-wire";
+import type { TspSpan } from "@oh-my-soup/pi-wire";
 import { compact, keyed, md, node, span, text } from "../native/describe";
 import type { NativeChild, NativeNode } from "../native/node";
 import { plainText } from "../native/spans";
@@ -45,7 +45,7 @@ import {
 	truncateToWidth,
 	wrapBrackets,
 } from "../render/render-utils";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
+import type { ImageContent } from "@oh-my-soup/pi-ai";
 import type { OutputMeta } from "./output-meta";
 import { type ConfiguredThinkingLevel, expandKeyHint } from "../render/render-utils";
 
@@ -645,7 +645,7 @@ function describeStatusEvent(event: EvalStatusEvent): NativeNode {
 			spans.push(span(` ${key}=`, "muted"), span(sanitizeText(String(value))));
 		}
 	}
-	return text(spans, { truncate: "end", role: "omp.tool.eval.status" });
+	return text(spans, { truncate: "end", role: "oms.tool.eval.status" });
 }
 
 /**
@@ -745,7 +745,7 @@ function evalOutputNodes(output: string, markdown: boolean, previewLines: number
 	if (markdown) return [keyed(md(output), "output")];
 	return splitConsoleTables(output).map((part, i) =>
 		part.kind === "text"
-			? runOutput(part.text, { role: "omp.tool.eval.output", previewLines, key: i === 0 ? "output" : `output-${i}` })
+			? runOutput(part.text, { role: "oms.tool.eval.output", previewLines, key: i === 0 ? "output" : `output-${i}` })
 			: node(
 					"table",
 					{
@@ -755,7 +755,7 @@ function evalOutputNodes(output: string, markdown: boolean, previewLines: number
 							id: `r${r}`,
 							cells: Object.fromEntries(cells.map((cell, c) => [`c${c}`, cell])),
 						})),
-						role: "omp.tool.eval.table",
+						role: "oms.tool.eval.table",
 					},
 					undefined,
 					`table-${i}`,
@@ -767,7 +767,7 @@ function evalOutputNodes(output: string, markdown: boolean, previewLines: number
 const RUN_STATUS_TAIL = 8;
 
 /**
- * A status log's events (`omp.run.status`): all kept ones when expanded, else
+ * A status log's events (`oms.run.status`): all kept ones when expanded, else
  * the newest {@link RUN_STATUS_TAIL}, after a muted `N earlier` line that also
  * counts events already dropped from the log's front.
  */
@@ -780,7 +780,7 @@ function evalStatusSection(log: StatusEventLog, expanded: boolean): NativeNode |
 	const lines = events.slice(shownFrom).map((event, i) => keyed(describeStatusEvent(event), `s${hidden + i}`));
 	return node(
 		"col",
-		{ role: "omp.run.status", gap: "none" },
+		{ role: "oms.run.status", gap: "none" },
 		compact<NativeNode>([hidden > 0 && keyed(text([span(`${hidden} earlier`, "muted")]), "earlier"), ...lines]),
 		"status",
 	);
@@ -821,14 +821,14 @@ function evalCellBox(cell: EvalCellRun, index: number, total: number): NativeNod
 		const spans: TspSpan[] = [span(`${index + 1}/${total}`, "muted")];
 		const title = plainText(cell.title ?? "").trim();
 		if (title) spans.push(span(` ${title}`, "toolTitle"));
-		caption = keyed(text(spans, { role: "omp.run.caption" }), "caption");
+		caption = keyed(text(spans, { role: "oms.run.caption" }), "caption");
 	}
 	return runBox(
 		[
 			caption,
 			cell.code.trim().length > 0 &&
 				runInput(cell.code, {
-					role: "omp.tool.eval.input",
+					role: "oms.tool.eval.input",
 					lang: languageForHighlighter(cell.language),
 					wrap: false,
 				}),

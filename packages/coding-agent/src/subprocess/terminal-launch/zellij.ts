@@ -1,4 +1,4 @@
-import { hasTerminalMultiplexerSession } from "@oh-my-pi/pi-tui/terminal-multiplexer";
+import { hasTerminalMultiplexerSession } from "@oh-my-soup/pi-tui/terminal-multiplexer";
 import { launchError, oneLineId, runStep } from "./shared";
 import type {
 	SupportedMultiplexerCapabilities,
@@ -35,7 +35,7 @@ const capabilities = {
 
 type ZellijLaunchRequest = Extract<TerminalLaunchRequest, { multiplexer: "zellij" }>;
 
-/** Parsed `zellij --version` per CLI runner; the installed CLI does not change while omp runs. */
+/** Parsed `zellij --version` per CLI runner; the installed CLI does not change while oms runs. */
 const zellijVersions = new WeakMap<TerminalLaunchCliRunner, readonly number[]>();
 
 function parseVersion(text: string): readonly number[] | undefined {

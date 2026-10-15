@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import * as http2 from "node:http2";
-import { type CursorOptions, buildGrpcRequest, streamCursor } from "@oh-my-pi/pi-ai/providers/cursor";
-import type { AssistantMessage, Context, Message, Model, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { type CursorOptions, buildGrpcRequest, streamCursor } from "@oh-my-soup/pi-ai/providers/cursor";
+import type { AssistantMessage, Context, Message, Model, ToolResultMessage } from "@oh-my-soup/pi-ai/types";
+import { buildModel } from "@oh-my-soup/pi-catalog/build";
 import {
 	type AgentClientMessage,
 	AgentClientMessageSchema,
@@ -27,8 +27,8 @@ import {
 	ToolCallSchema,
 	ToolCallStartedUpdateSchema,
 	TurnEndedUpdateSchema,
-} from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
-import { create, fromBinary, toBinary } from "@oh-my-pi/pi-catalog/discovery/protobuf";
+} from "@oh-my-soup/pi-catalog/discovery/cursor-proto";
+import { create, fromBinary, toBinary } from "@oh-my-soup/pi-catalog/discovery/protobuf";
 
 // Records as Cursor's server writes them for one Kimi K3 turn that read a file:
 // its reasoning names the server's own model, and the tool record is Cursor's.
@@ -364,7 +364,7 @@ describe("Cursor server records", () => {
 		});
 
 		expect(result.stopReason).toBe("stop");
-		// Default system prompt, the user message omp builds, then the server's
+		// Default system prompt, the user message oms builds, then the server's
 		// records; the paired tool result is not rebuilt beside them.
 		expect(root).toHaveLength(2 + SPAN.length);
 		expect(root.slice(2)).toEqual(SPAN_IDS);

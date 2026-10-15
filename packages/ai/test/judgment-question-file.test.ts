@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { judgeQuestions } from "@oh-my-pi/pi-ai";
+import { judgeQuestions } from "@oh-my-soup/pi-ai";
 
 describe("judgeQuestions", () => {
 	it("derives each question's kind from the shape of its criteria", () => {

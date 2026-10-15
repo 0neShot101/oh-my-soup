@@ -1,15 +1,15 @@
 import { beforeAll, beforeEach, describe, expect, afterEach, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { formatKeyHint, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
-import { getKeybindings, setKeybindings, type TUI } from "@oh-my-pi/pi-tui";
-import { getThemeByName, setThemeInstance, type Theme } from "@oh-my-pi/pi-tui/theme";
-import { AnnotationOverlay, type AnnotationOverlayCallbacks } from "@oh-my-pi/pi-tui/overlays/annotation-overlay";
+import { formatKeyHint, KeybindingsManager } from "@oh-my-soup/pi-tui/app-keybindings";
+import { getKeybindings, setKeybindings, type TUI } from "@oh-my-soup/pi-tui";
+import { getThemeByName, setThemeInstance, type Theme } from "@oh-my-soup/pi-tui/theme";
+import { AnnotationOverlay, type AnnotationOverlayCallbacks } from "@oh-my-soup/pi-tui/overlays/annotation-overlay";
 import type {
 	CodeReviewOverlayResult,
 	ReviewDiffFile,
 	TextReviewOverlayResult,
 	TextReviewSource,
-} from "@oh-my-pi/pi-tui/overlays/annotation-types";
+} from "@oh-my-soup/pi-tui/overlays/annotation-types";
 import type { NativeUiEvent } from "../src/native/node";
 import { sliceByColumn, visibleWidth } from "../src/utils";
 
@@ -169,7 +169,7 @@ describe("AnnotationOverlay", () => {
 		it("titles the sheet by the review and routes its footer buttons like the keys", () => {
 			let result: CodeReviewOverlayResult | undefined;
 			const overlay = makeDiffOverlay(oneLineFiles, { onComplete: value => (result = value) });
-			expect(overlay.nativeOverlay).toMatchObject({ role: "omp.overlay.codeReview", size: "full" });
+			expect(overlay.nativeOverlay).toMatchObject({ role: "oms.overlay.codeReview", size: "full" });
 
 			overlay.describe();
 			// Paste needs a note first; a draft blocks both actions.
@@ -207,7 +207,7 @@ describe("AnnotationOverlay", () => {
 			const overlay = makeTextOverlay({ id: "t", kind: "message", label: "Reply", text: "one\ntwo" }, value => {
 				result = value;
 			});
-			expect(overlay.nativeOverlay).toMatchObject({ role: "omp.overlay.annotateText", size: "full" });
+			expect(overlay.nativeOverlay).toMatchObject({ role: "oms.overlay.annotateText", size: "full" });
 			overlay.describe();
 			overlay.handleNativeEvent(click("review"));
 			expect(result).toBeUndefined();

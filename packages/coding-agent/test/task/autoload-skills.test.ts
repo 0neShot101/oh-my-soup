@@ -2,19 +2,19 @@ import { afterEach, describe, expect, it, type Mock, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
-import * as skillsModule from "@oh-my-pi/pi-coding-agent/extensibility/skills";
-import type { CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
-import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
-import type { AgentSession, AgentSessionEvent, PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { SKILL_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/messages";
-import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
-import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
-import { runStructuredSubagent } from "@oh-my-pi/pi-coding-agent/task/structured-subagent";
-import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import type { Skill } from "@oh-my-soup/pi-coding-agent/extensibility/skills";
+import * as skillsModule from "@oh-my-soup/pi-coding-agent/extensibility/skills";
+import type { CreateAgentSessionResult } from "@oh-my-soup/pi-coding-agent/sdk";
+import * as sdkModule from "@oh-my-soup/pi-coding-agent/sdk";
+import type { AgentSession, AgentSessionEvent, PromptOptions } from "@oh-my-soup/pi-coding-agent/session/agent-session";
+import { SKILL_PROMPT_MESSAGE_TYPE } from "@oh-my-soup/pi-coding-agent/session/messages";
+import * as discoveryModule from "@oh-my-soup/pi-coding-agent/task/discovery";
+import { runSubprocess } from "@oh-my-soup/pi-coding-agent/task/executor";
+import { runStructuredSubagent } from "@oh-my-soup/pi-coding-agent/task/structured-subagent";
+import type { AgentDefinition } from "@oh-my-soup/pi-coding-agent/task/types";
+import type { ToolSession } from "@oh-my-soup/pi-coding-agent/tools";
+import { EventBus } from "@oh-my-soup/pi-coding-agent/utils/event-bus";
 import { createSessionDefaults } from "../helpers/session-defaults";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ function createSessionResult(session: AgentSession): CreateAgentSessionResult {
 	return {
 		session,
 		extensionsResult:
-			{} as unknown as import("@oh-my-pi/pi-coding-agent/extensibility/extensions/types").LoadExtensionsResult,
+			{} as unknown as import("@oh-my-soup/pi-coding-agent/extensibility/extensions/types").LoadExtensionsResult,
 		setToolUIContext: () => {},
 		eventBus: new EventBus(),
 	};
@@ -96,7 +96,7 @@ describe("autoloadSkills in executor", () => {
 		settings: Settings.isolated(),
 		modelRegistry: {
 			refresh: async () => {},
-		} as unknown as import("@oh-my-pi/pi-coding-agent/config/model-registry").ModelRegistry,
+		} as unknown as import("@oh-my-soup/pi-coding-agent/config/model-registry").ModelRegistry,
 		enableLsp: false,
 	};
 
@@ -257,7 +257,7 @@ describe("autoloadSkills through task spawn", () => {
 	});
 
 	it("delivers a skill added after the parent session's skill list was loaded", async () => {
-		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-late-skill-"));
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "oms-late-skill-"));
 		try {
 			const baseDir = path.join(root, "late-skill");
 			const filePath = path.join(baseDir, "SKILL.md");

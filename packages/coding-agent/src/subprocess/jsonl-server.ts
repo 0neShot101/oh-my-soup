@@ -1,5 +1,5 @@
-import { type IpcConnection, IpcServer } from "@oh-my-pi/pi-natives";
-import { logger, postmortem } from "@oh-my-pi/pi-utils";
+import { type IpcConnection, IpcServer } from "@oh-my-soup/pi-natives";
+import { logger, postmortem } from "@oh-my-soup/pi-utils";
 
 /** Writes one JSON line back to the connection a request arrived on. */
 export interface JsonLineReply<Res> {

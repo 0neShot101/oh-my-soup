@@ -1,25 +1,25 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import type { AgentToolContext } from "@oh-my-soup/pi-agent-core";
 import { createContext, runInContext } from "node:vm";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { EvalPreludeDefinition } from "@oh-my-pi/pi-coding-agent/eval/preludes";
-import { disposeAllKernelSessions, executePython } from "@oh-my-pi/pi-coding-agent/eval/py/executor";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { computerApproval, createComputerPrelude } from "@oh-my-pi/pi-coding-agent/tools/computer";
-import { isReadOnlyComputerCall, renderComputerCall } from "@oh-my-pi/pi-coding-agent/tools/computer/call";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import type { EvalPreludeDefinition } from "@oh-my-soup/pi-coding-agent/eval/preludes";
+import { disposeAllKernelSessions, executePython } from "@oh-my-soup/pi-coding-agent/eval/py/executor";
+import type { ToolSession } from "@oh-my-soup/pi-coding-agent/tools";
+import { computerApproval, createComputerPrelude } from "@oh-my-soup/pi-coding-agent/tools/computer";
+import { isReadOnlyComputerCall, renderComputerCall } from "@oh-my-soup/pi-coding-agent/tools/computer/call";
 import {
 	type ComputerSessionSnapshot,
 	type ComputerWorkerInbound,
 	type ComputerWorkerOutbound,
 	type ComputerWorkerTransport,
 	SCREEN_LOCKED_CAPTURE_NOTE,
-} from "@oh-my-pi/pi-coding-agent/tools/computer/protocol";
+} from "@oh-my-soup/pi-coding-agent/tools/computer/protocol";
 import {
 	type ComputerController,
 	ComputerSupervisor,
 	type ComputerWorkerHandle,
-} from "@oh-my-pi/pi-coding-agent/tools/computer/supervisor";
-import { ComputerWorkerCore, type NativeDesktopSession } from "@oh-my-pi/pi-coding-agent/tools/computer/worker";
+} from "@oh-my-soup/pi-coding-agent/tools/computer/supervisor";
+import { ComputerWorkerCore, type NativeDesktopSession } from "@oh-my-soup/pi-coding-agent/tools/computer/worker";
 import type {
 	AxNode,
 	AxQuery,
@@ -32,9 +32,9 @@ import type {
 	DesktopScreenState,
 	DesktopWindow,
 	PointerOptions,
-} from "@oh-my-pi/pi-natives";
+} from "@oh-my-soup/pi-natives";
 
-import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import { cfgComputerEnabled } from "@oh-my-soup/pi-coding-agent/tools/settings";
 
 /** Method name of the last step in a facade call chain, or "" when the chain is malformed. */
 function terminalMethod(chain: unknown): string {
@@ -591,8 +591,8 @@ describe("computer prelude", () => {
 			"clipboard.read": "copied",
 		};
 		const realm = createContext({
-			__omp_display__: (value: unknown) => displays.push(value),
-			__omp_prelude__: async (name: unknown, parameters: unknown) => {
+			__oms_display__: (value: unknown) => displays.push(value),
+			__oms_prelude__: async (name: unknown, parameters: unknown) => {
 				expect(name).toBe("computer");
 				calls.push(parameters);
 				if (parameters === null || typeof parameters !== "object" || !("action" in parameters)) return undefined;
@@ -648,7 +648,7 @@ describe("computer prelude", () => {
 			{
 				action: "run",
 				fn: String(fn),
-				args: [7, { __omp_re: { source: "save", flags: "gi" } }, { __omp_fn: String(argFn) }],
+				args: [7, { __oms_re: { source: "save", flags: "gi" } }, { __oms_fn: String(argFn) }],
 				read_only: true,
 				timeout: 5,
 			},
@@ -842,8 +842,8 @@ describe("computer prelude", () => {
 		const emitted: unknown[] = [];
 		const context = { session, toolCallId: "zoom-js" };
 		const realm = createContext({
-			__omp_display__: () => {},
-			__omp_prelude__: async (_name: string, parameters: unknown) => {
+			__oms_display__: () => {},
+			__oms_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				emitted.push(...result.content);
 				return {
@@ -878,7 +878,7 @@ describe("computer prelude", () => {
 				realm,
 			);
 			for (const zoom of zooms) {
-				expect(zoom.path).toMatch(/omp-computer-.*\.png$/);
+				expect(zoom.path).toMatch(/oms-computer-.*\.png$/);
 				expect(zoom).toMatchObject({
 					width: 128,
 					height: 64,
@@ -991,8 +991,8 @@ describe("computer prelude", () => {
 		const prelude = workerPrelude(session, native);
 		const context = { session, toolCallId: "ref-chain-js" };
 		const realm = createContext({
-			__omp_display__: () => {},
-			__omp_prelude__: async (_name: string, parameters: unknown) => {
+			__oms_display__: () => {},
+			__oms_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				return { text: "", details: result.details };
 			},
@@ -1076,8 +1076,8 @@ describe("computer prelude", () => {
 		const prelude = workerPrelude(session, native);
 		const context = { session, toolCallId: "element-shape-js" };
 		const realm = createContext({
-			__omp_display__: () => {},
-			__omp_prelude__: async (_name: string, parameters: unknown) => {
+			__oms_display__: () => {},
+			__oms_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				return { text: "", details: result.details };
 			},
@@ -1259,12 +1259,12 @@ describe("computer worker round trips", () => {
 		const images = result.payload.displays.filter(block => block.type === "image");
 		expect(texts).toHaveLength(1);
 		expect(texts[0]?.text).toMatch(
-			/^screenshot desktop 64×32; coordinateWidth=64 coordinateHeight=32 → .*omp-computer-.*\.png$/,
+			/^screenshot desktop 64×32; coordinateWidth=64 coordinateHeight=32 → .*oms-computer-.*\.png$/,
 		);
 		expect(images).toEqual([{ type: "image", data: "iVBORw==", mimeType: "image/png", detail: "original" }]);
 		expect(result.payload.screenshots).toHaveLength(1);
 		expect(result.payload.screenshots[0]).toMatchObject({ width: 64, height: 32, target: "desktop" });
-		expect(result.payload.screenshots[0]?.path).toMatch(/omp-computer-.*\.png$/);
+		expect(result.payload.screenshots[0]?.path).toMatch(/oms-computer-.*\.png$/);
 	});
 
 	it("reports source dimensions when a screenshot is scaled", async () => {
@@ -1281,7 +1281,7 @@ describe("computer worker round trips", () => {
 			expect.objectContaining({
 				type: "text",
 				text: expect.stringMatching(
-					/^screenshot desktop 64×32 \(scaled from 128×64\); coordinateWidth=64 coordinateHeight=32 → .*omp-computer-.*\.png$/,
+					/^screenshot desktop 64×32 \(scaled from 128×64\); coordinateWidth=64 coordinateHeight=32 → .*oms-computer-.*\.png$/,
 				),
 			}),
 		);
@@ -2182,8 +2182,8 @@ describe("expanded computer APIs", () => {
 		const context = { session, toolCallId: "expanded-js" };
 		const images: unknown[] = [];
 		const realm = createContext({
-			__omp_display__: () => {},
-			__omp_prelude__: async (_name: string, parameters: unknown) => {
+			__oms_display__: () => {},
+			__oms_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				images.push(...result.content.filter(block => block.type === "image"));
 				return { details: result.details };
@@ -2290,8 +2290,8 @@ describe("expanded computer APIs", () => {
 		const prelude = workerPrelude(session, native);
 		const context = { session, toolCallId: "menu-path-js" };
 		const realm = createContext({
-			__omp_display__: () => {},
-			__omp_prelude__: async (_name: string, parameters: unknown) => {
+			__oms_display__: () => {},
+			__oms_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				return { text: "", details: result.details };
 			},
@@ -2411,8 +2411,8 @@ describe("expanded computer APIs", () => {
 		const prelude = workerPrelude(session, native);
 		const context = { session, toolCallId: "argument-facade" };
 		const realm = createContext({
-			__omp_display__: () => {},
-			__omp_prelude__: async (_name: string, parameters: unknown) => {
+			__oms_display__: () => {},
+			__oms_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				return { text: "", details: result.details };
 			},
@@ -2438,8 +2438,8 @@ describe("expanded computer APIs", () => {
 		const context = { session, toolCallId: "observe-once-js" };
 		const printed: string[] = [];
 		const realm = createContext({
-			__omp_display__: (text: string) => printed.push(text),
-			__omp_prelude__: async (_name: string, parameters: unknown) => {
+			__oms_display__: (text: string) => printed.push(text),
+			__oms_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				const text = result.content.flatMap(block => (block.type === "text" ? [block.text] : [])).join("\n");
 				return { text, details: result.details };

@@ -8,15 +8,15 @@
  * transcript window, so compaction does not roll the totals back.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Agent } from "@oh-my-pi/pi-agent-core";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import { FooterComponent } from "@oh-my-pi/pi-tui/status-line/footer";
+import { Agent } from "@oh-my-soup/pi-agent-core";
+import { resetSettingsForTest, Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { statusLineHost } from "@oh-my-soup/pi-coding-agent/modes/status-line-host";
+import { AgentSession } from "@oh-my-soup/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-soup/pi-coding-agent/session/auth-storage";
+import { ModelRegistry } from "@oh-my-soup/pi-coding-agent/config/model-registry";
+import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
+import { initTheme } from "@oh-my-soup/pi-tui/theme";
+import { FooterComponent } from "@oh-my-soup/pi-tui/status-line/footer";
 
 beforeAll(async () => {
 	resetSettingsForTest();

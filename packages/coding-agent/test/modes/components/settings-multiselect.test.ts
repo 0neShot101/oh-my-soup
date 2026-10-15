@@ -2,19 +2,19 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
-import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
-import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui";
-import { createPluginSettingsHost } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/settings-host";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import { TspDocument } from "@oh-my-pi/pi-tui/native/apply";
-import { Reconciler } from "@oh-my-pi/pi-tui/native/reconcile";
-import type { TspNode } from "@oh-my-pi/pi-wire";
-import { getProjectAgentDir, removeWithRetries } from "@oh-my-pi/pi-utils";
+import { resetSettingsForTest, Settings, settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { AgentStorage } from "@oh-my-soup/pi-coding-agent/session/agent-storage";
+import { SettingsSelectorComponent } from "@oh-my-soup/pi-tui/overlays/settings-selector";
+import { createSettingsHost } from "@oh-my-soup/pi-coding-agent/config/settings-ui";
+import { createPluginSettingsHost } from "@oh-my-soup/pi-coding-agent/extensibility/plugins/settings-host";
+import { initTheme } from "@oh-my-soup/pi-tui/theme";
+import { TspDocument } from "@oh-my-soup/pi-tui/native/apply";
+import { Reconciler } from "@oh-my-soup/pi-tui/native/reconcile";
+import type { TspNode } from "@oh-my-soup/pi-wire";
+import { getProjectAgentDir, removeWithRetries } from "@oh-my-soup/pi-utils";
 
-import { cfgDevAutoqa } from "@oh-my-pi/pi-coding-agent/tools/settings";
-import { cfgContextFilesExtra } from "@oh-my-pi/pi-coding-agent/session/context-settings";
+import { cfgDevAutoqa } from "@oh-my-soup/pi-coding-agent/tools/settings";
+import { cfgContextFilesExtra } from "@oh-my-soup/pi-coding-agent/session/context-settings";
 
 beforeAll(async () => {
 	await initTheme();
@@ -152,7 +152,7 @@ describe("extra context filenames editor", () => {
 	});
 
 	it("is not offered when the project config sets the list, so it cannot be copied to global", async () => {
-		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-extra-ctx-"));
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "oms-extra-ctx-"));
 		try {
 			const cwd = path.join(root, "repo");
 			const agentDir = path.join(root, "agent");

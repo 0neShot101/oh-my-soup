@@ -1,5 +1,5 @@
 /**
- * Moving a session between machines (`omp session pack|unpack|moved`).
+ * Moving a session between machines (`oms session pack|unpack|moved`).
  *
  * A session archive is a plain tar:
  *
@@ -25,14 +25,14 @@ import {
 	Snowflake,
 	TempDir,
 	VERSION,
-} from "@oh-my-pi/pi-utils";
+} from "@oh-my-soup/pi-utils";
 import {
 	type ArchiveMemberContent,
 	ArchiveError,
 	formatArchivePathForError,
 	readArchiveEntries,
 	writeArchive,
-} from "@oh-my-pi/pi-utils/ar";
+} from "@oh-my-soup/pi-utils/ar";
 import transferArrivedTemplate from "../prompts/session/transfer-arrived.md" with { type: "text" };
 import transferDepartedTemplate from "../prompts/session/transfer-departed.md" with { type: "text" };
 import transferStaleForkTemplate from "../prompts/session/transfer-stale-fork.md" with { type: "text" };
@@ -58,8 +58,8 @@ export interface SessionArchiveManifest {
 	id: string;
 	/** Working directory recorded in the journal header on the packing machine. */
 	cwd: string;
-	/** omp version that wrote the archive. */
-	omp: string;
+	/** oms version that wrote the archive. */
+	oms: string;
 }
 
 /**
@@ -204,20 +204,20 @@ async function requireDirectory(dir: string): Promise<void> {
 async function requireSessionId(file: string): Promise<string> {
 	await requireFile(file, "Session file");
 	const id = await readSessionHeaderId(file);
-	if (id === undefined) throw new SessionTransferError(`Not an omp session file (no session header): ${file}`);
+	if (id === undefined) throw new SessionTransferError(`Not an oms session file (no session header): ${file}`);
 	return id;
 }
 
 /**
  * Take this process's ownership lease on session `id` at `file` — the check
- * {@link SessionManager.moveTo} uses — or refuse while another live omp process
+ * {@link SessionManager.moveTo} uses — or refuse while another live oms process
  * writes it.
  */
 function claimSessionOrRefuse(id: string, file: string, action: string): () => void {
 	const release = new FileSessionStorage().claimSession(id, file);
 	if (!release) {
 		throw new SessionTransferError(
-			`Cannot ${action} ${file}: another live omp process writes this session. Exit it first. Nothing was changed.`,
+			`Cannot ${action} ${file}: another live oms process writes this session. Exit it first. Nothing was changed.`,
 		);
 	}
 	return release;
@@ -266,7 +266,7 @@ async function writeArchiveAtomically(
 
 /**
  * Pack `sessionFile` with its artifacts and referenced blobs into the tar
- * `outPath` (written atomically). Refuses a session another live omp process
+ * `outPath` (written atomically). Refuses a session another live oms process
  * is writing; the ownership lease is held while the files are read.
  */
 export async function packSession(sessionFile: string, outPath: string): Promise<PackSessionResult> {
@@ -287,13 +287,13 @@ export async function packSession(sessionFile: string, outPath: string): Promise
 		const journalText = journal.toString("utf8");
 		const header = parseSessionContent(journalText).entries[0];
 		if (header?.type !== "session") {
-			throw new SessionTransferError(`Not an omp session file (no session header): ${source}`);
+			throw new SessionTransferError(`Not an oms session file (no session header): ${source}`);
 		}
 		const manifest: SessionArchiveManifest = {
 			version: SESSION_ARCHIVE_VERSION,
 			id,
 			cwd: header.cwd,
-			omp: VERSION,
+			oms: VERSION,
 		};
 		const members: (readonly [string, ArchiveMemberContent])[] = [
 			[MANIFEST_MEMBER, `${JSON.stringify(manifest, null, 2)}\n`],
@@ -359,20 +359,20 @@ function parseManifest(bytes: Uint8Array, archive: string): SessionArchiveManife
 	if (!isRecord(value)) {
 		throw new SessionTransferError(`Bad session archive ${archive}: manifest.json is not an object.`);
 	}
-	const { version, id, cwd, omp } = value;
+	const { version, id, cwd, oms } = value;
 	if (typeof version !== "number") {
 		throw new SessionTransferError(`Bad session archive ${archive}: manifest.json has no version.`);
 	}
 	if (version !== SESSION_ARCHIVE_VERSION) {
-		const hint = version > SESSION_ARCHIVE_VERSION ? " Update omp on this machine." : "";
+		const hint = version > SESSION_ARCHIVE_VERSION ? " Update oms on this machine." : "";
 		throw new SessionTransferError(
-			`Unsupported session archive version ${version} in ${archive}: omp ${VERSION} reads version ${SESSION_ARCHIVE_VERSION}.${hint}`,
+			`Unsupported session archive version ${version} in ${archive}: oms ${VERSION} reads version ${SESSION_ARCHIVE_VERSION}.${hint}`,
 		);
 	}
-	if (typeof id !== "string" || typeof cwd !== "string" || typeof omp !== "string") {
-		throw new SessionTransferError(`Bad session archive ${archive}: manifest.json needs string id, cwd, and omp.`);
+	if (typeof id !== "string" || typeof cwd !== "string" || typeof oms !== "string") {
+		throw new SessionTransferError(`Bad session archive ${archive}: manifest.json needs string id, cwd, and oms.`);
 	}
-	return { version, id, cwd, omp };
+	return { version, id, cwd, oms };
 }
 
 /**
@@ -578,7 +578,7 @@ export async function unpackSession(archivePath: string, options: UnpackSessionO
 		await blobStore.put(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength), { hash });
 	}
 
-	const staging = await TempDir.create("@omp-session-unpack-");
+	const staging = await TempDir.create("@oms-session-unpack-");
 	try {
 		const stagedFile = staging.join(`${header.timestamp.replace(/[^\w-]/g, "-")}_${id}.jsonl`);
 		await Bun.write(stagedFile, contents.journal);
@@ -633,7 +633,7 @@ export async function unpackSession(archivePath: string, options: UnpackSessionO
 
 /**
  * Append a `departed` marker to `sessionFile`: the session moved to `label`
- * and this copy is stale. Refuses a session another live omp process writes.
+ * and this copy is stale. Refuses a session another live oms process writes.
  */
 export async function markSessionMoved(sessionFile: string, label: string): Promise<void> {
 	const target = path.resolve(sessionFile);

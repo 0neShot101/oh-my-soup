@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage } from "@oh-my-soup/pi-agent-core";
 import type {
 	ImageContent,
 	MessageAttribution,
@@ -6,8 +6,8 @@ import type {
 	StopReason,
 	TextContent,
 	Usage,
-} from "@oh-my-pi/pi-ai";
-import type { StructuredSubagentSchemaMode } from "@oh-my-pi/pi-tui/tools/task";
+} from "@oh-my-soup/pi-ai";
+import type { StructuredSubagentSchemaMode } from "@oh-my-soup/pi-tui/tools/task";
 import type { CompactionMethod } from "./compaction-methods";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import type { RetryFallbackRole } from "./retry-fallback-chains";
@@ -77,7 +77,7 @@ export interface SessionEntryBase {
 	parentId: string | null;
 	timestamp: string;
 	/**
-	 * omp build that wrote this entry, set on every entry this session's process authors. Copies
+	 * oms build that wrote this entry, set on every entry this session's process authors. Copies
 	 * (forks, branches, collab replicas) keep the original writer. Absent on older entries.
 	 */
 	runtime?: RuntimeIdentity;
@@ -210,7 +210,7 @@ export interface TitleChangeEntry extends SessionEntryBase {
 	trigger?: string;
 }
 
-declare module "@oh-my-pi/pi-agent-core/compaction/entries" {
+declare module "@oh-my-soup/pi-agent-core/compaction/entries" {
 	interface CustomCompactionSessionEntries {
 		titleChange: TitleChangeEntry;
 		credentialPin: CredentialPinEntry;

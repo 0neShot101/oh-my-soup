@@ -1,5 +1,5 @@
 import type { Component } from "../tui";
-import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir } from "@oh-my-soup/pi-utils";
 import { highlightCode, type Theme } from "../theme/theme";
 import { renderStatusLine } from "../render/status-line";
 import { framedToolCard, type ToolCardSnapshot } from "../render/tool-card";
@@ -25,7 +25,7 @@ import type {
 	RenderResultOptions,
 	ToolRenderer,
 } from "./renderer";
-import { INTENT_FIELD, type TspTone } from "@oh-my-pi/pi-wire";
+import { INTENT_FIELD, type TspTone } from "@oh-my-soup/pi-wire";
 import { plainText } from "../native/spans";
 import { resultText, runBox, runFoot, runInput, runOutput, type RunState } from "./native-view";
 
@@ -419,7 +419,7 @@ function shellFootParts(details: BashToolDetails | undefined, artifactId: string
 }
 
 /** The command line as a run's input: wrapped shell source. */
-const SHELL_INPUT = { role: "omp.tool.bash.command", lang: "bash", wrap: true } as const;
+const SHELL_INPUT = { role: "oms.tool.bash.command", lang: "bash", wrap: true } as const;
 
 /** Box tint per run state: failed runs read as errors, timed-out ones as warnings. */
 const RUN_BOX_TONE: Partial<Record<RunState, TspTone>> = { failed: "error", "timed-out": "warning" };
@@ -694,7 +694,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const box = runBox(
 				[
 					runInput(command, SHELL_INPUT),
-					output.trim().length > 0 && runOutput(output, { role: "omp.tool.bash.output", previewLines }),
+					output.trim().length > 0 && runOutput(output, { role: "oms.tool.bash.output", previewLines }),
 					runFoot({
 						state,
 						exitCode: details?.exitCode,

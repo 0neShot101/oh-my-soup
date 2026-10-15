@@ -1,17 +1,17 @@
 import { afterEach, expect, it, vi } from "bun:test";
-import type { Model } from "@oh-my-pi/pi-ai";
-import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { buildTransformedCodexRequestBody } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
-import { buildParams } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import * as settingsStream from "@oh-my-pi/pi-coding-agent/session/settings-stream-fn";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import type { Model } from "@oh-my-soup/pi-ai";
+import { createMockModel } from "@oh-my-soup/pi-ai/providers/mock";
+import { buildTransformedCodexRequestBody } from "@oh-my-soup/pi-ai/providers/openai-codex-responses";
+import { buildParams } from "@oh-my-soup/pi-ai/providers/openai-responses";
+import { getBundledModel } from "@oh-my-soup/pi-catalog/models";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { AgentLifecycleManager } from "@oh-my-soup/pi-coding-agent/registry/agent-lifecycle";
+import { AgentRegistry } from "@oh-my-soup/pi-coding-agent/registry/agent-registry";
+import { createAgentSession } from "@oh-my-soup/pi-coding-agent/sdk";
+import { AuthStorage } from "@oh-my-soup/pi-coding-agent/session/auth-storage";
+import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
+import * as settingsStream from "@oh-my-soup/pi-coding-agent/session/settings-stream-fn";
+import { TempDir } from "@oh-my-soup/pi-utils";
 
 interface Request {
 	stage: string;
@@ -37,7 +37,7 @@ it.each([
 ] as const)(
 	"keeps primary, ephemeral, and handoff routing consistent for %s",
 	async (_name, switchToLuna, explicit) => {
-		using dir = TempDir.createSync("@omp-task-side-cache-");
+		using dir = TempDir.createSync("@oms-task-side-cache-");
 		const auth = await AuthStorage.create(dir.join("auth.db"));
 		auth.keys.setRuntime("muse-code", "test-key");
 		auth.keys.setRuntime("openai-codex", "test-key");

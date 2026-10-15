@@ -2,11 +2,11 @@ import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RenderResultOptions } from "../src/tools/renderer";
-import { getThemeByName, setThemeInstance, type Theme } from "@oh-my-pi/pi-tui/theme";
-import { bashToolRenderer, formatBackgroundNotice } from "@oh-my-pi/pi-tui/tools/bash";
-import { previewWindowRows } from "@oh-my-pi/pi-tui/render/render-utils";
-import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
-import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { getThemeByName, setThemeInstance, type Theme } from "@oh-my-soup/pi-tui/theme";
+import { bashToolRenderer, formatBackgroundNotice } from "@oh-my-soup/pi-tui/tools/bash";
+import { previewWindowRows } from "@oh-my-soup/pi-tui/render/render-utils";
+import { ImageProtocol, TERMINAL } from "@oh-my-soup/pi-tui";
+import { sanitizeText } from "@oh-my-soup/pi-utils";
 
 type MutableTerminalInfo = {
 	imageProtocol: ImageProtocol | null;
@@ -155,7 +155,7 @@ describe("bashToolRenderer", () => {
 			const output = (view.body ?? [])
 				.flatMap(node => ("k" in node ? (node.c ?? []) : []))
 				.find(node => "k" in node && node.k === "ansi");
-			expect(output).toMatchObject({ p: { role: "omp.tool.bash.output", text: "Wall time: 0.02 seconds" } });
+			expect(output).toMatchObject({ p: { role: "oms.tool.bash.output", text: "Wall time: 0.02 seconds" } });
 		}
 	});
 

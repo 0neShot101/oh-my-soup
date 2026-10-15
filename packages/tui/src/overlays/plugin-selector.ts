@@ -10,7 +10,7 @@ import { OverlayPanel } from "../chrome/overlay-box";
 import { routeSelectListMouseWithTopBorder } from "../chrome/select-list-mouse-routing";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { SelectListSheet } from "../native/picker";
-import type { TspPickerItem } from "@oh-my-pi/pi-wire";
+import type { TspPickerItem } from "@oh-my-soup/pi-wire";
 
 export interface PluginSelectorCallbacks {
 	onSelect: (pluginName: string, marketplace: string, scope?: "user" | "project") => void;
@@ -34,7 +34,7 @@ export class PluginSelectorComponent extends OverlayPanel {
 		installedIds: Set<string>,
 		callbacks: PluginSelectorCallbacks,
 	) {
-		super("Plugins", "omp.overlay.plugins");
+		super("Plugins", "oms.overlay.plugins");
 
 		// The sheet draws version, install state and scope as badges instead of bracketed label text.
 		const badgesByValue = new Map<string, NonNullable<TspPickerItem["badges"]>>();

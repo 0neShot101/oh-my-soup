@@ -1,13 +1,13 @@
 /**
- * Shared helpers for `/usage reset` (TUI selector + ACP) and `omp usage reset`:
+ * Shared helpers for `/usage reset` (TUI selector + ACP) and `oms usage reset`:
  * turn the live per-account reset-credit status into rows, resolve a typed
  * `<provider>/<credential id>` target, and map a redeem outcome code to a
  * human message.
  */
-import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { sanitizeText } from "@oh-my-soup/pi-utils";
 import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome, ResetCreditTarget } from "../../session/auth-storage";
-import type { ResetUsageAccount } from "@oh-my-pi/pi-tui/overlays/reset-usage-selector";
-import { summarizeUsageResetCredits } from "@oh-my-pi/pi-tui/overlays/usage-display";
+import type { ResetUsageAccount } from "@oh-my-soup/pi-tui/overlays/reset-usage-selector";
+import { summarizeUsageResetCredits } from "@oh-my-soup/pi-tui/overlays/usage-display";
 
 const CODEX_PROVIDER_ID = "openai-codex";
 const CLAUDE_PROVIDER_ID = "anthropic";

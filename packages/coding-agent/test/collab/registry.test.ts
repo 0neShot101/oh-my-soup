@@ -12,8 +12,8 @@ import {
 	listCollabHosts,
 	publishCollabHost,
 	resolveCollabHostLink,
-} from "@oh-my-pi/pi-coding-agent/collab/registry";
-import { IpcConnection, IpcServer, ipcEndpoint } from "@oh-my-pi/pi-natives";
+} from "@oh-my-soup/pi-coding-agent/collab/registry";
+import { IpcConnection, IpcServer, ipcEndpoint } from "@oh-my-soup/pi-natives";
 
 const cleanupDirs: string[] = [];
 const openPublications: CollabHostPublication[] = [];
@@ -38,7 +38,7 @@ afterEach(async () => {
 });
 
 async function tempDir(): Promise<string> {
-	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-collab-registry-"));
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "oms-collab-registry-"));
 	cleanupDirs.push(dir);
 	return dir;
 }
@@ -386,7 +386,7 @@ describe("collab registry", () => {
 
 	it("lists a host that omits busy as unknown and drops one that reports garbage", async () => {
 		const dir = await tempDir();
-		// An omp older than the `busy` field: same protocol version, one key short.
+		// An oms older than the `busy` field: same protocol version, one key short.
 		const older = makeFixture({ sessionId: "older-host" });
 		const { busy: _busy, ...withoutBusy } = older.snapshot;
 		openPublications.push(

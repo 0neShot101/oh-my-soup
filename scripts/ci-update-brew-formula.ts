@@ -1,20 +1,20 @@
 #!/usr/bin/env bun
 //
-// Render the Homebrew formula for `omp` from a build published on the build
+// Render the Homebrew formula for `oms` from a build published on the build
 // service (build.stencil.so) and write it to a tap checkout. Each formula
 // target points at the build's immutable download URL
-// (`/d/omp/<build-id>/<file>`) with the sha256 the service recorded at upload,
+// (`/d/oms/<build-id>/<file>`) with the sha256 the service recorded at upload,
 // so the formula never drifts from the shipped binaries. Fails when the
 // version is not published for every formula target.
 //
 // Usage:
-//   bun scripts/ci-update-brew-formula.ts <tag> --out <path/to/Formula/omp.rb>
+//   bun scripts/ci-update-brew-formula.ts <tag> --out <path/to/Formula/oms.rb>
 //   bun scripts/ci-update-brew-formula.ts v18.8.9        # prints to stdout
 //
 // Environment:
 //   BUILD_URL   service origin (default https://build.stencil.so)
 
-const PRODUCT = "omp";
+const PRODUCT = "oms";
 const SERVICE_URL = (process.env.BUILD_URL ?? "https://build.stencil.so").replace(/\/+$/, "");
 const HOMEPAGE = "https://omp.sh";
 const DESC = "Coding agent with the IDE wired in";
@@ -83,14 +83,14 @@ export function renderFormula(version: string, files: Record<FormulaTarget, Form
 	// Each `url` carries `using: :nounzip` because the build files are bare
 	// Mach-O/ELF executables, not archives. Without it Homebrew's default
 	// CurlDownloadStrategy routes through UnpackStrategy::Uncompressed#extract_nestedly,
-	// which nests the file outside the staging CWD; `Dir["omp-*"].first` then
-	// returns `nil` and `bin.install nil => "omp"` raises.
+	// which nests the file outside the staging CWD; `Dir["oms-*"].first` then
+	// returns `nil` and `bin.install nil => "oms"` raises.
 	//
 	// `with_env(HOME: buildpath)` redirects the CLI's `os.homedir()` lookup to
 	// the writable staging dir so `generate_completions_from_executable` does
-	// not touch the real `/Users/<user>/.omp` (denied by Homebrew's sandbox
+	// not touch the real `/Users/<user>/.oms` (denied by Homebrew's sandbox
 	// profile, which would otherwise fail the popen).
-	return `class Omp < Formula
+	return `class Oms < Formula
   desc "${DESC}"
   homepage "${HOMEPAGE}"
   version "${version}"
@@ -123,15 +123,15 @@ export function renderFormula(version: string, files: Record<FormulaTarget, Form
   end
 
   def install
-    bin.install Dir["omp-*"].first => "omp"
-    (bin/"omp").chmod 0555
+    bin.install Dir["oms-*"].first => "oms"
+    (bin/"oms").chmod 0555
     with_env(HOME: buildpath) do
-      generate_completions_from_executable(bin/"omp", "completions", shells: [:bash, :zsh, :fish])
+      generate_completions_from_executable(bin/"oms", "completions", shells: [:bash, :zsh, :fish])
     end
   end
 
   test do
-    assert_match version.to_s, shell_output("#{bin}/omp --version")
+    assert_match version.to_s, shell_output("#{bin}/oms --version")
   end
 end
 `;

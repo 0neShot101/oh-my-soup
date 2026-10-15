@@ -6,15 +6,15 @@ import {
 	Snowflake,
 	withTimeout,
 	workerHostEntry,
-} from "@oh-my-pi/pi-utils";
+} from "@oh-my-soup/pi-utils";
 import type { CDPSession, Page, Target } from "puppeteer-core";
 import { callSessionTool } from "../../eval/js/tool-bridge";
-import { webpExclusionForModel } from "@oh-my-pi/pi-tui/chat/image-loading";
+import { webpExclusionForModel } from "@oh-my-soup/pi-tui/chat/image-loading";
 import type { ToolSession } from "../index";
 import { expandPath } from "../path-utils";
 import { CELL_BUDGET_SLACK_MS } from "../run-scope";
 import { ToolAbortError, toWorkerErrorPayload } from "../tool-errors";
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { ToolError } from "@oh-my-soup/pi-tui/tools/tool-errors";
 import { gracefulKillTreeOnce, pickElectronTarget, shouldPreserveConnectedBrowserFocus } from "./attach";
 import { CmuxTab } from "./cmux/cmux-tab";
 import { mapWaitUntil } from "./cmux/rpc";
@@ -128,7 +128,7 @@ export interface WorkerTabSession extends TabSessionBase<PuppeteerBrowserHandle>
 	reattached?: boolean;
 	/**
 	 * The tab's upload staging folder. It outlives the tab's workers, since Chrome reads a picked file only when the page
-	 * does, and goes with the page when omp closes it; a page left open in the user's browser keeps it until the sweep.
+	 * does, and goes with the page when oms closes it; a page left open in the user's browser keeps it until the sweep.
 	 */
 	uploadDir: string;
 }
@@ -140,7 +140,7 @@ export interface CmuxTabSession extends TabSessionBase<CmuxBrowserHandle> {
 	cmuxAttachedSurface?: string;
 }
 
-/** A tab shown as a Tern browser picture-in-picture over omp's pane, or the user's browser block it adopted. */
+/** A tab shown as a Tern browser picture-in-picture over oms's pane, or the user's browser block it adopted. */
 export interface TernTabSession extends TabSessionBase<TernBrowserHandle> {
 	backend: "tern";
 	/** The PiP's driver. */
@@ -571,7 +571,7 @@ async function acquireTabImpl(
 	worker.onMessage(msg => handleTabMessage(tab, msg));
 	tabs.set(name, tab);
 	sweepClosedTabUploads();
-	// Durably record ownership so another live omp process can reap this page if
+	// Durably record ownership so another live oms process can reap this page if
 	// this process dies abnormally before its own teardown closes the tab.
 	const scope = sharedScopeOf(browser);
 	if (scope) void recordSharedTarget(scope, info.targetId);
@@ -745,7 +745,7 @@ async function adoptsSameBlock(existing: TernTabSession, opts: AcquireTabOptions
 }
 
 /**
- * Open a Tern browser PiP over omp's pane and configure it before its first
+ * Open a Tern browser PiP over oms's pane and configure it before its first
  * real navigation (the PiP closes again when anything after `open` fails), or
  * with `opts.target` adopt the user's browser block it names (released again,
  * never closed, on failure and on close).
@@ -1185,9 +1185,9 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 		}
 	}
 	await tab.worker.terminate().catch(() => undefined);
-	// omp closes the pages of browsers it launched, and with them goes the last reader of their staged uploads.
+	// oms closes the pages of browsers it launched, and with them goes the last reader of their staged uploads.
 	if (tab.kindTag === "headless") await removeUploadStaging(tab.uploadDir);
-	// A recycled worker adopted the omp-owned headless page and leaves it open on close, so close it here.
+	// A recycled worker adopted the oms-owned headless page and leaves it open on close, so close it here.
 	if ((forced || (wasAlive && tab.reattached)) && tab.kindTag === "headless") {
 		try {
 			// `false` is "not confirmed closed" (the CDP session could not be
@@ -1223,7 +1223,7 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 				// that was never closed, and re-check the browser itself: a
 				// Chromium that stopped answering its CDP endpoint holds every
 				// unclosable target and must be replaced, not left to grow until
-				// the last omp client in the project exits.
+				// the last oms client in the project exits.
 				recheckSharedBrowser(scope);
 			} else {
 				void forgetSharedTarget(scope, tab.targetId);
@@ -1272,7 +1272,7 @@ export async function releaseTabsForOwner(ownerId: string, opts: ReleaseTabOptio
 }
 
 /**
- * Tabs this settle machinery may ever touch: OMP-launched headless puppeteer
+ * Tabs this settle machinery may ever touch: OMS-launched headless puppeteer
  * tabs (`kindTag === "headless"` covers hidden and visible shared-daemon
  * tabs) that are alive and not opted out with `persist`. Connected, relay,
  * and spawned tabs drive the user's own pages/apps, and cmux surfaces are a
@@ -1629,7 +1629,7 @@ async function buildInitPayload(browser: PuppeteerBrowserHandle, opts: AcquireTa
 			browserWSEndpoint,
 			safeDir,
 			uploadDir,
-			// Visible launches still need an OMP-owned page, stealth setup, and
+			// Visible launches still need an OMS-owned page, stealth setup, and
 			// independent lifecycle; only their fixed device emulation is disabled.
 			emulateViewport: browser.kind.headless,
 			viewport: opts.viewport,
@@ -2033,7 +2033,7 @@ async function spawnTabWorker(): Promise<WorkerHandle> {
 	try {
 		const hostEntry = workerHostEntry();
 		const worker = hostEntry
-			? new Worker(hostEntry, { type: "module", argv: ["__omp_worker_tab"] })
+			? new Worker(hostEntry, { type: "module", argv: ["__oms_worker_tab"] })
 			: new Worker(new URL("./tab-worker-entry.ts", import.meta.url).href, { type: "module" });
 		return wrapBunWorker(worker);
 	} catch (err) {

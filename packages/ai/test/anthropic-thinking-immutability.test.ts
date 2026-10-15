@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { convertAnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic";
-import type { AssistantMessage, Model, UserMessage } from "@oh-my-pi/pi-ai/types";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { removeDsmlToolMarkupLeak } from "@oh-my-pi/pi-ai/utils/dsml-leak";
+import { convertAnthropicMessages } from "@oh-my-soup/pi-ai/providers/anthropic";
+import type { AssistantMessage, Model, UserMessage } from "@oh-my-soup/pi-ai/types";
+import { buildModel } from "@oh-my-soup/pi-catalog/build";
+import { removeDsmlToolMarkupLeak } from "@oh-my-soup/pi-ai/utils/dsml-leak";
 
 const model: Model<"anthropic-messages"> = buildModel({
 	api: "anthropic-messages",

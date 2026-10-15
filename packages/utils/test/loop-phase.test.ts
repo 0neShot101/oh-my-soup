@@ -6,7 +6,7 @@ import {
 	resetLoopPhaseWindow,
 	takeLoopPhaseAttribution,
 	withLoopPhase,
-} from "@oh-my-pi/pi-utils";
+} from "@oh-my-soup/pi-utils";
 
 // The stack and attribution window are process-global; isolate every case.
 function drain(): void {

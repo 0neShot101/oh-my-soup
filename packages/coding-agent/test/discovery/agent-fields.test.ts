@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { Effort } from "@oh-my-pi/pi-ai";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { parseAgentFields } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
-import { resolveBuiltinToolPlan, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
+import { Effort } from "@oh-my-soup/pi-ai";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { parseAgentFields } from "@oh-my-soup/pi-coding-agent/discovery/helpers";
+import { resolveBuiltinToolPlan, type ToolSession } from "@oh-my-soup/pi-coding-agent/tools";
+import { AUTO_THINKING } from "@oh-my-soup/pi-tui/thinking";
 
 describe("parseAgentFields", () => {
 	test("rejects the reserved `main` and `sub` agent definition names", () => {

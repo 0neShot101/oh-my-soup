@@ -1,10 +1,10 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { factRecall, formatContext, recall, recallEnhanced } from "@oh-my-pi/pi-mnemopi/core/beam/recall";
-import { initBeam } from "@oh-my-pi/pi-mnemopi/core/beam/schema";
-import { invalidate } from "@oh-my-pi/pi-mnemopi/core/beam/store";
-import type { BeamMemoryState } from "@oh-my-pi/pi-mnemopi/core/beam/types";
-import { currentLoopPhase } from "@oh-my-pi/pi-utils";
+import { factRecall, formatContext, recall, recallEnhanced } from "@oh-my-soup/pi-mnemopi/core/beam/recall";
+import { initBeam } from "@oh-my-soup/pi-mnemopi/core/beam/schema";
+import { invalidate } from "@oh-my-soup/pi-mnemopi/core/beam/store";
+import type { BeamMemoryState } from "@oh-my-soup/pi-mnemopi/core/beam/types";
+import { currentLoopPhase } from "@oh-my-soup/pi-utils";
 
 type TestBeam = BeamMemoryState & { close(): void };
 
@@ -555,7 +555,7 @@ describe("beam recall free functions", () => {
 		insertWorking(
 			beam,
 			"wm-quasar",
-			"MNEMOPI FULL PIPELINE TEST 20260613: The user Verge prefers OMP memory to run at full power. Unique entity QuasarOtter owns SignalPineapple and uses RecallEngine-Seven.",
+			"MNEMOPI FULL PIPELINE TEST 20260613: The user Verge prefers OMS memory to run at full power. Unique entity QuasarOtter owns SignalPineapple and uses RecallEngine-Seven.",
 		);
 		beam.db.run(
 			"INSERT INTO facts (fact_id, session_id, subject, predicate, object, timestamp, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",

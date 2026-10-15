@@ -2,18 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { loadSkillsFromDir } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
-import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import { readMcpResource } from "@oh-my-pi/pi-coding-agent/internal-urls/mcp-protocol";
-import { parseInternalUrl } from "@oh-my-pi/pi-coding-agent/internal-urls/parse";
-import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
-import type { MCPResource, MCPResourceReadResult, MCPResourceTemplate } from "@oh-my-pi/pi-coding-agent/mcp/types";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
-import type { ReadToolDetails } from "@oh-my-pi/pi-tui/tools/read";
-import { withTimeout } from "@oh-my-pi/pi-utils";
+import type { AgentToolResult } from "@oh-my-soup/pi-agent-core";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { loadSkillsFromDir } from "@oh-my-soup/pi-coding-agent/extensibility/skills";
+import { InternalUrlRouter } from "@oh-my-soup/pi-coding-agent/internal-urls";
+import { readMcpResource } from "@oh-my-soup/pi-coding-agent/internal-urls/mcp-protocol";
+import { parseInternalUrl } from "@oh-my-soup/pi-coding-agent/internal-urls/parse";
+import { MCPManager } from "@oh-my-soup/pi-coding-agent/mcp/manager";
+import type { MCPResource, MCPResourceReadResult, MCPResourceTemplate } from "@oh-my-soup/pi-coding-agent/mcp/types";
+import type { ToolSession } from "@oh-my-soup/pi-coding-agent/tools";
+import { ReadTool } from "@oh-my-soup/pi-coding-agent/tools/read";
+import type { ReadToolDetails } from "@oh-my-soup/pi-tui/tools/read";
+import { withTimeout } from "@oh-my-soup/pi-utils";
 
 function createMockManager(opts: {
 	servers?: string[];
@@ -650,7 +650,7 @@ describe("skill:// falls back to an MCP resource with the same URI", () => {
 	});
 
 	it("prefers a loaded local skill over an MCP resource with the same URI", async () => {
-		const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-skill-mcp-fallback-"));
+		const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "oms-skill-mcp-fallback-"));
 		tmpDirs.push(tmp);
 		const skillDir = path.join(tmp, "figma");
 		await fs.mkdir(path.join(skillDir, "figma-use"), { recursive: true });
@@ -755,7 +755,7 @@ describe("skill:// falls back to an MCP resource with the same URI", () => {
 		vi.useFakeTimers();
 		try {
 			const started = Promise.withResolvers<void>();
-			// `omp read` with a zero startup window: the loader awaits a handshake that never settles.
+			// `oms read` with a zero startup window: the loader awaits a handshake that never settles.
 			MCPManager.setDeferredInstance(() => {
 				started.resolve();
 				return Promise.withResolvers<MCPManager>().promise;

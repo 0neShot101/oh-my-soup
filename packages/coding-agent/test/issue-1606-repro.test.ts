@@ -8,18 +8,18 @@
  * in the parent's address space and crashed the CLI on exit.
  *
  * The fix relocates the worker to its own process: `title-client.ts` spawns
- * `process.execPath … __omp_worker_tiny_inference` (detached, owning a
+ * `process.execPath … __oms_worker_tiny_inference` (detached, owning a
  * per-model IPC endpoint), `cli.ts` dispatches that flag into `runTinyWorker`,
- * and the omp process only ever holds a connection to it — the native finalizer never
- * runs in an omp address space. These tests pin that contract so a future
+ * and the oms process only ever holds a connection to it — the native finalizer never
+ * runs in an oms address space. These tests pin that contract so a future
  * refactor cannot quietly land the original crash again.
  */
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { WORKER_CONNECTION_CLOSED } from "@oh-my-pi/pi-coding-agent/subprocess/shared-worker";
-import { connectTinyWorker, onnxLaunch, smokeTestTinyTitleWorker } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
+import { WORKER_CONNECTION_CLOSED } from "@oh-my-soup/pi-coding-agent/subprocess/shared-worker";
+import { connectTinyWorker, onnxLaunch, smokeTestTinyTitleWorker } from "@oh-my-soup/pi-coding-agent/tiny/title-client";
 
 describe("issue #1606 — tiny model lives in an isolated process", () => {
 	it("ping/pongs through the spawned worker process and tears it down cleanly", async () => {
@@ -32,7 +32,7 @@ describe("issue #1606 — tiny model lives in an isolated process", () => {
 		// fault callers via the `onError` channel — an earlier fix swallowed
 		// unexpected exits and left `TinyTitleClient.#pending` hanging forever —
 		// while a `terminate()` we issued ourselves MUST NOT.
-		const runtimeDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-tiny-1606-"));
+		const runtimeDir = await fs.mkdtemp(path.join(os.tmpdir(), "oms-tiny-1606-"));
 		try {
 			const launch = onnxLaunch("lfm2.5-230m", {});
 			const quiet = await connectTinyWorker(launch, "lfm2.5-230m", runtimeDir);

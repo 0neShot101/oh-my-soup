@@ -1,6 +1,6 @@
 import * as http2 from "node:http2";
-import { type } from "@oh-my-pi/omptype";
-import { slugify } from "@oh-my-pi/pi-utils";
+import { type } from "@oh-my-soup/omstype";
+import { slugify } from "@oh-my-soup/pi-utils";
 import { collapseVariants, type EffortVariantFamily, reviewedVariantFamilyId } from "../compat/collapse";
 import { compareRevision, parseRevision } from "../compat/revision";
 import { resolveCatalogAxes, resolveModelPolicy } from "../compat/resolve";
@@ -557,7 +557,7 @@ function normalizeRichCursorModels(
 	for (const details of models) {
 		const baseId = details.name.trim();
 		if (!baseId || details.supportsAgent === false || details.isChatOnly === true) continue;
-		// OMP always sends Cursor's zero-data-retention header. Advertising a
+		// OMS always sends Cursor's zero-data-retention header. Advertising a
 		// retention-required model would expose a route every invocation rejects.
 		if (details.requiresDataRetention === true) continue;
 

@@ -1,18 +1,18 @@
 /**
- * Identity of the omp build running in this process, stamped into session files so a
+ * Identity of the oms build running in this process, stamped into session files so a
  * transcript records which code produced each entry.
  *
  * Installed builds (compiled binary, package install) record only their version. A source
  * checkout records the commit, branch, and a hash of its uncommitted diff, because its
  * version string stays the same across every unreleased commit and local edit.
  */
-import type { VcsGitRepo } from "@oh-my-pi/pi-natives";
-import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { $env, isCompiledBinary, isRecord, logger, VERSION } from "@oh-my-pi/pi-utils";
+import type { VcsGitRepo } from "@oh-my-soup/pi-natives";
+import * as vcs from "@oh-my-soup/pi-natives/vcs";
+import { $env, isCompiledBinary, isRecord, logger, VERSION } from "@oh-my-soup/pi-utils";
 import type { SessionEntry } from "./session-entries";
 
 export interface RuntimeIdentity {
-	/** omp package version. */
+	/** oms package version. */
 	version: string;
 	/** Source checkout commit; absent for installed builds. */
 	commit?: string;
@@ -23,7 +23,7 @@ export interface RuntimeIdentity {
 	 * `unknown` when the diff could not be read (too large) or has not been read yet.
 	 */
 	diff?: string;
-	/** Free-form name from `OMP_BUILD_LABEL`. */
+	/** Free-form name from `OMS_BUILD_LABEL`. */
 	label?: string;
 }
 
@@ -63,7 +63,7 @@ async function readUncommittedDiff(repo: VcsGitRepo, identity: RuntimeIdentity):
  */
 function resolveRuntimeIdentity(): RuntimeIdentity {
 	if (current) return current;
-	const label = $env.OMP_BUILD_LABEL?.replace(/\s+/g, " ").trim().slice(0, MAX_LABEL_LENGTH);
+	const label = $env.OMS_BUILD_LABEL?.replace(/\s+/g, " ").trim().slice(0, MAX_LABEL_LENGTH);
 	current = { version: VERSION, label: label || undefined };
 	try {
 		const repo = findSourceCheckout();

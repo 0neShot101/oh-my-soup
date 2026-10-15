@@ -3,15 +3,15 @@
  *
  * Handles /ssh subcommands for managing SSH host configurations.
  */
-import { getProjectDir, getSSHConfigPath } from "@oh-my-pi/pi-utils";
-import { Text } from "@oh-my-pi/pi-tui";
-import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
+import { getProjectDir, getSSHConfigPath } from "@oh-my-soup/pi-utils";
+import { Text } from "@oh-my-soup/pi-tui";
+import { shortenPath } from "@oh-my-soup/pi-tui/render/render-utils";
 import { reset as resetCapabilities } from "../../capability";
 import { type SSHHost, sshCapability } from "../../capability/ssh";
 import { loadCapability } from "../../discovery";
 import { addSSHHost, readSSHConfigFile, removeSSHHost, type SSHHostConfig } from "../../ssh/config-writer";
 import { parseCommandArgs } from "../../utils/command-args";
-import { theme } from "@oh-my-pi/pi-tui/theme";
+import { theme } from "@oh-my-soup/pi-tui/theme";
 import type { InteractiveModeContext } from "../types";
 import {
 	groupBySource,

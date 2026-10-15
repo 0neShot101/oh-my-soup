@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
+import type { FetchImpl } from "@oh-my-soup/pi-ai/types";
 import { githubCopilotUsageProvider } from "../src/usage/github-copilot";
 
 /** One billing usage item; `unitType` is the field the fix reads. */

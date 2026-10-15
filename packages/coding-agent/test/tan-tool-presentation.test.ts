@@ -1,11 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { type } from "@oh-my-pi/omptype";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { type CustomTool, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { createSubagentSettings } from "@oh-my-pi/pi-coding-agent/task/executor";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { type } from "@oh-my-soup/omstype";
+import { getBundledModel } from "@oh-my-soup/pi-catalog/models";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { type CustomTool, createAgentSession } from "@oh-my-soup/pi-coding-agent/sdk";
+import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
+import { createSubagentSettings } from "@oh-my-soup/pi-coding-agent/task/executor";
+import { TempDir } from "@oh-my-soup/pi-utils";
 
 const mcpTool: CustomTool = {
 	name: "mcp__fixture_probe",
@@ -22,7 +22,7 @@ const mcpTool: CustomTool = {
 describe("/tan prompt-cache tool presentation", () => {
 	for (const xdev of [true, false]) {
 		it(`preserves the parent's request tools with xd:// ${xdev ? "enabled" : "disabled"}`, async () => {
-			using dir = TempDir.createSync("@omp-tan-tools-");
+			using dir = TempDir.createSync("@oms-tan-tools-");
 			const cwd = dir.path();
 			const settings = Settings.isolated({ "tools.xdev": xdev, "marketplace.autoUpdate": "off" });
 			const base = {

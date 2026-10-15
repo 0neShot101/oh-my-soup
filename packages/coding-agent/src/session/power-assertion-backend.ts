@@ -1,5 +1,5 @@
-import { logger } from "@oh-my-pi/pi-utils";
-import { PowerAssertion, type PowerAssertionOptions } from "@oh-my-pi/pi-natives";
+import { logger } from "@oh-my-soup/pi-utils";
+import { PowerAssertion, type PowerAssertionOptions } from "@oh-my-soup/pi-natives";
 
 /**
  * Code prefix `PowerAssertion.start` puts on its error message on Linux when the

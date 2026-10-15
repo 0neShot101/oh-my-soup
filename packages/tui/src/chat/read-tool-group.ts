@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, Usage } from "@oh-my-soup/pi-ai";
 import { type Component } from "../tui";
 import { Container } from "../tui";
 import { Text } from "../components/text";
@@ -22,8 +22,8 @@ import { canonicalizeMessage } from "./thinking-display";
 import { internalUrlSchemeSpec, splitUrlScheme } from "../tools/url-scheme-host";
 import type { ToolExecutionHandle } from "./tool-execution";
 import { formatUsageRow } from "../overlays/usage-row";
-import { formatCount } from "@oh-my-pi/pi-utils";
-import type { TspCardStatus, TspSpan, TspText } from "@oh-my-pi/pi-wire";
+import { formatCount } from "@oh-my-soup/pi-utils";
+import type { TspCardStatus, TspSpan, TspText } from "@oh-my-soup/pi-wire";
 import type { NativeToolHead } from "../tools/renderer";
 import { card, code, keyed, md, node, span, text, withHidden } from "../native/describe";
 import {
@@ -592,7 +592,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	/**
 	 * The read run as one inline `tool` on terminals that list the kind, else
-	 * the fallback: a bare `card` (role `omp.tool.read`) with `Read <path>` or
+	 * the fallback: a bare `card` (role `oms.tool.read`) with `Read <path>` or
 	 * `Read (N)` in the head, a `list` of path items (status tone, link,
 	 * correction and conflict detail, nested usage) and a clamped preview per
 	 * read when content previews are on.
@@ -607,7 +607,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	/**
 	 * The data-first read (§7.3 read, read group, read error): one inline
-	 * `tool` (role `omp.tool.read`). One file: `Read path:13-36`, a failure's
+	 * `tool` (role `oms.tool.read`). One file: `Read path:13-36`, a failure's
 	 * message in the head. Several: `Read 3 files` over one 22px row per file
 	 * (glyph, dim dir, strong name, range). Each content preview is numbered
 	 * code or rendered Markdown, clamped per file while collapsed.
@@ -665,7 +665,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			"tool",
 			{
 				...head,
-				role: "omp.tool.read",
+				role: "oms.tool.read",
 				name: "read",
 				title: "Read",
 				status,
@@ -758,7 +758,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const hidden = lines.length - shown;
 		if (hidden > 0) {
 			blocks.push(
-				keyed(text([span(formatCount("more line", hidden), "muted")], { role: "omp.tool.stats" }), "more"),
+				keyed(text([span(formatCount("more line", hidden), "muted")], { role: "oms.tool.stats" }), "more"),
 			);
 		}
 		return blocks;
@@ -817,7 +817,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 				node(
 					"card",
 					{
-						role: "omp.tool.read.preview",
+						role: "oms.tool.read.preview",
 						tone: READ_STATUS_TONE[entry.status],
 						head: pathValue ? [title, span(" "), span(pathValue, "path")] : [title],
 						collapsible: true,
@@ -842,7 +842,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		}
 		return card(
 			{
-				role: "omp.tool.read",
+				role: "oms.tool.read",
 				// A group is plain rows: the per-file previews are the only frames.
 				variant: "bare",
 				status,
@@ -883,7 +883,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	#nativeUsage(usage: ReadUsageRow, key: string): NativeNode {
 		const line = formatUsageRow(usage.usage, usage.durationMs, usage.ttftMs, usage.timestamp, usage.turnElapsedMs);
-		return text([span(plainText(line), "dim")], { wrap: "word", key, role: "omp.usage" });
+		return text([span(plainText(line), "dim")], { wrap: "word", key, role: "oms.usage" });
 	}
 
 	#updateDisplay(): void {

@@ -1,24 +1,24 @@
 import { afterEach, beforeAll, describe, expect, it, spyOn, vi } from "bun:test";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
-import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { ModelRegistry } from "@oh-my-soup/pi-coding-agent/config/model-registry";
+import { ExtensionRuntime } from "@oh-my-soup/pi-coding-agent/extensibility/extensions/loader";
+import { ExtensionRunner } from "@oh-my-soup/pi-coding-agent/extensibility/extensions/runner";
+import { AuthStorage } from "@oh-my-soup/pi-coding-agent/session/auth-storage";
+import type { ExtensionContext } from "@oh-my-soup/pi-coding-agent/extensibility/extensions/types";
+import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage } from "@oh-my-soup/pi-agent-core";
 import {
 	type AnnotationContext,
 	createAnnotationsAPI,
-} from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/bundled/annotate/api";
-import * as fullscreen from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/bundled/annotate/fullscreen";
-import * as review from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/bundled/review";
-import { createResolvedReviewTarget } from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/bundled/review/target";
-import type { SendUserMessageOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import type { SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+} from "@oh-my-soup/pi-coding-agent/extensibility/custom-commands/bundled/annotate/api";
+import * as fullscreen from "@oh-my-soup/pi-coding-agent/extensibility/custom-commands/bundled/annotate/fullscreen";
+import * as review from "@oh-my-soup/pi-coding-agent/extensibility/custom-commands/bundled/review";
+import { createResolvedReviewTarget } from "@oh-my-soup/pi-coding-agent/extensibility/custom-commands/bundled/review/target";
+import type { SendUserMessageOptions } from "@oh-my-soup/pi-coding-agent/session/agent-session";
+import type { SessionMessageEntry } from "@oh-my-soup/pi-coding-agent/session/session-entries";
+import { initTheme } from "@oh-my-soup/pi-tui/theme";
 
 const DIFF = `diff --git a/src/value.ts b/src/value.ts
 --- a/src/value.ts

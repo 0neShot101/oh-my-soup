@@ -1,11 +1,11 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 
 import { stripVTControlCharacters } from "node:util";
-import { HookInputComponent } from "@oh-my-pi/pi-tui/overlays/hook-input";
-import type { DescribeContext, NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
-import type { TUI } from "@oh-my-pi/pi-tui";
-import type { TspSpan } from "@oh-my-pi/pi-wire";
+import { HookInputComponent } from "@oh-my-soup/pi-tui/overlays/hook-input";
+import type { DescribeContext, NativeChild, NativeNode } from "@oh-my-soup/pi-tui/native/node";
+import { getThemeByName, setThemeInstance } from "@oh-my-soup/pi-tui/theme";
+import type { TUI } from "@oh-my-soup/pi-tui";
+import type { TspSpan } from "@oh-my-soup/pi-wire";
 
 const CX: DescribeContext = { cols: 100, reduceMotion: false, dark: true, supports: () => true, feature: () => true };
 
@@ -128,7 +128,7 @@ describe("HookInputComponent native sheet", () => {
 		const onSubmit = vi.fn();
 		const onCancel = vi.fn();
 		const component = new HookInputComponent("Search pull requests", undefined, onSubmit, onCancel);
-		const buttons = nodes(component.describe(CX)).filter(node => node.p?.role === "omp.btn");
+		const buttons = nodes(component.describe(CX)).filter(node => node.p?.role === "oms.btn");
 		expect(buttons.map(button => [button.key, button.p?.title])).toEqual([
 			["cancel", "Cancel  esc"],
 			["submit", "Submit  ⏎"],
@@ -154,8 +154,8 @@ describe("HookInputComponent native sheet", () => {
 			vi.fn(),
 		);
 		const all = nodes(component.describe(CX));
-		const title = all.find(node => node.p?.role === "omp.hook-input.title");
-		const detail = all.find(node => node.p?.role === "omp.hook-input.detail");
+		const title = all.find(node => node.p?.role === "oms.hook-input.title");
+		const detail = all.find(node => node.p?.role === "oms.hook-input.detail");
 		expect(title && spans(title).map(s => s.t)).toEqual(["Search pull requests"]);
 		expect(detail && spans(detail).map(s => s.t)).toEqual(["Title, author or #123"]);
 		expect(all.find(node => node.k === "input")?.p).toMatchObject({ placeholder: "e.g. #482" });
@@ -173,7 +173,7 @@ describe("HookInputComponent native sheet", () => {
 		component.handleInput("x");
 		component.handleInput("\n");
 		const all = nodes(component.describe(CX));
-		expect(all.find(node => node.p?.role === "omp.hook-input.field")?.p).toMatchObject({ tone: "error" });
+		expect(all.find(node => node.p?.role === "oms.hook-input.field")?.p).toMatchObject({ tone: "error" });
 		expect(all.some(node => spans(node).some(s => s.t === `"x" isn't a number` && s.s === "error"))).toBe(true);
 		expect(all.find(node => node.k === "input")?.p).toMatchObject({ text: "x" });
 	});

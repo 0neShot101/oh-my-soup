@@ -2,8 +2,8 @@ import type { ToolRenderer } from "./renderer";
 
 import type { Component } from "../index";
 import { Text } from "../index";
-import { sanitizeText } from "@oh-my-pi/pi-utils";
-import chalk from "@oh-my-pi/pi-utils/chalk";
+import { sanitizeText } from "@oh-my-soup/pi-utils";
+import chalk from "@oh-my-soup/pi-utils/chalk";
 import type { RenderResultOptions } from "./renderer";
 import type { Theme } from "../theme/theme";
 
@@ -12,7 +12,7 @@ import { wrapTreeLine } from "../render/hanging-wrap";
 import { framedToolCard } from "../render/tool-card";
 
 import { formatErrorDetail, formatMoreItems, PREVIEW_LIMITS, pluralize, replaceTabs } from "../render/render-utils";
-import type { TspChecklistItem, TspChecklistPhase } from "@oh-my-pi/pi-wire";
+import type { TspChecklistItem, TspChecklistPhase } from "@oh-my-soup/pi-wire";
 import { node } from "../native/describe";
 import { OwnerMemo } from "../native/memo";
 import { errorText, noteText, resultText } from "./native-view";
@@ -464,7 +464,7 @@ export function setActiveTodoDescriptionsProvider(provider: () => readonly strin
 	activeTodoDescriptionsProvider = provider;
 }
 
-/** omp todo status → checklist item status (§7.5). */
+/** oms todo status → checklist item status (§7.5). */
 const CHECKLIST_STATUS: Record<TodoStatus, TspChecklistItem["status"]> = {
 	pending: "pending",
 	in_progress: "active",

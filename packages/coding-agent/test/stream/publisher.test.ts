@@ -2,8 +2,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { IpcConnection, IpcServer } from "@oh-my-pi/pi-natives";
-import { TUI, type TuiPaint } from "@oh-my-pi/pi-tui";
+import { IpcConnection, IpcServer } from "@oh-my-soup/pi-natives";
+import { TUI, type TuiPaint } from "@oh-my-soup/pi-tui";
 import { VirtualTerminal } from "../../../tui/test/virtual-terminal";
 import { streamSocketEndpoint } from "../../src/stream/paths";
 import { StreamPublisher } from "../../src/stream/publisher";
@@ -18,7 +18,7 @@ afterEach(async () => {
 
 describe("StreamPublisher", () => {
 	it("publishes viewport deltas and ordered resets, then detaches when the streamer closes", async () => {
-		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-stream-publisher-"));
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "oms-stream-publisher-"));
 		const endpoint = await streamSocketEndpoint(cwd);
 		const frames: StreamSessionFrame[] = [];
 		const frameWaiters: Array<{ count: number; resolve: () => void }> = [];

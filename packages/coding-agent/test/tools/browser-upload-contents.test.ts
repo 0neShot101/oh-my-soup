@@ -2,20 +2,20 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { disposeAllVmContexts } from "@oh-my-pi/pi-coding-agent/eval/js/context-manager";
-import { createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
-import { findFreeCdpPort, waitForCdp } from "@oh-my-pi/pi-coding-agent/tools/browser/attach";
-import { prepareElementUpload } from "@oh-my-pi/pi-coding-agent/tools/browser/interactions";
-import { ensureChromiumExecutable } from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
-import { releaseAllTabs } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { disposeAllVmContexts } from "@oh-my-soup/pi-coding-agent/eval/js/context-manager";
+import { createBrowserPrelude } from "@oh-my-soup/pi-coding-agent/tools/browser";
+import { findFreeCdpPort, waitForCdp } from "@oh-my-soup/pi-coding-agent/tools/browser/attach";
+import { prepareElementUpload } from "@oh-my-soup/pi-coding-agent/tools/browser/interactions";
+import { ensureChromiumExecutable } from "@oh-my-soup/pi-coding-agent/tools/browser/launch";
+import { releaseAllTabs } from "@oh-my-soup/pi-coding-agent/tools/browser/tab-supervisor";
 import {
 	openUploadSource,
 	sweepUploadStaging,
 	type UploadRoute,
 	UploadStaging,
-} from "@oh-my-pi/pi-coding-agent/tools/browser/upload-files";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
+} from "@oh-my-soup/pi-coding-agent/tools/browser/upload-files";
+import type { ToolSession } from "@oh-my-soup/pi-coding-agent/tools/index";
 import type { ElementHandle, Page } from "puppeteer-core";
 import { rejectionOf } from "../helpers/rejection";
 import { chromiumAvailable } from "./chromium-probe";
@@ -96,7 +96,7 @@ interface CdpProxy {
 
 const LARGE_MESSAGE_BYTES = 1024 * 1024;
 
-/** Forward CDP to Chrome, applying `options` to what omp sends. */
+/** Forward CDP to Chrome, applying `options` to what oms sends. */
 function startCdpProxy(chromePort: number, options: ProxyOptions): CdpProxy {
 	const proxy = { port: 0, filePathCalls: 0, stop: () => {} };
 	const server = Bun.serve<ProxiedSocket>({
@@ -175,13 +175,13 @@ function routeProxy(route: UploadRoute, options: ProxyOptions = {}): ProxyOption
 }
 
 /**
- * Launch a Chrome omp did not start, open a fixture page in it over `app.cdp_url` through a CDP proxy, and run cells
+ * Launch a Chrome oms did not start, open a fixture page in it over `app.cdp_url` through a CDP proxy, and run cells
  * there.
  */
 async function openConnectedTab(toolCallId: string, options: { page?: string; proxy?: ProxyOptions } = {}) {
 	const exe = await ensureChromiumExecutable();
 	if (!exe) throw new Error("Expected a Chromium executable");
-	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-upload-connected-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "oms-upload-connected-"));
 	const port = await findFreeCdpPort();
 	const child = Bun.spawn(
 		[
@@ -255,7 +255,7 @@ const readDigests = `return await tab.evaluate(() => Promise.all([
 })));`;
 
 beforeAll(async () => {
-	tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-browser-upload-"));
+	tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "oms-browser-upload-"));
 	site = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -274,17 +274,17 @@ afterAll(async () => {
 	if (tempDir) await fs.rm(tempDir, { recursive: true, force: true });
 	// Connected tabs leave their staging folders for the sweep; this process made them.
 	for (const name of await stagingFolders()) {
-		if (name.startsWith(`omp-uploads-${process.pid}-`))
+		if (name.startsWith(`oms-uploads-${process.pid}-`))
 			await fs.rm(path.join(os.tmpdir(), name), { recursive: true, force: true });
 	}
 });
 
-/** omp's upload staging folders now in the temp directory. */
+/** oms's upload staging folders now in the temp directory. */
 async function stagingFolders(): Promise<Set<string>> {
-	return new Set((await fs.readdir(os.tmpdir())).filter(name => name.startsWith("omp-uploads-")));
+	return new Set((await fs.readdir(os.tmpdir())).filter(name => name.startsWith("oms-uploads-")));
 }
 
-describe.skipIf(!CHROMIUM_AVAILABLE)("browser uploadFile into a browser omp did not launch", () => {
+describe.skipIf(!CHROMIUM_AVAILABLE)("browser uploadFile into a browser oms did not launch", () => {
 	describe.each(["paths", "contents"] as const)("on the %s route", route => {
 		test("hands over each file as the user's own pick would, readable after the original is gone", async () => {
 			const before = await stagingFolders();
@@ -329,14 +329,14 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser uploadFile into a browser omp did 
 				// The route check, then one call per path upload, versus only the refused route check.
 				expect(proxy.filePathCalls).toBe(route === "paths" ? 6 : 1);
 				created = [...(await stagingFolders())].filter(
-					name => !before.has(name) && name.startsWith(`omp-uploads-${process.pid}-`),
+					name => !before.has(name) && name.startsWith(`oms-uploads-${process.pid}-`),
 				);
 				// One folder for the tab's copies; the contents route copies nothing, so it makes none.
 				expect(created).toHaveLength(route === "paths" ? 1 : 0);
 			} finally {
 				await close();
 			}
-			// A page omp only attached to can outlive omp's tab, so its staged copies stay for the sweep.
+			// A page oms only attached to can outlive oms's tab, so its staged copies stay for the sweep.
 			const left = await stagingFolders();
 			expect(created.filter(name => left.has(name))).toEqual(created);
 		}, 60_000);
@@ -483,7 +483,7 @@ ${collectErrors(`() => tab.uploadFile("#direct", "slow.bin"),`).replace("return 
 	}, 60_000);
 });
 
-describe.skipIf(!CHROMIUM_AVAILABLE)("browser uploadFile into a browser omp launched", () => {
+describe.skipIf(!CHROMIUM_AVAILABLE)("browser uploadFile into a browser oms launched", () => {
 	test("keeps a tab's staged copies when it moves to a new worker, and removes them with the page", async () => {
 		const session = makeSession();
 		const prelude = createBrowserPrelude(session);
@@ -513,21 +513,21 @@ return "done";`);
 		} finally {
 			await prelude.invoke({ action: "close", name }, context);
 		}
-		// omp closed the page it launched, the last reader of the copies.
+		// oms closed the page it launched, the last reader of the copies.
 		expect([...(await stagingFolders())].filter(folder => !before.has(folder))).toEqual([]);
 	}, 60_000);
 });
 
-test("sweeps a staging folder a day after its last upload unless an open tab or a running omp owns it", async () => {
+test("sweeps a staging folder a day after its last upload unless an open tab or a running oms owns it", async () => {
 	const now = Date.now();
 	const dayAgo = new Date(now - 25 * 60 * 60 * 1000);
 	// No process has a pid this large; the parent of this test process is running.
 	const folders = {
-		open: [`omp-uploads-${process.pid}-sweep-open`, dayAgo],
-		recent: [`omp-uploads-${process.pid}-sweep-recent`, new Date(now)],
-		closed: [`omp-uploads-${process.pid}-sweep-closed`, dayAgo],
-		orphaned: [`omp-uploads-99999999-sweep-orphaned`, dayAgo],
-		otherOmp: [`omp-uploads-${process.ppid}-sweep-other`, dayAgo],
+		open: [`oms-uploads-${process.pid}-sweep-open`, dayAgo],
+		recent: [`oms-uploads-${process.pid}-sweep-recent`, new Date(now)],
+		closed: [`oms-uploads-${process.pid}-sweep-closed`, dayAgo],
+		orphaned: [`oms-uploads-99999999-sweep-orphaned`, dayAgo],
+		otherOmp: [`oms-uploads-${process.ppid}-sweep-other`, dayAgo],
 	} as const;
 	for (const [name, modified] of Object.values(folders)) {
 		const folder = path.join(os.tmpdir(), name);

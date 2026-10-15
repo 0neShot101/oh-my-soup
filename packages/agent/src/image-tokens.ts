@@ -1,11 +1,11 @@
-import type { ImageContent } from "@oh-my-pi/pi-ai";
+import type { ImageContent } from "@oh-my-soup/pi-ai";
 import {
 	type ImageSize,
 	type ImageTokenization,
 	imageTokens,
 	resolveImageTokenization,
-} from "@oh-my-pi/pi-catalog/compat/image-tokenization";
-import { parseImageMetadata } from "@oh-my-pi/pi-utils";
+} from "@oh-my-soup/pi-catalog/compat/image-tokenization";
+import { parseImageMetadata } from "@oh-my-soup/pi-utils";
 
 /**
  * Dimension-based image token estimates shared by the local context counter

@@ -1,5 +1,5 @@
-import type { Model } from "@oh-my-pi/pi-ai";
-import { modelKind } from "@oh-my-pi/pi-catalog/types";
+import type { Model } from "@oh-my-soup/pi-ai";
+import { modelKind } from "@oh-my-soup/pi-catalog/types";
 import type { SgrMouseEvent } from "../../mouse";
 import { Text } from "../../components/text";
 import { WizardStep } from "../../components/wizard-step";
@@ -107,7 +107,7 @@ class ModelSceneController implements SetupSceneController {
 			} else {
 				intro = text([span(`Type to search. ${enter} saves the highlighted model as your default.`, "muted")]);
 			}
-			return col([{ ...intro, key: "intro" }, this.#browser], { gap: "sm", role: "omp.setup.model" });
+			return col([{ ...intro, key: "intro" }, this.#browser], { gap: "sm", role: "oms.setup.model" });
 		});
 	}
 

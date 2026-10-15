@@ -5,8 +5,8 @@
  * {@link buildJobTree}) beside the selected one's status, command, facts
  * (cwd, live pids, exit code, artifact) and live output.
  */
-import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
-import { formatDuration } from "@oh-my-pi/pi-utils";
+import type { TspSpan, TspTone } from "@oh-my-soup/pi-wire";
+import { formatDuration } from "@oh-my-soup/pi-utils";
 import type { Component } from "../tui";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
 import { matchesKey } from "../keys";
@@ -116,7 +116,7 @@ const FALLBACK_TAIL_LINES = 8;
  */
 export class JobsSheet implements Component {
 	readonly nativeOverlay = {
-		role: "omp.overlay.jobs",
+		role: "oms.overlay.jobs",
 		size: "lg",
 		anchor: "center",
 		head: "Background jobs",
@@ -158,9 +158,9 @@ export class JobsSheet implements Component {
 			? col([
 					node(
 						"row",
-						{ role: "omp.jobs.split" },
+						{ role: "oms.jobs.split" },
 						[
-							node("col", { role: "omp.jobs.master" }, [describeJobList(rows, selected, now)], "master"),
+							node("col", { role: "oms.jobs.master" }, [describeJobList(rows, selected, now)], "master"),
 							describeDetail(selected, detail, now, cancellable),
 						],
 						"split",
@@ -305,7 +305,7 @@ function describeJobList(rows: readonly JobTreeRow<JobsPanelJob>[], selected: Jo
 		return node(
 			"text",
 			{
-				role: "omp.jobs.group",
+				role: "oms.jobs.group",
 				spans: compact([guide !== "" && span(guide, "mono dim"), span(entry.agent.id)]),
 				wrap: "none",
 			},
@@ -345,19 +345,19 @@ function describeSummary(jobs: readonly JobsPanelJob[]): NativeNode {
 		running > 0 && `${running} running`,
 		jobs.length > running && `${jobs.length - running} recent`,
 	]);
-	return node("text", { role: "omp.jobs.summary", text: parts.join(" · "), wrap: "none" }, undefined, "summary");
+	return node("text", { role: "oms.jobs.summary", text: parts.join(" · "), wrap: "none" }, undefined, "summary");
 }
 
 /** No jobs: what the sheet is for, in place of the split. */
 function describeEmpty(): NativeNode {
 	return node(
 		"col",
-		{ role: "omp.jobs.empty", align: "center" },
+		{ role: "oms.jobs.empty", align: "center" },
 		[
 			node("icon", { name: "jobs" }),
-			text("No background jobs", { role: "omp.jobs.empty.title" }),
+			text("No background jobs", { role: "oms.jobs.empty.title" }),
 			text("Commands and subagent tasks started in the background show up here while they run.", {
-				role: "omp.jobs.empty.note",
+				role: "oms.jobs.empty.note",
 				wrap: "word",
 			}),
 		],
@@ -392,7 +392,7 @@ function describeDetail(
 		row(
 			compact<NativeChild>([
 				text([STATUS_GLYPH[job.status], span(` ${STATUS_LABEL[job.status]}`)], {
-					role: "omp.jobs.state",
+					role: "oms.jobs.state",
 					tone: STATUS_TONE[job.status],
 					wrap: "none",
 				}),
@@ -400,30 +400,30 @@ function describeDetail(
 					age,
 					...(settled ? { stopped: age } : {}),
 					format: "short",
-					role: "omp.jobs.age",
+					role: "oms.jobs.age",
 					title: settled ? "Ran for" : "Running for",
 				}),
-				text([span(`${job.type} · ${job.id}`, "mono")], { role: "omp.jobs.id", wrap: "none", truncate: "end" }),
+				text([span(`${job.type} · ${job.id}`, "mono")], { role: "oms.jobs.id", wrap: "none", truncate: "end" }),
 				node("spacer", { grow: 1 }),
 				cancellable && !settled && actionButton("Cancel job", "cancel", { keys: "x", tone: "error" }),
 			]),
-			{ role: "omp.jobs.status", gap: "sm", align: "center" },
+			{ role: "oms.jobs.status", gap: "sm", align: "center" },
 		),
 		command
-			? code(command, { lang: "bash", wrap: true, preview: { lines: 4 }, role: "omp.jobs.command" })
-			: text(job.label, { role: "omp.jobs.title", wrap: "word" }),
-		facts.length > 0 && node("kv", { items: facts, role: "omp.jobs.facts" }),
+			? code(command, { lang: "bash", wrap: true, preview: { lines: 4 }, role: "oms.jobs.command" })
+			: text(job.label, { role: "oms.jobs.title", wrap: "word" }),
+		facts.length > 0 && node("kv", { items: facts, role: "oms.jobs.facts" }),
 		node(
 			"col",
-			{ role: "omp.jobs.out", gap: "sm" },
+			{ role: "oms.jobs.out", gap: "sm" },
 			[
-				text("Output", { role: "omp.jobs.label" }),
+				text("Output", { role: "oms.jobs.label" }),
 				detail?.output
-					? ansi(detail.output, { follow: !settled, role: "omp.jobs.output", max: { h: "16lines" } })
-					: text(settled ? "No output" : "No output yet", { role: "omp.jobs.nooutput" }),
+					? ansi(detail.output, { follow: !settled, role: "oms.jobs.output", max: { h: "16lines" } })
+					: text(settled ? "No output" : "No output yet", { role: "oms.jobs.nooutput" }),
 			],
 			"out",
 		),
 	]);
-	return node("col", { role: "omp.jobs.detail" }, children, stableKey(job.id));
+	return node("col", { role: "oms.jobs.detail" }, children, stableKey(job.id));
 }

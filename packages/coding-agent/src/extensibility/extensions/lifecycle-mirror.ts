@@ -25,8 +25,8 @@
  * `awaitingAsyncWork: true`. Older hosts omit these flags and such settles
  * map without them, matching the pre-flag notification.
  */
-import { logger } from "@oh-my-pi/pi-utils";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { logger } from "@oh-my-soup/pi-utils";
+import type { AgentMessage } from "@oh-my-soup/pi-agent-core";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import type { ExtensionRunner } from "./runner";
 import type {

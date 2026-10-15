@@ -1,12 +1,12 @@
 /**
  * Cross-process fence around spending one upstream account's saved reset.
- * A session's automatic executor and `omp usage reset` take the same lock file
+ * A session's automatic executor and `oms usage reset` take the same lock file
  * beside the agent database and leave a marker in it, so another process on
  * that database neither spends while an attempt is in flight nor right after one.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDbPath, isEnoent, withFileLock } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, isEnoent, withFileLock } from "@oh-my-soup/pi-utils";
 import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome } from "./auth-storage";
 import { ATTEMPT_COOLDOWN_MS } from "./codex-auto-reset";
 

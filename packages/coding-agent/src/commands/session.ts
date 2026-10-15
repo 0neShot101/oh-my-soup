@@ -1,14 +1,14 @@
 /**
  * Hand a session to another machine.
  *
- * `omp session pack <session> <out.tar>` writes a self-contained archive,
- * `omp session unpack <archive.tar> --cwd <dir>` lands it in `<dir>`'s session
+ * `oms session pack <session> <out.tar>` writes a self-contained archive,
+ * `oms session unpack <archive.tar> --cwd <dir>` lands it in `<dir>`'s session
  * directory (printing the session file path as the only stdout line), and
- * `omp session moved <session> --to <label>` marks the copy left behind stale
+ * `oms session moved <session> --to <label>` marks the copy left behind stale
  * so resuming it forks instead of continuing it.
  */
-import chalk from "@oh-my-pi/pi-utils/chalk";
-import { Args, CliUsageError, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import chalk from "@oh-my-soup/pi-utils/chalk";
+import { Args, CliUsageError, Command, Flags } from "@oh-my-soup/pi-utils/cli";
 import { sessionHelp as commandHelp } from "../cli/command-help";
 import { resolveSessionFileArg } from "../cli/session-arg";
 import { SessionMoveRefusedError } from "../session/session-manager";
@@ -24,9 +24,9 @@ const ACTIONS = ["pack", "unpack", "moved"] as const;
 type SessionAction = (typeof ACTIONS)[number];
 
 const USAGE: Record<SessionAction, string> = {
-	pack: "omp session pack <session> <out.tar>",
-	unpack: "omp session unpack <archive.tar> --cwd <dir>",
-	moved: "omp session moved <session> --to <label>",
+	pack: "oms session pack <session> <out.tar>",
+	unpack: "oms session unpack <archive.tar> --cwd <dir>",
+	moved: "oms session moved <session> --to <label>",
 };
 
 const UNPACK_NOTE: Record<UnpackMode, string> = {
@@ -64,9 +64,9 @@ export default class Session extends Command {
 	};
 
 	static examples = [
-		"# Pack a session with its artifacts and image blobs\n  omp session pack ~/.omp/agent/sessions/<project>/<file>.jsonl /tmp/session.tar",
-		"# Unpack it on another machine; prints the session file path\n  omp session unpack /tmp/session.tar --cwd ~/src/project",
-		"# Mark the local copy stale; resuming it later forks it\n  omp session moved <file>.jsonl --to cloud",
+		"# Pack a session with its artifacts and image blobs\n  oms session pack ~/.oms/agent/sessions/<project>/<file>.jsonl /tmp/session.tar",
+		"# Unpack it on another machine; prints the session file path\n  oms session unpack /tmp/session.tar --cwd ~/src/project",
+		"# Mark the local copy stale; resuming it later forks it\n  oms session moved <file>.jsonl --to cloud",
 	];
 
 	async run(): Promise<void> {

@@ -19,7 +19,7 @@
  * A `refusal` answer marks a question the model declined. Billing is input
  * tokens only, so cost is priced from the catalog model.
  */
-import { isRecord, prompt } from "@oh-my-pi/pi-utils";
+import { isRecord, prompt } from "@oh-my-soup/pi-utils";
 import { embeddedImageDataUrl } from "../images/shared";
 import predicateTemplate from "./openai-decisions-predicate.md" with { type: "text" };
 import { type Answer, type Question, tokenUsage } from "./types";

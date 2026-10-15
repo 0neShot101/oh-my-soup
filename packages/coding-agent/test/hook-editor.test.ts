@@ -1,12 +1,12 @@
-import type { ImageContent } from "@oh-my-pi/pi-ai";
+import type { ImageContent } from "@oh-my-soup/pi-ai";
 import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
-import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
-import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
-import type { DescribeContext } from "@oh-my-pi/pi-tui/native/node";
-import { ExtensionUiController } from "@oh-my-pi/pi-coding-agent/modes/controllers/extension-ui-controller";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
-import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { CURSOR_MARKER, isFocusable, setKeybindings, type TUI } from "@oh-my-pi/pi-tui";
+import { KeybindingsManager } from "@oh-my-soup/pi-tui/app-keybindings";
+import { HookEditorComponent } from "@oh-my-soup/pi-tui/overlays/hook-editor";
+import type { DescribeContext } from "@oh-my-soup/pi-tui/native/node";
+import { ExtensionUiController } from "@oh-my-soup/pi-coding-agent/modes/controllers/extension-ui-controller";
+import { getThemeByName, setThemeInstance } from "@oh-my-soup/pi-tui/theme";
+import type { InteractiveModeContext } from "@oh-my-soup/pi-coding-agent/modes/types";
+import { CURSOR_MARKER, isFocusable, setKeybindings, type TUI } from "@oh-my-soup/pi-tui";
 
 beforeAll(async () => {
 	const theme = await getThemeByName("dark");
@@ -218,7 +218,7 @@ describe("HookEditorComponent prompt-style mode", () => {
 		const head = root.c?.[0];
 		const parts = typeof head === "object" && head !== null && "k" in head ? head.c : undefined;
 		expect(parts?.[0]).toMatchObject({ k: "text", p: { spans: [{ t: "Custom answer" }] } });
-		expect(parts?.[1]).toMatchObject({ k: "md", p: { text: question, role: "omp.ask.question" } });
+		expect(parts?.[1]).toMatchObject({ k: "md", p: { text: question, role: "oms.ask.question" } });
 	});
 
 	it("runs the native action bar's Submit, Cancel and Open in editor like their keys", async () => {

@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
+import { ProcessTerminal } from "@oh-my-soup/pi-tui/terminal";
 import {
 	currentLoopPhase,
 	popLoopPhase,
 	resetLoopPhaseWindow,
 	setTerminalHeadless,
 	takeLoopPhaseAttribution,
-} from "@oh-my-pi/pi-utils";
+} from "@oh-my-soup/pi-utils";
 
 // Without the off-thread output pump (Windows, or when the pump is unavailable),
 // ProcessTerminal writes block the event loop until the terminal drains. The

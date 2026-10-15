@@ -19,7 +19,7 @@
  * renderQuestion(QUESTIONS.order, { column: "latency" });
  * ```
  */
-import { prompt } from "@oh-my-pi/pi-utils";
+import { prompt } from "@oh-my-soup/pi-utils";
 import type { ChoiceQuestion, NoulQuestion, Question, Questions, ScoreQuestion } from "./types";
 
 /** One question as a JSON question file writes it; {@link QuestionFor} gives its kind. */

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import type { Api } from "@oh-my-pi/pi-ai";
-import { resolveModelPolicy } from "@oh-my-pi/pi-catalog/compat/resolve";
-import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
+import type { Api } from "@oh-my-soup/pi-ai";
+import { resolveModelPolicy } from "@oh-my-soup/pi-catalog/compat/resolve";
+import type { ModelSpec } from "@oh-my-soup/pi-catalog/types";
 
 function spec(provider: string, api: Api, id: string): ModelSpec {
 	return {

@@ -7,7 +7,7 @@ Eval's `computer` prelude controls the host desktop. It can enumerate windows an
 
 ## Enable and configure
 
-The prelude is disabled by default. Configure it in `~/.omp/agent/config.yml`, project `.omp/config.yml`, or a `--config` overlay:
+The prelude is disabled by default. Configure it in `~/.oms/agent/config.yml`, project `.oms/config.yml`, or a `--config` overlay:
 
 ```yaml
 computer:
@@ -184,7 +184,7 @@ Inspect `computer.capabilities()` rather than assuming capture, input, AX, or pe
 
 ### macOS display sleep and the lock screen
 
-While the agent uses the desktop, the macOS session holds a `PreventUserIdleDisplaySleep` power assertion, shown by `pmset -g assertions` as "oh-my-pi computer tool is operating the desktop". Every desktop call except `capabilities()` holds or renews it; it is released five minutes after the last call, or when the session closes. Releasing it restarts the system's display-sleep countdown, so the display, and an idle lock tied to it, can arrive no sooner than five minutes plus your display-sleep setting after the agent's last action.
+While the agent uses the desktop, the macOS session holds a `PreventUserIdleDisplaySleep` power assertion, shown by `pmset -g assertions` as "oh-my-soup computer tool is operating the desktop". Every desktop call except `capabilities()` holds or renews it; it is released five minutes after the last call, or when the session closes. Releasing it restarts the system's display-sleep countdown, so the display, and an idle lock tied to it, can arrive no sooner than five minutes plus your display-sleep setting after the agent's last action.
 
 The assertion does not wake a display that is already asleep or unlock a locked screen. `capabilities()` reports `screenLocked` and `displayAsleep`, a screenshot taken behind the lock screen carries `screenLocked: true` and a note, any failed call names the state, and a run that ends locked or asleep starts with a `Note:` line. Input is never refused because of the lock; measured on macOS 26, it behaves as follows:
 

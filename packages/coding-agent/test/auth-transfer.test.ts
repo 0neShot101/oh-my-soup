@@ -1,13 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { type AuthCredential, type OAuthCredential, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai";
+import { type AuthCredential, type OAuthCredential, SqliteAuthCredentialStore } from "@oh-my-soup/pi-ai";
 import {
 	AuthTransferError,
 	exportAuthCredentials,
 	importAuthCredentials,
 	parseAuthExport,
-} from "@oh-my-pi/pi-coding-agent/commands/auth";
-import { TempDir } from "@oh-my-pi/pi-utils";
+} from "@oh-my-soup/pi-coding-agent/commands/auth";
+import { TempDir } from "@oh-my-soup/pi-utils";
 
 const API_KEY: AuthCredential = { type: "api_key", key: "sk-laptop" };
 const OAUTH: OAuthCredential = {
@@ -23,9 +23,9 @@ function stored(store: SqliteAuthCredentialStore, provider: string): AuthCredent
 	return store.listAuthCredentials(provider).map(row => row.credential);
 }
 
-describe("omp auth export/import", () => {
+describe("oms auth export/import", () => {
 	it("round-trips an API key and an OAuth login, refresh token included, into an empty store", async () => {
-		using dir = TempDir.createSync("@omp-auth-transfer-");
+		using dir = TempDir.createSync("@oms-auth-transfer-");
 		const laptop = await SqliteAuthCredentialStore.open(path.join(dir.path(), "laptop.db"));
 		const cloud = await SqliteAuthCredentialStore.open(path.join(dir.path(), "cloud.db"));
 		try {
@@ -45,7 +45,7 @@ describe("omp auth export/import", () => {
 	});
 
 	it("replaces the same account and the provider API key, keeping other accounts", async () => {
-		using dir = TempDir.createSync("@omp-auth-transfer-");
+		using dir = TempDir.createSync("@oms-auth-transfer-");
 		const store = await SqliteAuthCredentialStore.open(path.join(dir.path(), "agent.db"));
 		try {
 			const otherAccount: OAuthCredential = {

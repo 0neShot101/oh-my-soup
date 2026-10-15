@@ -1,15 +1,15 @@
 import { afterEach, beforeAll, describe, expect, it } from "bun:test";
-import { agentPauseGate } from "@oh-my-pi/pi-agent-core";
-import type { Component } from "@oh-my-pi/pi-tui";
-import type { NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
+import { agentPauseGate } from "@oh-my-soup/pi-agent-core";
+import type { Component } from "@oh-my-soup/pi-tui";
+import type { NativeChild, NativeNode } from "@oh-my-soup/pi-tui/native/node";
 import { Settings } from "../../../src/config/settings";
 import {
 	PauseScreenComponent,
 	type PauseScreenHost,
 	renderPauseScreen,
 	runPauseScreen,
-} from "@oh-my-pi/pi-tui/overlays/pause-screen";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
+} from "@oh-my-soup/pi-tui/overlays/pause-screen";
+import { getThemeByName, setThemeInstance } from "@oh-my-soup/pi-tui/theme";
 
 // Strip SGR colors so assertions see visible text only.
 const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;]*m/g, "");
@@ -128,14 +128,14 @@ describe("pause screen", () => {
 			expect(shown).toContain("Every agent holds");
 			expect(shown).toContain("The repo is yours");
 
-			const buttons = all.filter(n => (n.p as { role?: string } | undefined)?.role === "omp.btn");
+			const buttons = all.filter(n => (n.p as { role?: string } | undefined)?.role === "oms.btn");
 			expect(buttons.length).toBe(1);
 			const resume = buttons[0]!.p as { tone?: string; title?: string; actions?: { click?: string } };
 			expect(resume.tone).toBe("accent");
 			expect(resume.actions?.click).toBe("resume");
 			// The keys live in the tooltip: `Label  key` clauses.
 			expect(resume.title).toStartWith("Resume  esc");
-			expect(sheet.nativeOverlay).toMatchObject({ role: "omp.overlay.pause", head: "Paused" });
+			expect(sheet.nativeOverlay).toMatchObject({ role: "oms.overlay.pause", head: "Paused" });
 		});
 
 		it("names the whole session when it has no name", () => {

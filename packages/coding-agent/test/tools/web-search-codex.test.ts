@@ -1,11 +1,11 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { AuthStorage, type FetchImpl, type Model, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import type { SearchParams } from "@oh-my-pi/pi-coding-agent/web/search/providers/base";
-import { hasCodexSearch, searchCodex } from "@oh-my-pi/pi-coding-agent/web/search/providers/codex";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { AuthStorage, type FetchImpl, type Model, SqliteAuthCredentialStore } from "@oh-my-soup/pi-ai";
+import { buildModel } from "@oh-my-soup/pi-catalog/build";
+import { ModelRegistry } from "@oh-my-soup/pi-coding-agent/config/model-registry";
+import type { SearchParams } from "@oh-my-soup/pi-coding-agent/web/search/providers/base";
+import { hasCodexSearch, searchCodex } from "@oh-my-soup/pi-coding-agent/web/search/providers/codex";
+import { TempDir } from "@oh-my-soup/pi-utils";
 
 type CapturedRequest = {
 	url: string;
@@ -243,7 +243,7 @@ describe("searchCodex model selection", () => {
 	}
 
 	// Every registry below is pointed at a temp `models.yml`. Without it the
-	// constructor reads the host `~/.omp/agent/models.yml`, and a configured
+	// constructor reads the host `~/.oms/agent/models.yml`, and a configured
 	// `openai-codex` apiKey there replaces the env bearer under test with a
 	// config-sourced key, so the suite fails on exactly the machines it is
 	// meant to protect. Keep this path explicit when adding registries.

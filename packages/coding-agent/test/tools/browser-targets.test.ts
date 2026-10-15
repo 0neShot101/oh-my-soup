@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
-import { findFreeCdpPort, relayTargets } from "@oh-my-pi/pi-coding-agent/tools/browser/attach";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { createBrowserPrelude } from "@oh-my-soup/pi-coding-agent/tools/browser";
+import { findFreeCdpPort, relayTargets } from "@oh-my-soup/pi-coding-agent/tools/browser/attach";
 import {
 	DISCARDED_TABS_PROTOCOL_VERSION,
 	type TabSnapshot,
-} from "@oh-my-pi/pi-coding-agent/tools/browser/relay/protocol";
-import { type RelayServer, startRelayServer } from "@oh-my-pi/pi-coding-agent/tools/browser/relay/server";
-import { releaseTab } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
-import { isRecord } from "@oh-my-pi/pi-utils";
+} from "@oh-my-soup/pi-coding-agent/tools/browser/relay/protocol";
+import { type RelayServer, startRelayServer } from "@oh-my-soup/pi-coding-agent/tools/browser/relay/server";
+import { releaseTab } from "@oh-my-soup/pi-coding-agent/tools/browser/tab-supervisor";
+import type { ToolSession } from "@oh-my-soup/pi-coding-agent/tools/index";
+import { isRecord } from "@oh-my-soup/pi-utils";
 import { type FakeAnswer, type FakeDaemon, startFakeDaemon } from "./tern-fake-daemon";
 
 const PANE = 3;
@@ -99,7 +99,7 @@ async function invoke(tool: ToolSession, parameters: Record<string, unknown>) {
 }
 
 describe("browser targets in Tern", () => {
-	it("lists the window's browser blocks and names the omp tab holding an adopted one", async () => {
+	it("lists the window's browser blocks and names the oms tab holding an adopted one", async () => {
 		await startWindow(BLOCKS);
 		const tool = session();
 		opened.push("docs");
@@ -120,7 +120,7 @@ describe("browser targets in Tern", () => {
 		]);
 		expect(text).toStartWith("Tern browser blocks (adopt one with app.target set to its id):\n");
 		expect(text).toContain('- 5 "Docs A" https://docs.example/a (docked, not on screen)');
-		expect(text).toContain('- 7 "Docs C" https://docs.example/c (docked, on screen, driven by omp tab "docs")');
+		expect(text).toContain('- 7 "Docs C" https://docs.example/c (docked, on screen, driven by oms tab "docs")');
 	});
 
 	it("omits shown and driven an older Tern does not report", async () => {

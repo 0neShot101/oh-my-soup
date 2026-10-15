@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { JsonLexer, QUOTE } from "@oh-my-pi/pi-utils/json-lexer";
-import { parseStreamingJson } from "@oh-my-pi/pi-utils/json-parse";
+import { JsonLexer, QUOTE } from "@oh-my-soup/pi-utils/json-lexer";
+import { parseStreamingJson } from "@oh-my-soup/pi-utils/json-parse";
 
 afterEach(() => {
 	vi.restoreAllMocks();

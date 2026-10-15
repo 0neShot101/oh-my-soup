@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { kiloModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
+import { kiloModelManagerOptions } from "@oh-my-soup/pi-catalog/provider-models/openai-compat";
 
 async function discoverKiloModels(payload: unknown) {
 	const options = kiloModelManagerOptions({

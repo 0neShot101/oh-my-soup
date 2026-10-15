@@ -2,12 +2,12 @@ import { describe, expect, it } from "bun:test";
 import {
 	type AutoresearchDashboardRuntime,
 	createDashboardController,
-} from "@oh-my-pi/pi-tui/apps/autoresearch-dashboard";
-import type { DescribeContext, NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
-import { getThemeByName } from "@oh-my-pi/pi-tui/theme";
-import type { ExperimentResult, ExperimentState } from "@oh-my-pi/pi-tui/tools/autoresearch";
-import type { Component } from "@oh-my-pi/pi-tui/tui";
-import type { TspText } from "@oh-my-pi/pi-wire";
+} from "@oh-my-soup/pi-tui/apps/autoresearch-dashboard";
+import type { DescribeContext, NativeChild, NativeNode } from "@oh-my-soup/pi-tui/native/node";
+import { getThemeByName } from "@oh-my-soup/pi-tui/theme";
+import type { ExperimentResult, ExperimentState } from "@oh-my-soup/pi-tui/tools/autoresearch";
+import type { Component } from "@oh-my-soup/pi-tui/tui";
+import type { TspText } from "@oh-my-soup/pi-wire";
 
 const cx: DescribeContext = { cols: 120, reduceMotion: false, dark: true, supports: () => true, feature: () => true };
 
@@ -101,7 +101,7 @@ describe("autoresearch dashboard sheet", () => {
 		const sheet = await openSheet(
 			runtime([result(1, 24, "keep"), result(2, 0, "crash"), result(3, 19, "keep"), result(4, 21, "discard")]),
 		);
-		const table = find(describeSheet(sheet), "omp.autoresearch.runs");
+		const table = find(describeSheet(sheet), "oms.autoresearch.runs");
 		if (table?.k !== "table") throw new Error("no runs table");
 		const rows = table.p?.rows ?? [];
 		const cell = (row: number, col: string): string => {
@@ -116,8 +116,8 @@ describe("autoresearch dashboard sheet", () => {
 
 	it("says what it waits for while the segment has no runs", async () => {
 		const root = describeSheet(await openSheet(runtime([])));
-		expect(find(root, "omp.autoresearch.runs")).toBeUndefined();
-		const title = find(root, "omp.autoresearch.empty.title");
+		expect(find(root, "oms.autoresearch.runs")).toBeUndefined();
+		const title = find(root, "oms.autoresearch.empty.title");
 		if (title?.k !== "text") throw new Error("no empty-state title");
 		expect(plain(title.p?.spans)).toBe("No baseline yet");
 	});

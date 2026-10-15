@@ -1,10 +1,10 @@
 import { afterEach, expect, it, vi } from "bun:test";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
-import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
-import { cfgTaskMaxRecursionDepth } from "@oh-my-pi/pi-coding-agent/task/settings";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { cfgAsyncEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { TaskTool } from "@oh-my-soup/pi-coding-agent/task";
+import * as discoveryModule from "@oh-my-soup/pi-coding-agent/task/discovery";
+import { cfgTaskMaxRecursionDepth } from "@oh-my-soup/pi-coding-agent/task/settings";
+import type { ToolSession } from "@oh-my-soup/pi-coding-agent/tools";
+import { cfgAsyncEnabled } from "@oh-my-soup/pi-coding-agent/tools/settings";
 
 afterEach(() => vi.restoreAllMocks());
 

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import type { Api, AssistantMessage, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
-import { convertCodexResponsesMessages } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
-import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import * as natives from "@oh-my-pi/pi-natives";
+import type { Api, AssistantMessage, Model, ProviderSessionState } from "@oh-my-soup/pi-ai";
+import { convertCodexResponsesMessages } from "@oh-my-soup/pi-ai/providers/openai-codex-responses";
+import { streamOpenAIResponses } from "@oh-my-soup/pi-ai/providers/openai-responses";
+import { getBundledModel } from "@oh-my-soup/pi-catalog/models";
+import * as natives from "@oh-my-soup/pi-natives";
 import { Agent } from "../src/agent";
 import type { SessionMessageEntry } from "../src/compaction/entries";
 import { applyShakeRegions, collectShakeRegions, RESCUE_SHAKE_CONFIG } from "../src/compaction/shake";

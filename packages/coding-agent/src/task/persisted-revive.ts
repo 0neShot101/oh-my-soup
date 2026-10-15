@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-soup/pi-utils";
 import { MAIN_AGENT_RULE_NAME, SUB_AGENT_RULE_NAME } from "../capability/rule";
 import { validateAgentAccountPools } from "../config/account-pools";
 import type { ModelRegistry } from "../config/model-registry";
@@ -58,7 +58,7 @@ export interface PersistedSubagentReviveContext {
 
 /**
  * The agent definition a cold-revived subagent's monitored turns report (IRC wakes,
- * `omp --restore`): persisted files predate an agent-source field, so frames carry
+ * `oms --restore`): persisted files predate an agent-source field, so frames carry
  * the runtime-neutral `user` source; the name is the registry ref's.
  */
 export function persistedAgentDefinition(displayName: string, init: PersistedSessionInit): AgentDefinition {

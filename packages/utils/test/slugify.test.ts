@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { slugify } from "@oh-my-pi/pi-utils";
+import { slugify } from "@oh-my-soup/pi-utils";
 
 describe("slugify", () => {
 	it("lowercases ASCII and collapses non-alphanumeric runs into single dashes", () => {

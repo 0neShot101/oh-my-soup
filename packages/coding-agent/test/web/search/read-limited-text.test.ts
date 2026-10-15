@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { readLimitedText } from "@oh-my-pi/pi-coding-agent/web/search/providers/utils";
+import { readLimitedText } from "@oh-my-soup/pi-coding-agent/web/search/providers/utils";
 
 describe("readLimitedText", () => {
 	it("decodes a body in the charset its Content-Type declares", async () => {

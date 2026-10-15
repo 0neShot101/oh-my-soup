@@ -18,14 +18,14 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import "./setup";
-import { cmdRemember, withMemory } from "@oh-my-pi/pi-mnemopi/cli";
-import { BeamMemory } from "@oh-my-pi/pi-mnemopi/core/beam";
-import { Mnemopi } from "@oh-my-pi/pi-mnemopi/core/memory";
+import { cmdRemember, withMemory } from "@oh-my-soup/pi-mnemopi/cli";
+import { BeamMemory } from "@oh-my-soup/pi-mnemopi/core/beam";
+import { Mnemopi } from "@oh-my-soup/pi-mnemopi/core/memory";
 import {
 	type ResolvedMnemopiRuntimeOptions,
 	withMnemopiRuntimeOptions,
-} from "@oh-my-pi/pi-mnemopi/core/runtime-options";
-import { withBeam } from "@oh-my-pi/pi-mnemopi/mcp";
+} from "@oh-my-soup/pi-mnemopi/core/runtime-options";
+import { withBeam } from "@oh-my-soup/pi-mnemopi/mcp";
 
 interface EmbeddingRow {
 	readonly memory_id: string;

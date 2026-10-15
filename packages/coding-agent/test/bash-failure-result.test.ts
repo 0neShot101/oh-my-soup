@@ -2,13 +2,13 @@ import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
-import { Shell } from "@oh-my-pi/pi-natives";
-import { getThemeByName } from "@oh-my-pi/pi-tui/theme";
-import { bashToolRenderer } from "@oh-my-pi/pi-tui/tools/bash";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import type { Skill } from "@oh-my-soup/pi-coding-agent/extensibility/skills";
+import type { ToolSession } from "@oh-my-soup/pi-coding-agent/tools";
+import { BashTool } from "@oh-my-soup/pi-coding-agent/tools/bash";
+import { Shell } from "@oh-my-soup/pi-natives";
+import { getThemeByName } from "@oh-my-soup/pi-tui/theme";
+import { bashToolRenderer } from "@oh-my-soup/pi-tui/tools/bash";
 
 afterEach(() => {
 	mock.restore();
@@ -66,7 +66,7 @@ describe("BashTool execution results", () => {
 			const output = (view.body ?? [])
 				.flatMap(node => ("k" in node ? (node.c ?? []) : []))
 				.find(node => "k" in node && node.k === "ansi");
-			expect(output).toMatchObject({ p: { role: "omp.tool.bash.output", text: timingOutput } });
+			expect(output).toMatchObject({ p: { role: "oms.tool.bash.output", text: timingOutput } });
 		}
 	});
 

@@ -12,7 +12,7 @@
  * {@link chatTextBackend}, or an on-device worker — so this file never
  * depends on chat transports.
  */
-import { escapeXmlAttribute, escapeXmlText, prompt } from "@oh-my-pi/pi-utils";
+import { escapeXmlAttribute, escapeXmlText, prompt } from "@oh-my-soup/pi-utils";
 import { YAML } from "bun";
 import * as AIError from "../error";
 import type { ImageContent, Usage } from "../types";

@@ -1,12 +1,12 @@
 import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import * as url from "node:url";
-import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
-import { setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
-import { linkedImageText, setImageBlobWriter, transcriptImageLink } from "@oh-my-pi/pi-tui/prompt/image-references";
-import { applyHyperlinkSetting } from "@oh-my-pi/pi-tui/render/hyperlink";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import type { TspSpan } from "@oh-my-pi/pi-wire";
+import { UserMessageComponent } from "@oh-my-soup/pi-tui/chat/user-message";
+import { setNativeRendering } from "@oh-my-soup/pi-tui/native/state";
+import { linkedImageText, setImageBlobWriter, transcriptImageLink } from "@oh-my-soup/pi-tui/prompt/image-references";
+import { applyHyperlinkSetting } from "@oh-my-soup/pi-tui/render/hyperlink";
+import { initTheme } from "@oh-my-soup/pi-tui/theme";
+import type { TspSpan } from "@oh-my-soup/pi-wire";
 
 // 1x1 PNG
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";

@@ -1,5 +1,5 @@
-import { createSyntheticToolResultMessage, type AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import { createSyntheticToolResultMessage, type AgentMessage } from "@oh-my-soup/pi-agent-core";
+import type { AssistantMessage, ToolResultMessage } from "@oh-my-soup/pi-ai";
 import type { SessionEntry } from "./session-entries";
 
 export const TOOL_EXECUTION_START_CUSTOM_TYPE = "tool_execution_start";
@@ -99,13 +99,13 @@ function readSessionExit(entry: SessionEntry): SessionExitData | undefined {
 }
 
 /** Why an interrupted-turn abort record ends a turn its process never finished. */
-export const INTERRUPTED_TURN_ERROR = "Previous OMP process exited before completing the turn.";
+export const INTERRUPTED_TURN_ERROR = "Previous OMS process exited before completing the turn.";
 
 /** How exit recovery reads a branch whose last process may have died without recording its exit. */
 export interface InterruptedTurnOptions {
 	/**
 	 * The branch's writer is gone even without a `session_exit` after its tail (a
-	 * crash, SIGKILL or power loss records none): `omp --restore` says so.
+	 * crash, SIGKILL or power loss records none): `oms --restore` says so.
 	 */
 	assumeExit?: boolean;
 }
@@ -182,7 +182,7 @@ export function isInterruptedTurnAbort(message: AgentMessage): boolean {
 }
 
 /**
- * Whether `omp --restore` has a turn to go on with on this branch: one its last
+ * Whether `oms --restore` has a turn to go on with on this branch: one its last
  * process left unfinished ({@link findUnfinishedTurn}, the exit assumed), or one exit
  * recovery already closed that nothing followed, not even a normal exit.
  */
@@ -288,7 +288,7 @@ export function createInterruptedToolResults(
 					text:
 						context === "fork"
 							? "The parent session may still be running this tool; its outcome is unknown."
-							: "Previous OMP process exited before this tool returned; its outcome is unknown.",
+							: "Previous OMS process exited before this tool returned; its outcome is unknown.",
 				},
 			],
 			isError: true,
@@ -438,5 +438,5 @@ export function describePendingToolCalls(entries: readonly SessionEntry[]): stri
 	if (pending.length === 0) return undefined;
 	const formatted = pending.map(formatPendingToolCall).join(", ");
 	const noun = pending.length === 1 ? "tool call" : "tool calls";
-	return `Previous session ended while ${pending.length} ${noun} remained pending: ${formatted}. The prior OMP process exited before recording tool result(s).`;
+	return `Previous session ended while ${pending.length} ${noun} remained pending: ${formatted}. The prior OMS process exited before recording tool result(s).`;
 }

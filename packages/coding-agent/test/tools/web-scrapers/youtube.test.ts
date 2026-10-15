@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import * as toolsManager from "@oh-my-pi/pi-coding-agent/utils/tools-manager";
-import { handleYouTube } from "@oh-my-pi/pi-coding-agent/web/scrapers/youtube";
-import { ptree } from "@oh-my-pi/pi-utils";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import * as toolsManager from "@oh-my-soup/pi-coding-agent/utils/tools-manager";
+import { handleYouTube } from "@oh-my-soup/pi-coding-agent/web/scrapers/youtube";
+import { ptree } from "@oh-my-soup/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../../helpers/settings-test-state";
 
 const SKIP = !Bun.env.WEB_FETCH_INTEGRATION;

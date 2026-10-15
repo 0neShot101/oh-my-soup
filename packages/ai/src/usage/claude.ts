@@ -1,6 +1,6 @@
-import { classifyModel } from "@oh-my-pi/pi-catalog/compat/taxonomy";
-import { isAnthropicOAuthToken, toNumber } from "@oh-my-pi/pi-catalog/utils";
-import { slugify } from "@oh-my-pi/pi-utils";
+import { classifyModel } from "@oh-my-soup/pi-catalog/compat/taxonomy";
+import { isAnthropicOAuthToken, toNumber } from "@oh-my-soup/pi-catalog/utils";
+import { slugify } from "@oh-my-soup/pi-utils";
 import * as AIError from "../error";
 import {
 	type CredentialRankingContext,
@@ -129,7 +129,7 @@ function getApiLimitDisplayName(scope: unknown): string | undefined {
  * binding limit active (an account pinned at a 100% Fable cap reports its 77%
  * shared weekly row as `is_active: false`), so it signals severity ranking,
  * not bucket existence. Filtering on it hid real utilization — a scoped row
- * at 5% with a live reset rendered as `not reported` in `omp usage`.
+ * at 5% with a live reset rendered as `not reported` in `oms usage`.
  */
 function parseApiLimitEntries(raw: unknown): ParsedApiLimitEntry[] {
 	if (!Array.isArray(raw)) return [];

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { syncAllSessions } from "@oh-my-pi/omp-stats/aggregator";
-import { getOverallStats } from "@oh-my-pi/omp-stats/rollup";
-import { getSessionsDir } from "@oh-my-pi/pi-utils";
+import { syncAllSessions } from "@oh-my-soup/oms-stats/aggregator";
+import { getOverallStats } from "@oh-my-soup/oms-stats/rollup";
+import { getSessionsDir } from "@oh-my-soup/pi-utils";
 import { installStatsTestIsolation } from "./helpers/temp-agent";
 
 installStatsTestIsolation("@pi-stats-sync-serial-");
@@ -62,7 +62,7 @@ describe("stats sync serial mode", () => {
 	it("skips gc compress scratch copies but keeps transcripts in other dot directories", async () => {
 		await writeSessionFile();
 		const folder = path.join(getSessionsDir(), "--tmp--sync-serial");
-		const scratch = path.join(folder, ".omp-gc-compress-a1b2c3");
+		const scratch = path.join(folder, ".oms-gc-compress-a1b2c3");
 		const hidden = path.join(folder, "session", ".runs");
 		await fs.mkdir(scratch);
 		await fs.mkdir(hidden, { recursive: true });

@@ -2,9 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAdapterConfigs } from "@oh-my-pi/pi-coding-agent/dap/config";
+import { getAdapterConfigs } from "@oh-my-soup/pi-coding-agent/dap/config";
 
-const ADAPTER = "omp-precedence-probe";
+const ADAPTER = "oms-precedence-probe";
 
 let tempDir: string | undefined;
 
@@ -15,9 +15,9 @@ afterEach(async () => {
 
 describe("DAP config layering", () => {
 	test("a cwd file overrides the project config dir field by field", async () => {
-		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-dap-precedence-"));
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "oms-dap-precedence-"));
 		await Bun.write(
-			path.join(tempDir, ".omp", "dap.yaml"),
+			path.join(tempDir, ".oms", "dap.yaml"),
 			`${ADAPTER}:\n  command: project-cmd\n  args: [from-project]\n`,
 		);
 		await Bun.write(path.join(tempDir, "dap.json"), JSON.stringify({ [ADAPTER]: { command: "cwd-cmd" } }));

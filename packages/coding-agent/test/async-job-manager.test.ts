@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { scheduler } from "node:timers/promises";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { AsyncJobError, AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
-import { buildAsyncResultBatchMessage } from "@oh-my-pi/pi-coding-agent/session/async-job-delivery";
+import type { ImageContent } from "@oh-my-soup/pi-ai";
+import { AsyncJobError, AsyncJobManager } from "@oh-my-soup/pi-coding-agent/async/job-manager";
+import { buildAsyncResultBatchMessage } from "@oh-my-soup/pi-coding-agent/session/async-job-delivery";
 
 async function waitForJobEviction(manager: AsyncJobManager, jobId: string): Promise<void> {
 	const deadline = Date.now() + 2_000;

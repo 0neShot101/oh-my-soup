@@ -1,29 +1,29 @@
 /**
- * Cross-process contract between omp processes and the broker-supervised IDA host daemon.
+ * Cross-process contract between oms processes and the broker-supervised IDA host daemon.
  *
  * Each open database runs in one daemon named {@link idaDaemonName} under the project's daemon
- * broker (so it shows up in `omp ps`). The daemon is an omp worker (`host.ts`) that owns the
+ * broker (so it shows up in `oms ps`). The daemon is an oms worker (`host.ts`) that owns the
  * IDB lock and one Python worker, and serves NDJSON requests on {@link idaHostEndpoint}.
  */
-import { ipcEndpoint } from "@oh-my-pi/pi-natives";
-import { type } from "@oh-my-pi/omptype";
+import { ipcEndpoint } from "@oh-my-soup/pi-natives";
+import { type } from "@oh-my-soup/omstype";
 export { IDA_HOST_WORKER_ARG } from "../cli/worker-selectors";
 
 /** Environment key carrying the JSON {@link IdaHostConfig} for the daemon. */
-export const IDA_HOST_CONFIG_ENV = "OMP_IDA_HOST_CONFIG";
+export const IDA_HOST_CONFIG_ENV = "OMS_IDA_HOST_CONFIG";
 
 /** Name prefix of every IDA daemon in a broker scope. */
-export const IDA_DAEMON_PREFIX = "omp.ida.";
+export const IDA_DAEMON_PREFIX = "oms.ida.";
 
 /** Broker daemon names are capped at 48 characters (`broker.ts`). */
 const DAEMON_NAME_MAX = 48;
 
 /** Broker readiness regex matched against the banner the host prints once it listens. */
-export const IDA_HOST_READY_PATTERN = String.raw`omp ida host listening on \S+`;
+export const IDA_HOST_READY_PATTERN = String.raw`oms ida host listening on \S+`;
 
 /** Banner printed on stdout once the host socket accepts connections. */
 export function idaHostReadyBanner(endpoint: string): string {
-	return `omp ida host listening on ${endpoint}`;
+	return `oms ida host listening on ${endpoint}`;
 }
 
 /** Message text of any thrown value, for logs and wire errors. */
@@ -50,7 +50,7 @@ export function idaHostEndpoint(runtimeDir: string, daemonName: string): string 
 	return ipcEndpoint(runtimeDir, `ida-${hash16(daemonName)}`);
 }
 
-/** RPC methods an omp process may forward to the worker through `call`. */
+/** RPC methods an oms process may forward to the worker through `call`. */
 export const IDA_CALL_METHODS = ["view", "exec", "rename", "comment", "set_type", "make_function", "save"] as const;
 
 /** A method forwarded with `call`. */
@@ -116,7 +116,7 @@ const hostStatusSchema = type({
 
 /**
  * A host's database as reported by `open`/`status`. `busy` counts queued and running requests
- * from every omp process; `lastUsed` drives LRU eviction; `dirty` means a close would save.
+ * from every oms process; `lastUsed` drives LRU eviction; `dirty` means a close would save.
  */
 export type IdaHostStatus = typeof hostStatusSchema.infer;
 
@@ -141,7 +141,7 @@ const hostConfigSchema = type({
 	idleCloseMs: "number",
 });
 
-/** Everything the host needs to open its database; built by the omp process that starts it. */
+/** Everything the host needs to open its database; built by the oms process that starts it. */
 export type IdaHostConfig = typeof hostConfigSchema.infer;
 
 /** Decode the host config from {@link IDA_HOST_CONFIG_ENV}; throws on a malformed value. */

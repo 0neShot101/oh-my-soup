@@ -3,15 +3,15 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { shadowSnapshotDigest } from "@oh-my-pi/pi-coding-agent/eval/js/shared/runtime";
-import { WorkerCore } from "@oh-my-pi/pi-coding-agent/eval/js/worker-core";
+import { shadowSnapshotDigest } from "@oh-my-soup/pi-coding-agent/eval/js/shared/runtime";
+import { WorkerCore } from "@oh-my-soup/pi-coding-agent/eval/js/worker-core";
 import type {
 	SessionSnapshot,
 	Transport,
 	WorkerInbound,
 	WorkerOutbound,
-} from "@oh-my-pi/pi-coding-agent/eval/js/worker-protocol";
-import { postmortem } from "@oh-my-pi/pi-utils";
+} from "@oh-my-soup/pi-coding-agent/eval/js/worker-protocol";
+import { postmortem } from "@oh-my-soup/pi-utils";
 
 interface WorkerHarness {
 	send(message: WorkerInbound): void;
@@ -146,7 +146,7 @@ describe("WorkerCore", () => {
 
 		const gate = Promise.withResolvers<void>();
 		const entered = Promise.withResolvers<void>();
-		(globalThis as { __omp_worker_core_gate?: { entered(): void; wait: Promise<void> } }).__omp_worker_core_gate = {
+		(globalThis as { __oms_worker_core_gate?: { entered(): void; wait: Promise<void> } }).__oms_worker_core_gate = {
 			entered: () => entered.resolve(),
 			wait: gate.promise,
 		};
@@ -156,7 +156,7 @@ describe("WorkerCore", () => {
 			first.send({
 				type: "run",
 				runId: "hold-for-reinit",
-				code: "globalThis.__omp_worker_core_gate.entered(); await globalThis.__omp_worker_core_gate.wait;",
+				code: "globalThis.__oms_worker_core_gate.entered(); await globalThis.__oms_worker_core_gate.wait;",
 				filename: "[reinit-first].js",
 				snapshot: { cwd, sessionId: "reinit-first", localRoots: {} },
 			});
@@ -195,8 +195,8 @@ describe("WorkerCore", () => {
 		} finally {
 			uninstall();
 			gate.resolve();
-			delete (globalThis as { __omp_worker_core_gate?: { entered(): void; wait: Promise<void> } })
-				.__omp_worker_core_gate;
+			delete (globalThis as { __oms_worker_core_gate?: { entered(): void; wait: Promise<void> } })
+				.__oms_worker_core_gate;
 			first.send({ type: "close" });
 			second.send({ type: "close" });
 		}
@@ -213,7 +213,7 @@ describe("WorkerCore", () => {
 
 		const gate = Promise.withResolvers<void>();
 		const entered = Promise.withResolvers<void>();
-		(globalThis as { __omp_worker_core_gate?: { entered(): void; wait: Promise<void> } }).__omp_worker_core_gate = {
+		(globalThis as { __oms_worker_core_gate?: { entered(): void; wait: Promise<void> } }).__oms_worker_core_gate = {
 			entered: () => entered.resolve(),
 			wait: gate.promise,
 		};
@@ -223,7 +223,7 @@ describe("WorkerCore", () => {
 			first.send({
 				type: "run",
 				runId: "hold-for-multi-init",
-				code: "globalThis.__omp_worker_core_gate.entered(); await globalThis.__omp_worker_core_gate.wait;",
+				code: "globalThis.__oms_worker_core_gate.entered(); await globalThis.__oms_worker_core_gate.wait;",
 				filename: "[init-live-first].js",
 				snapshot: { cwd, sessionId: "init-live-first", localRoots: {} },
 			});
@@ -282,8 +282,8 @@ describe("WorkerCore", () => {
 		} finally {
 			uninstall();
 			gate.resolve();
-			delete (globalThis as { __omp_worker_core_gate?: { entered(): void; wait: Promise<void> } })
-				.__omp_worker_core_gate;
+			delete (globalThis as { __oms_worker_core_gate?: { entered(): void; wait: Promise<void> } })
+				.__oms_worker_core_gate;
 			first.send({ type: "close" });
 			second.send({ type: "close" });
 			third.send({ type: "close" });
@@ -298,7 +298,7 @@ describe("WorkerCore", () => {
 
 		const gate = Promise.withResolvers<void>();
 		const entered = Promise.withResolvers<void>();
-		(globalThis as { __omp_worker_core_gate?: { entered(): void; wait: Promise<void> } }).__omp_worker_core_gate = {
+		(globalThis as { __oms_worker_core_gate?: { entered(): void; wait: Promise<void> } }).__oms_worker_core_gate = {
 			entered: () => entered.resolve(),
 			wait: gate.promise,
 		};
@@ -316,7 +316,7 @@ describe("WorkerCore", () => {
 			first.send({
 				type: "run",
 				runId: "hold-for-first-init",
-				code: "globalThis.__omp_worker_core_gate.entered(); await globalThis.__omp_worker_core_gate.wait; __omp_session__.sessionId;",
+				code: "globalThis.__oms_worker_core_gate.entered(); await globalThis.__oms_worker_core_gate.wait; __oms_session__.sessionId;",
 				filename: "[first-init-live-first].js",
 				snapshot: { cwd, sessionId: "first-init-live-first", localRoots: {} },
 			});
@@ -350,16 +350,16 @@ describe("WorkerCore", () => {
 		} finally {
 			uninstall();
 			gate.resolve();
-			delete (globalThis as { __omp_worker_core_gate?: { entered(): void; wait: Promise<void> } })
-				.__omp_worker_core_gate;
+			delete (globalThis as { __oms_worker_core_gate?: { entered(): void; wait: Promise<void> } })
+				.__oms_worker_core_gate;
 			first.send({ type: "close" });
 			second.send({ type: "close" });
 		}
 	});
 
 	it("keeps the process cwd while another cell is mid-run", async () => {
-		const dirA = await fs.mkdtemp(path.join(os.tmpdir(), "omp-cwd-a-"));
-		const dirB = await fs.mkdtemp(path.join(os.tmpdir(), "omp-cwd-b-"));
+		const dirA = await fs.mkdtemp(path.join(os.tmpdir(), "oms-cwd-a-"));
+		const dirB = await fs.mkdtemp(path.join(os.tmpdir(), "oms-cwd-b-"));
 		const chdirs: string[] = [];
 		const hostListeners = new Set<(message: WorkerOutbound) => void>();
 		const workerListeners = new Set<(message: WorkerInbound) => void>();
@@ -390,7 +390,7 @@ describe("WorkerCore", () => {
 
 		const gate = Promise.withResolvers<void>();
 		const entered = Promise.withResolvers<void>();
-		(globalThis as { __omp_worker_cwd_gate?: { entered(): void; wait: Promise<void> } }).__omp_worker_cwd_gate = {
+		(globalThis as { __oms_worker_cwd_gate?: { entered(): void; wait: Promise<void> } }).__oms_worker_cwd_gate = {
 			entered: () => entered.resolve(),
 			wait: gate.promise,
 		};
@@ -405,7 +405,7 @@ describe("WorkerCore", () => {
 			harness.send({
 				type: "run",
 				runId: "cwd-hold",
-				code: "globalThis.__omp_worker_cwd_gate.entered(); await globalThis.__omp_worker_cwd_gate.wait;",
+				code: "globalThis.__oms_worker_cwd_gate.entered(); await globalThis.__oms_worker_cwd_gate.wait;",
 				filename: "[cwd-race-hold].js",
 				snapshot: { cwd: dirA, sessionId: "cwd-race", localRoots: {} },
 			});
@@ -451,8 +451,8 @@ describe("WorkerCore", () => {
 			expect(chdirs.at(-1)).toBe(dirB);
 		} finally {
 			gate.resolve();
-			delete (globalThis as { __omp_worker_cwd_gate?: { entered(): void; wait: Promise<void> } })
-				.__omp_worker_cwd_gate;
+			delete (globalThis as { __oms_worker_cwd_gate?: { entered(): void; wait: Promise<void> } })
+				.__oms_worker_cwd_gate;
 			harness.send({ type: "close" });
 			await fs.rm(dirA, { recursive: true, force: true });
 			await fs.rm(dirB, { recursive: true, force: true });
@@ -460,23 +460,23 @@ describe("WorkerCore", () => {
 	});
 
 	it("reads artifact:// from the artifacts dir of the run's snapshot, not the first one", async () => {
-		const dirA = await fs.mkdtemp(path.join(os.tmpdir(), "omp-artifacts-a-"));
-		const dirB = await fs.mkdtemp(path.join(os.tmpdir(), "omp-artifacts-b-"));
+		const dirA = await fs.mkdtemp(path.join(os.tmpdir(), "oms-artifacts-a-"));
+		const dirB = await fs.mkdtemp(path.join(os.tmpdir(), "oms-artifacts-b-"));
 		await Bun.write(path.join(dirA, "5.eval.log"), "from A");
 		await Bun.write(path.join(dirB, "5.eval.log"), "from B");
 		const harness = createWorkerHarness();
-		const probe = globalThis as { __omp_artifact_probe?: unknown };
+		const probe = globalThis as { __oms_artifact_probe?: unknown };
 		const run = async (runId: string, artifacts: string) => {
 			const result = waitForMessage(harness, message => message.type === "result" && message.runId === runId);
 			harness.send({
 				type: "run",
 				runId,
-				code: `globalThis.__omp_artifact_probe = await read("artifact://5");`,
+				code: `globalThis.__oms_artifact_probe = await read("artifact://5");`,
 				filename: `[${runId}].js`,
 				snapshot: { cwd: process.cwd(), sessionId: "artifact-roots", localRoots: { artifact: artifacts } },
 			});
 			expect(await result).toMatchObject({ type: "result", runId, ok: true });
-			return probe.__omp_artifact_probe;
+			return probe.__oms_artifact_probe;
 		};
 		try {
 			await initializeWorker(harness, {
@@ -487,7 +487,7 @@ describe("WorkerCore", () => {
 			expect(await run("artifact-a", dirA)).toBe("from A");
 			expect(await run("artifact-b", dirB)).toBe("from B");
 		} finally {
-			delete probe.__omp_artifact_probe;
+			delete probe.__oms_artifact_probe;
 			harness.send({ type: "close" });
 			await fs.rm(dirA, { recursive: true, force: true });
 			await fs.rm(dirB, { recursive: true, force: true });
@@ -495,19 +495,19 @@ describe("WorkerCore", () => {
 	});
 
 	it("keeps a suspended run on its own artifact root while an overlapping run uses another", async () => {
-		const dirA = await fs.mkdtemp(path.join(os.tmpdir(), "omp-artifacts-a-"));
-		const dirB = await fs.mkdtemp(path.join(os.tmpdir(), "omp-artifacts-b-"));
+		const dirA = await fs.mkdtemp(path.join(os.tmpdir(), "oms-artifacts-a-"));
+		const dirB = await fs.mkdtemp(path.join(os.tmpdir(), "oms-artifacts-b-"));
 		await Bun.write(path.join(dirA, "5.eval.log"), "from A");
 		await Bun.write(path.join(dirB, "5.eval.log"), "from B");
 		const harness = createWorkerHarness();
 		const gate = Promise.withResolvers<void>();
 		const entered = Promise.withResolvers<void>();
 		const probe = globalThis as {
-			__omp_roots_gate?: { entered(): void; wait: Promise<void> };
-			__omp_roots_probe?: Record<string, unknown>;
+			__oms_roots_gate?: { entered(): void; wait: Promise<void> };
+			__oms_roots_probe?: Record<string, unknown>;
 		};
-		probe.__omp_roots_gate = { entered: () => entered.resolve(), wait: gate.promise };
-		probe.__omp_roots_probe = {};
+		probe.__oms_roots_gate = { entered: () => entered.resolve(), wait: gate.promise };
+		probe.__oms_roots_probe = {};
 		const snapshot = (artifacts: string): SessionSnapshot => ({
 			cwd: process.cwd(),
 			sessionId: "artifact-roots-overlap",
@@ -519,7 +519,7 @@ describe("WorkerCore", () => {
 			harness.send({
 				type: "run",
 				runId: "hold",
-				code: `globalThis.__omp_roots_gate.entered(); await globalThis.__omp_roots_gate.wait; globalThis.__omp_roots_probe.hold = await read("artifact://5");`,
+				code: `globalThis.__oms_roots_gate.entered(); await globalThis.__oms_roots_gate.wait; globalThis.__oms_roots_probe.hold = await read("artifact://5");`,
 				filename: "[roots-hold].js",
 				snapshot: snapshot(dirA),
 			});
@@ -532,7 +532,7 @@ describe("WorkerCore", () => {
 			harness.send({
 				type: "run",
 				runId: "overlap",
-				code: `globalThis.__omp_roots_probe.overlap = await read("artifact://5");`,
+				code: `globalThis.__oms_roots_probe.overlap = await read("artifact://5");`,
 				filename: "[roots-overlap].js",
 				snapshot: snapshot(dirB),
 			});
@@ -540,11 +540,11 @@ describe("WorkerCore", () => {
 
 			gate.resolve();
 			expect(await holdResult).toMatchObject({ type: "result", runId: "hold", ok: true });
-			expect(probe.__omp_roots_probe).toEqual({ overlap: "from B", hold: "from A" });
+			expect(probe.__oms_roots_probe).toEqual({ overlap: "from B", hold: "from A" });
 		} finally {
 			gate.resolve();
-			delete probe.__omp_roots_gate;
-			delete probe.__omp_roots_probe;
+			delete probe.__oms_roots_gate;
+			delete probe.__oms_roots_probe;
 			harness.send({ type: "close" });
 			await fs.rm(dirA, { recursive: true, force: true });
 			await fs.rm(dirB, { recursive: true, force: true });
@@ -597,7 +597,7 @@ console.log("survived concurrent setCwd");
 process.exit(0);
 `;
 
-		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-same-realm-"));
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "oms-same-realm-"));
 		const probePath = path.join(root, "probe.ts");
 		try {
 			await Bun.write(probePath, probe);
