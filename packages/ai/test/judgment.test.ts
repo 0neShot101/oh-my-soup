@@ -920,6 +920,45 @@ describe("NativeJudge Workers AI dialect", () => {
 		]);
 	});
 
+	it("rejects images beyond Clef's documented caps before fetching", async () => {
+		const visionClef = { ...clef, input: ["text" as const, "image" as const] };
+		let calls = 0;
+		const judge = createNativeJudge(visionClef, {
+			apiKey: JSON.stringify({ token: "cf-token", accountId: "acct123" }),
+			fetch: async () => {
+				calls++;
+				return new Response("unreachable", { status: 500 });
+			},
+		});
+		const png = (bytes: number): ImageContent => ({
+			type: "image",
+			data: Buffer.alloc(bytes).toString("base64"),
+			mimeType: "image/png",
+		});
+		// A PNG header declaring 5000x4000 = 20 MP, over the 16 MP cap.
+		const header = Buffer.alloc(33);
+		Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(header, 0);
+		header.writeUInt32BE(13, 8);
+		header.write("IHDR", 12);
+		header.writeUInt32BE(5000, 16);
+		header.writeUInt32BE(4000, 20);
+		header[24] = 8;
+		header[25] = 6;
+		const cases: Array<[readonly ImageContent[], RegExp]> = [
+			[Array.from({ length: 5 }, () => IMAGE_REFS[0]), /at most 4 images, got 5/],
+			[[{ type: "image", data: "R0lGODlh", mimeType: "image/gif" }], /does not accept image\/gif/],
+			[[png(4 * 1024 * 1024 + 1)], /up to 4194304 bytes; images\[0\] is 4194305 bytes/],
+			[[png(3 * 1024 * 1024), png(3 * 1024 * 1024), png(3 * 1024 * 1024)], /at most 8388608 image bytes/],
+			[[{ type: "image", data: header.toString("base64"), mimeType: "image/png" }], /5000x4000/],
+		];
+		for (const [images, message] of cases) {
+			const error = await judge.judge({ ...request, images }).catch((caught: unknown) => caught);
+			expect(error).toBeInstanceOf(ValidationError);
+			expect(String(error)).toMatch(message);
+		}
+		expect(calls).toBe(0);
+	});
+
 	it("fails without a request when no account id is known", async () => {
 		let calls = 0;
 		const judge = createNativeJudge(clef, {

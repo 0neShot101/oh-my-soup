@@ -5,9 +5,9 @@
 import { type } from "@oh-my-pi/omptype";
 import * as AIError from "../error";
 import { retryTransientCompletion } from "../oneshot-retry";
+import { sendsImageInputOnWire } from "../providers/vision-guard";
 import { completeSimple } from "../stream";
 import type { Api, AssistantMessage, Model, SimpleStreamOptions, Tool } from "../types";
-import { sendsImageInputOnWire } from "../providers/vision-guard";
 import type { TextBackend, TextCompletion, TextPrompt } from "./text";
 import type { JudgeOptions } from "./types";
 

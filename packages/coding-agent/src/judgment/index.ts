@@ -39,8 +39,9 @@ import {
 	tokenUsage,
 	type Usage,
 } from "@oh-my-pi/pi-ai";
-import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import * as AIError from "@oh-my-pi/pi-ai/error";
+import { isEmbeddedImageContent } from "@oh-my-pi/pi-ai/images/shared";
+import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { normalizeModelContextImages } from "../utils/image-loading";
@@ -286,10 +287,19 @@ export class ChainJudge implements Judge {
 		request: JudgmentRequest<Q>,
 		options: JudgeOptions = {},
 	): Promise<JudgmentResult<Q>> {
+		const requestImages = request.images ?? [];
+		// Malformed input is the caller's error, not a candidate failure: reject it before trying any candidate.
+		for (const [index, image] of requestImages.entries()) {
+			if (!isEmbeddedImageContent(image)) {
+				throw new AIError.ValidationError(
+					`judgment: images[${index}] must contain non-empty base64 data and an image MIME type`,
+				);
+			}
+		}
 		return this.#withCandidate(
 			async (candidateJudge, kind, model) => {
-				if (kind !== "online" || !request.images?.length) return candidateJudge.judge(request, options);
-				const images = (await normalizeModelContextImages([...request.images], { model }))!;
+				if (kind !== "online" || requestImages.length === 0) return candidateJudge.judge(request, options);
+				const images = (await normalizeModelContextImages([...requestImages], { model })) ?? [];
 				const signal = options.signal;
 				if (signal?.aborted) {
 					const reason = signal.reason;
@@ -298,7 +308,7 @@ export class ChainJudge implements Judge {
 				return candidateJudge.judge({ ...request, images }, options);
 			},
 			options,
-			request.images !== undefined && request.images.length > 0,
+			requestImages.length > 0,
 		);
 	}
 

@@ -551,6 +551,35 @@ describe("ChainJudge", () => {
 		expect(chat).not.toHaveBeenCalled();
 	});
 
+	it("rejects a malformed image as caller error without trying any candidate", async () => {
+		const settings = Settings.isolated({
+			modelRoles: { judge: `${OPENAI_DECISIONS.provider}/${OPENAI_DECISIONS.id}` },
+			"retry.fallbackChains": {
+				judge: [
+					`${OPENAI_DECISIONS_BACKUP.provider}/${OPENAI_DECISIONS_BACKUP.id}`,
+					`${VISION_CHAT.provider}/${VISION_CHAT.id}`,
+				],
+			},
+		});
+		const registry = makeRegistry([OPENAI_DECISIONS, OPENAI_DECISIONS_BACKUP, VISION_CHAT], {
+			[OPENAI_DECISIONS.provider]: "openai-key",
+			[VISION_CHAT.provider]: "vision-key",
+		});
+		const native = vi.spyOn(globalThis, "fetch");
+		const chat = vi.spyOn(ai, "completeSimple");
+
+		await expect(
+			new ChainJudge({ settings, registry, purpose: "test" }).judge({
+				state: "look at this",
+				questions: { visible: { type: "noul", instructions: "Is an object visible?" } },
+				images: [{ ...IMAGE_ONE, data: "not base64!" }],
+			}),
+		).rejects.toThrow("judgment: images[0] must contain non-empty base64 data");
+
+		expect(native).not.toHaveBeenCalled();
+		expect(chat).not.toHaveBeenCalled();
+	});
+
 	it("uses a capable session model when image filtering removes every native candidate", async () => {
 		const settings = Settings.isolated({
 			modelRoles: { judge: "typesafe/jev-preview" },
@@ -864,7 +893,7 @@ describe("ChainJudge", () => {
 
 			await expect(
 				judge.judge({ ...request, images: [{ ...IMAGE_TWO, data: `${IMAGE_TWO.data}=` }] }),
-			).rejects.toThrow();
+			).rejects.toThrow("judgment: images[0] must contain non-empty base64 data");
 			expect(calls).toBe(1);
 
 			const unpadded = await judge.judge({
@@ -872,6 +901,11 @@ describe("ChainJudge", () => {
 				images: [{ ...IMAGE_TWO, data: IMAGE_TWO.data.replace(/=+$/, "") }],
 			});
 			expect(unpadded.answers.visible).toEqual(cached.answers.visible);
+			expect(calls).toBe(1);
+
+			// The wire lowercases MIME types, so a case variant is the same image.
+			const uppercase = await judge.judge({ ...request, images: [{ ...IMAGE_TWO, mimeType: "IMAGE/PNG" }] });
+			expect(uppercase.answers.visible).toEqual(cached.answers.visible);
 			expect(calls).toBe(1);
 		} finally {
 			cache.close();

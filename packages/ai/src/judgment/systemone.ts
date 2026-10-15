@@ -17,8 +17,8 @@
 import { parseCloudflareCredential } from "@oh-my-pi/pi-catalog/wire/cloudflare";
 import { $env, isRecord } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
-import { tokenUsage } from "./types";
 import { embeddedImageDataUrl } from "../images/shared";
+import { tokenUsage } from "./types";
 import { type DecodedJudgment, finiteNumber, type JudgmentWire } from "./wire";
 
 function decodeSystemOne(payload: unknown): DecodedJudgment | undefined {
@@ -49,7 +49,14 @@ export const openrouterDecisionsWire = systemOneWire("/decisions");
 
 /** Cloudflare Workers AI decision models (Clef) through the account-scoped `ai/run` route. */
 export const workersAiWire: JudgmentWire = {
-	supportsImages: true,
+	// Clef's `images` extension: https://developers.cloudflare.com/workers-ai/models/clef/
+	images: {
+		mimeTypes: ["image/png", "image/jpeg", "image/webp"],
+		maxCount: 4,
+		maxBytes: 4 * 1024 * 1024,
+		maxTotalBytes: 8 * 1024 * 1024,
+		maxPixels: 16_000_000,
+	},
 	target(baseUrl, model, key) {
 		const credential = parseCloudflareCredential(key);
 		const accountId = credential?.accountId ?? $env.CLOUDFLARE_ACCOUNT_ID?.trim();

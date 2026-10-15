@@ -13,19 +13,20 @@ import * as AIError from "../error";
 import { isEmbeddedImageContent } from "../images/shared";
 import type { JudgmentRequest, JudgmentResult } from "../judgment/types";
 import type { ImageContent } from "../types";
+
+/** Image shape only; the shared embedded-image guard validates data, MIME type, and detail. */
+const systemOneImageSchema = type({
+	type: "'image'",
+	data: "string > 0",
+	mimeType: "string > 0",
+	"detail?": "unknown",
+});
+
 /**
  * TypeSafe accepts `instructions` and `criteria` as strings or structured
  * JSON (https://docs.typesafe.ai/api); only `type` decides how an answer is
  * read back, so that is all the gateway pins down.
  */
-const systemOneImageSchema = type({
-	type: "'image'",
-	data: "string > 0",
-	mimeType: "string > 0",
-	// Leave runtime validation to the shared embedded-image guard.
-	"detail?": "unknown",
-});
-
 const systemOneRequestSchema = type({
 	model: "string > 0",
 	state: "string | object",

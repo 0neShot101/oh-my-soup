@@ -221,8 +221,9 @@ describe("auth-gateway POST /v1/systemone", () => {
 		expect(harness.upstream).toHaveLength(2);
 	});
 
-	it("rejects image input for a model without image capability before upstream", async () => {
+	it("rejects image input for a model without image capability before credential lookup", async () => {
 		harness = await boot(() => Response.json(OPENAI_ANSWER));
+		const credentialLookup = vi.spyOn(harness.storage.keys, "getWithCredential");
 		const response = await post(harness.url, "/v1/systemone", {
 			model: "openai-text-only",
 			state: "Check this image.",
@@ -234,6 +235,7 @@ describe("auth-gateway POST /v1/systemone", () => {
 		expect(await response.json()).toMatchObject({
 			error: { type: "invalid_request_error", message: expect.stringContaining("does not support image inputs") },
 		});
+		expect(credentialLookup).not.toHaveBeenCalled();
 		expect(harness.upstream).toHaveLength(0);
 	});
 

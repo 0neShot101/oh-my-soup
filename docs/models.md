@@ -151,7 +151,7 @@ Judgment requests can share image attachments with vision-chat requests. Native 
 
 OpenAI Decisions forwards embedded `ImageContent.detail` when supplied. Native image-judgment cache identities include the effective detail: different fidelity settings have separate cached answers, while omitted detail and explicit `auto` share the default setting.
 
-Native image judgments validate embedded images before cache lookup, even when all answers are cached. Valid padded and unpadded base64 representations still share a decoded-byte cache identity.
+Image inputs are validated before any candidate runs: a malformed image fails the judgment as a caller error instead of exhausting the chain. Native judges receive the original image bytes, and each dialect's documented caps are enforced before the request is sent; Workers AI Clef accepts at most 4 PNG, JPEG, or WebP images of up to 4 MiB and 16 MP each, 8 MiB in total. Valid padded and unpadded base64, and MIME case variants, share one cache identity.
 
 After image-capability filtering, the same native-only tail policy used for text judgments applies: a failed native judge may fall through to another compatible native, never to a prompted chat model. When no compatible native remains, eligible prompted candidates and a vision-capable session-model fallback remain available.
 

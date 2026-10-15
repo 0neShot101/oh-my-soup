@@ -670,6 +670,8 @@ describe("judgeBatch() JS runtime", () => {
 			expect(completions[0]?.prompt).toContain("state-zero");
 			await expectUpscaledImage(completions[0]?.images, IMAGE_ONE);
 		} finally {
+			// The JS worker holds the temp cwd open; Windows refuses to remove it until disposal.
+			await disposeAllVmContexts();
 			tempDir.removeSync();
 		}
 	});

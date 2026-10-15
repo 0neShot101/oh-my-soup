@@ -103,7 +103,8 @@ function cacheStateIdentity(request: JudgmentRequest): string {
 			throw new AIError.ValidationError("Judgment cache images must be valid embedded image content");
 		}
 		return {
-			mimeType: image.mimeType,
+			// The wire lowercases MIME types, so case variants of one image share an answer.
+			mimeType: image.mimeType.toLowerCase(),
 			digest: new Bun.CryptoHasher("sha256").update(Buffer.from(image.data, "base64")).digest("hex"),
 			detail: image.detail ?? "auto",
 		};

@@ -20,9 +20,9 @@
  * tokens only, so cost is priced from the catalog model.
  */
 import { isRecord, prompt } from "@oh-my-pi/pi-utils";
+import { embeddedImageDataUrl } from "../images/shared";
 import predicateTemplate from "./openai-decisions-predicate.md" with { type: "text" };
 import { type Answer, type Question, tokenUsage } from "./types";
-import { embeddedImageDataUrl } from "../images/shared";
 import { finiteNumber, type JudgmentWire } from "./wire";
 
 type DecisionQuestion =
@@ -101,7 +101,8 @@ function decodeAnswer(entry: Record<string, unknown>): Answer | undefined {
 
 /** OpenAI's `/v1/decisions` route. */
 export const openaiDecisionsWire: JudgmentWire = {
-	supportsImages: true,
+	// https://developers.openai.com/api/reference/resources/decisions/methods/create/
+	images: { maxCount: 128 },
 	target: (baseUrl, _model, key) => ({ url: `${baseUrl}/decisions`, token: key }),
 	encode: (request, model) => {
 		const state = typeof request.state === "string" ? request.state : JSON.stringify(request.state);

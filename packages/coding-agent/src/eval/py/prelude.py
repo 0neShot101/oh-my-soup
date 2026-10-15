@@ -7,6 +7,7 @@ if "__omp_prelude_loaded__" not in globals():
     import asyncio, collections.abc, contextvars, inspect, os, json, math, re, time, types, typing
     from urllib.parse import unquote
 
+
     # __omp_display is injected by runner.py before the prelude executes; it
     # mirrors IPython's display() semantics with the same MIME bundle output.
     _omp_display = __omp_display  # type: ignore[name-defined]
@@ -435,7 +436,9 @@ if "__omp_prelude_loaded__" not in globals():
         occurrence = occurrences.get(site_id, 0)
         occurrences[site_id] = occurrence + 1
         _OMP_CALL_OCCURRENCES.set(occurrences)
-        token = _OMP_CALL_IDENTITY.set({"siteId": site_id, "occurrence": occurrence})
+        token = _OMP_CALL_IDENTITY.set(
+            {"siteId": site_id, "occurrence": occurrence}
+        )
         try:
             # `action` is the async `_ToolCallable.__call__`: calling it only
             # builds the coroutine, so the identity must stay set until the
@@ -559,9 +562,7 @@ if "__omp_prelude_loaded__" not in globals():
         args = typing.get_args(annotation)
         if origin is typing.Annotated:
             schema = _annotation_schema(args[0])
-            description = next(
-                (item for item in args[1:] if isinstance(item, str)), None
-            )
+            description = next((item for item in args[1:] if isinstance(item, str)), None)
             if description is not None:
                 schema = {**schema, "description": description}
             return schema
@@ -691,10 +692,7 @@ if "__omp_prelude_loaded__" not in globals():
             if not callable(fn):
                 raise TypeError("@tool expects a function")
             resolved_name = name or getattr(fn, "__name__", "")
-            if (
-                not isinstance(resolved_name, str)
-                or _TOOL_NAME_RE.fullmatch(resolved_name) is None
-            ):
+            if not isinstance(resolved_name, str) or _TOOL_NAME_RE.fullmatch(resolved_name) is None:
                 raise ValueError(f"invalid tool name {resolved_name!r}")
             schema = _tool_schema(fn)
             resolved_description = (
@@ -888,9 +886,7 @@ if "__omp_prelude_loaded__" not in globals():
 
     def _check_questions(questions):
         if not isinstance(questions, dict):
-            raise TypeError(
-                "judge(state, questions) expects questions as a dict keyed by id"
-            )
+            raise TypeError("judge(state, questions) expects questions as a dict keyed by id")
 
     async def judge(state, questions, *, images=None):
         """Answer typed questions over one ``state``; returns ``{id: answer}`` (choice/bool/score).
@@ -957,9 +953,7 @@ if "__omp_prelude_loaded__" not in globals():
             """Yield ``(key, JudgmentItem)`` as items settle until ``timeout`` seconds elapse or the run completes."""
             deadline = None if timeout is None else time.monotonic() + float(timeout)
             while True:
-                remaining = (
-                    None if deadline is None else max(0.0, deadline - time.monotonic())
-                )
+                remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
                 items = await self.drain(remaining)
                 if not items:
                     return
@@ -1013,39 +1007,31 @@ if "__omp_prelude_loaded__" not in globals():
         optional nonempty progress/job label. Item failures land in ``JudgmentItem.error``;
         only a run that dies wholesale raises from ``drain()``.
 
-        ``images`` optionally maps each state key to a list of local-path
-        strings or embedded
+        ``images`` optionally maps state keys to lists of local-path strings or embedded
         ``{"type": "image", "data": ..., "mimeType": ...}`` attachments.
         """
         _check_questions(questions)
-        if intent is not None and (not isinstance(intent, str) or not intent.strip()):
+        if intent is not None and (
+            not isinstance(intent, str) or not intent.strip()
+        ):
             raise TypeError("judge_batch() intent must be a non-empty string")
         if isinstance(states, dict):
             items = [{"key": key, "state": state} for key, state in states.items()]
-            state_keys = set(states)
         elif isinstance(states, (list, tuple)):
-            items = [
-                {"key": index, "state": state} for index, state in enumerate(states)
-            ]
-            state_keys = set(range(len(states)))
+            items = [{"key": index, "state": state} for index, state in enumerate(states)]
         else:
-            raise TypeError(
-                "judge_batch(states, questions) expects states as a dict or list"
-            )
-        args = {"op": "create", "items": items, "questions": questions}
+            raise TypeError("judge_batch(states, questions) expects states as a dict or list")
         if images is not None:
             if not isinstance(images, dict):
-                raise TypeError(
-                    "judge_batch() images must be a dict keyed by input key"
-                )
+                raise TypeError("judge_batch() images must be a dict keyed by input key")
+            item_keys = {item["key"] for item in items}
             for key in images:
-                if key not in state_keys:
-                    raise ValueError(
-                        f"images contains unknown input key {json.dumps(key)}"
-                    )
+                if key not in item_keys:
+                    raise ValueError(f"images contains unknown input key {json.dumps(key)}")
             for item in items:
                 if item["key"] in images:
                     item["images"] = images[item["key"]]
+        args = {"op": "create", "items": items, "questions": questions}
         if concurrency is not None:
             args["concurrency"] = int(concurrency)
         if retries is not None:
@@ -1058,9 +1044,7 @@ if "__omp_prelude_loaded__" not in globals():
 
     def _attach_judge_batch(id):
         """Re-create a ``JudgmentBatch`` ref by id (after a kernel reset or from another runtime)."""
-        return _judge_batch_from(
-            _bridge_call("__judge_batch__", {"op": "attach", "id": str(id)})
-        )
+        return _judge_batch_from(_bridge_call("__judge_batch__", {"op": "attach", "id": str(id)}))
 
     judge_batch.attach = _attach_judge_batch
 
