@@ -588,7 +588,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		const probe = this.#pasteOverlap + chunk;
 		if (probe.indexOf(BRACKETED_PASTE_END) === -1) {
 			this.#pasteChunks.push(chunk);
-			this.#pasteBytes += chunk.length;
+			this.#pasteBytes += Buffer.byteLength(chunk, "utf8");
 			const keep = BRACKETED_PASTE_END.length - 1;
 			this.#pasteOverlap = probe.length > keep ? probe.slice(probe.length - keep) : probe;
 			if (this.#pasteBytes > this.#pasteByteLimit) {
