@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Long lines in native (Tern) `read`, `write`, and code-cell source now wrap instead of scrolling each block sideways ([#15823](https://github.com/can1357/oh-my-pi/issues/15823)).
+
 ## [18.11.0] - 2026-10-14
 
 ### Added
