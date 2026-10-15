@@ -125,6 +125,13 @@ class "gemini" {
 		// Replaces the Gemini 3+ mandatory-reasoning fallback.
 		thinking-requires-effort #true
 	}
+	// Gemini 3+ takes `thinkingLevel` on the native Google transports; Gemini 4
+	// rejects `thinkingBudget` outright (400 "Use thinking level instead").
+	on-api "google-generative-ai" "google-gemini-cli" "google-vertex" {
+		revision ">=3" {
+			thinking-mode "google-level"
+		}
+	}
 	// Public Gemini requires the bypass sentinel on every unsigned call and
 	// supports function-part ids. Scope by adapter so custom providers using
 	// the same wire protocol inherit both contracts. The Cloud Code Assist
