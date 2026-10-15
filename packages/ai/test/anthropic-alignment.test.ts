@@ -1838,7 +1838,7 @@ describe("Anthropic request fingerprint alignment", () => {
 
 	it("marks only the Anthropic strict allowlist strict", async () => {
 		const tools: Tool[] = [
-			...(["python", "edit", "find"] as const).map(name => ({
+			...(["python", "edit", "find", "yield"] as const).map(name => ({
 				name,
 				description: `${name} tool`,
 				strict: true,
@@ -1876,8 +1876,38 @@ describe("Anthropic request fingerprint alignment", () => {
 
 		const strictNames = (payload.tools ?? []).filter(tool => tool.strict === true).map(tool => tool.name);
 
-		expect(strictNames).toEqual(["python", "edit", "find"]);
+		expect(strictNames).toEqual(["python", "edit", "find", "yield"]);
 		expect(payload.tools?.find(tool => tool.name === "edit")?.input_schema?.required).toEqual(["requiredValue"]);
+	});
+
+	it("sends yield with buffered input streaming while other tools stream eagerly", async () => {
+		const tools: Tool[] = (["yield", "read"] as const).map(name => ({
+			name,
+			description: `${name} tool`,
+			strict: true,
+			parameters: {
+				type: "object",
+				properties: { requiredValue: { type: "string" } },
+				required: ["requiredValue"],
+			} as TJsonSchema,
+		}));
+
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+				tools,
+			},
+			{ isOAuth: false },
+		)) as { tools?: Array<{ name?: string; strict?: boolean; eager_input_streaming?: boolean }> };
+
+		// Eager streaming skips the API's input validation, which `strict` alone did not
+		// make up for: eagerly streamed yields still arrived as invalid JSON.
+		const yieldTool = payload.tools?.find(tool => tool.name === "yield");
+		expect(yieldTool?.strict).toBe(true);
+		expect(yieldTool?.eager_input_streaming).toBe(false);
+		expect(payload.tools?.find(tool => tool.name === "read")?.eager_input_streaming).toBe(true);
 	});
 
 	it("marks regular two-field Zod object tools strict", async () => {
@@ -2216,6 +2246,15 @@ describe("Anthropic request fingerprint alignment", () => {
 			interleavedThinking: false,
 			hasTools: true,
 		});
+		const withIncompatibleBufferedTools = buildAnthropicClientOptions({
+			model: incompatibleModel,
+			apiKey: "sk-ant-api-test",
+			extraBetas: [],
+			stream: true,
+			interleavedThinking: false,
+			hasTools: true,
+			hasBufferedInputTools: true,
+		});
 
 		// No betas at all → the header is omitted entirely on API-key requests.
 		expect(withoutTools.defaultHeaders["anthropic-beta"]).toBeUndefined();
@@ -2223,6 +2262,8 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(withIncompatibleTools.defaultHeaders["anthropic-beta"]).toContain(
 			"fine-grained-tool-streaming-2025-05-14",
 		);
+		// The beta would stream `yield` eagerly, past the API's input validation.
+		expect(withIncompatibleBufferedTools.defaultHeaders["anthropic-beta"]).toBeUndefined();
 	});
 
 	it("uses Cloudflare AI Gateway authorization without Anthropic credential headers", () => {
