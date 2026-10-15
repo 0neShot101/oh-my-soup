@@ -28,7 +28,7 @@ async function renderFullJobs(running: AsyncJobSnapshotItem[]): Promise<string[]
 		keybindings: { getKeys: () => ["escape"] },
 		reportContainer,
 		commandReportRows: () => 200,
-		session: {
+		viewSession: {
 			getAsyncJobSnapshot: () => ({
 				running,
 				recent: [],
@@ -230,6 +230,7 @@ describe("/jobs in the native terminal", () => {
 			expect(manager.getJob(workerJob)?.status).toBe("running");
 			sheet?.handleInput?.("\x1b");
 
+			setNativeRendering(false);
 			await mode.handleJobsCommand({ full: true });
 			const report = Bun.stripANSI(mode.reportContainer.render(100).join("\n"));
 			expect(report).toContain("worker cargo test");
