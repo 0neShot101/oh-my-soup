@@ -7,10 +7,12 @@ import * as registry from "@oh-my-pi/pi-coding-agent/collab/registry";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as pluginHelpers from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { runRootCommand } from "@oh-my-pi/pi-coding-agent/main";
 import { Composer, type ComposerPreferences } from "@oh-my-pi/pi-tui/prompt/composer";
+import * as composerCache from "@oh-my-pi/pi-tui/prompt/composer-cache";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import {
 	applyStartupComposerPreferences,
@@ -295,6 +297,42 @@ describe("Composer prepaint", () => {
 	afterEach(() => {
 		stopPendingStartupComposer();
 		resetSettingsForTest();
+	});
+
+	it("prepaints the default role after a session-only model switch", async () => {
+		const testSession = await createTestSession();
+		const cache = composerCache.ComposerCache.open(path.join(testSession.tempDir, "composer.db"));
+		vi.spyOn(composerCache, "sharedComposerCache").mockReturnValue(cache);
+		const sonnet = testSession.session.model;
+		const opus = getBundledModel("anthropic", "claude-opus-4-5");
+		if (!sonnet || !opus) throw new Error("Bundled test models missing");
+		testSession.session.settings.setModelRole("default", `${sonnet.provider}/${sonnet.id}`);
+		vi.spyOn(testSession.session.modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
+		vi.spyOn(testSession.session.modelRegistry, "getAvailable").mockReturnValue([sonnet, opus]);
+		const composer = new Composer({ terminal: new VirtualTerminal() });
+		composer.start();
+		const mode = new InteractiveMode(
+			testSession.session,
+			"test",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			composer,
+		);
+		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
+		try {
+			await mode.init({ suppressWelcomeIntro: true });
+			await testSession.session.setModel(opus);
+			mode.stop();
+			expect(cache.read(testSession.sessionManager.getCwd()).status?.statusLine.model?.id).toBe(sonnet.id);
+		} finally {
+			mode.stop();
+			cache.close();
+			await testSession.cleanup();
+			vi.restoreAllMocks();
+		}
 	});
 
 	it("keeps one live editor and terminal across handoff", () => {
