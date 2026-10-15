@@ -853,23 +853,21 @@ describe("CombinedAutocompleteProvider", () => {
 			expect(partials).toEqual([]);
 		});
 
-		it("bounds the fuzzy walk so a symlinked tree cannot freeze the popup", async () => {
-			// The native walk follows symlinks with no depth bound and no
-			// deadline when `timeoutMs` is unset. The editor restarts this
-			// request on every keystroke, so an unbounded walk never settles and
-			// the popup is stuck on the interim listing forever. Asserting the
-			// option is present is what pins the fix — a timeout only matters
-			// if it is passed.
-			const walk = Promise.withResolvers<natives.FuzzyFindResult>();
-			const fuzzy = spyOn(natives, "fuzzyFind").mockReturnValue(walk.promise);
+		it("settles on the prefix listing when the walk hits its deadline", async () => {
+			// A walk into a huge symlinked tree never finishes on its own; only the
+			// native deadline ends it. Model that walk: with a deadline it rejects
+			// as a timed-out native call does, without one it never settles.
+			spyOn(natives, "fuzzyFind").mockImplementation(options =>
+				options.timeoutMs
+					? Promise.reject(new Error("Timeout"))
+					: Promise.withResolvers<natives.FuzzyFindResult>().promise,
+			);
 
 			const provider = new CombinedAutocompleteProvider([], baseDir);
 			const line = "see @widget";
-			void provider.getSuggestions([line], 0, line.length);
+			const result = await provider.getSuggestions([line], 0, line.length);
 
-			await Bun.sleep(0);
-			expect(fuzzy.mock.calls[0]?.[0]?.timeoutMs).toBeGreaterThan(0);
-			walk.resolve({ matches: [], totalMatches: 0 });
+			expect(result?.items.map(item => item.value)).toEqual(["@widget-app/"]);
 		});
 	});
 
