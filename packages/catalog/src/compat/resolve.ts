@@ -1040,7 +1040,8 @@ function defaultThinkingMode<TApi extends Api>(spec: ModelSpec<TApi>, facts: Ide
 		case "google-generative-ai":
 		case "google-gemini-cli":
 		case "google-vertex":
-			return facts.is("gemini") && facts.revMajor() === 3 ? "google-level" : "budget";
+			// Gemini 3+ `google-level` is a `thinking-mode` rule in classes/gemini.kdl.
+			return "budget";
 		case "anthropic-messages":
 			if (facts.is("minimax") && facts.family("m2", "m3")) return "anthropic-adaptive";
 			if (facts.is("glm") && facts.revGte("5.2") && (spec.provider === "umans" || spec.provider === "zai")) {

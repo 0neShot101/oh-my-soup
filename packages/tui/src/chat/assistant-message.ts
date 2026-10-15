@@ -4,9 +4,11 @@ import { Image, type ImageBudget } from "../components/image";
 import { ImageProtocol, TERMINAL } from "../terminal-capabilities";
 import {
 	type DefaultTextStyle,
+	holdPartialTableRow,
 	Markdown,
 	type MarkdownTheme,
 	rewriteMarkdownLinkDestinations,
+	speculativeStreamingSource,
 	streamingMarkdownSource,
 } from "../components/markdown";
 import { Spacer } from "../components/spacer";
@@ -867,7 +869,13 @@ export class AssistantMessageComponent extends Container {
 					: {
 							text: source,
 							stream,
-							node: node("md", stream ? { text: source, stream: true } : { text: source }, undefined, key),
+							// A streaming node renders its open link or math span as already closed, as the TUI does.
+							node: node(
+								"md",
+								stream ? { text: speculativeStreamingSource(source), stream: true } : { text: source },
+								undefined,
+								key,
+							),
 						};
 			parts.set(slot, entry);
 			return entry.node;
@@ -891,7 +899,9 @@ export class AssistantMessageComponent extends Container {
 				const streaming = live && index === tailIndex;
 				if (content.type === "text" && canonicalizeMessage(content.text)) {
 					answered = true;
-					const source = content.text.trim();
+					// A native terminal sizes table columns by every row it gets: send a growing row once
+					// its line ends. Hold before trimming, which would drop the newline ending a finished row.
+					const source = (streaming ? holdPartialTableRow(content.text) : content.text).trim();
 					// The terminal renders this source itself and would resolve a relative
 					// link against its own idea of the cwd: hand it the session-resolved
 					// targets (resolved once the segment closes, so never while streaming).

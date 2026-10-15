@@ -707,17 +707,16 @@ export class CommandController {
 			this.showCommandReport({ title: "Advisor Status", body: new Text("Advisor is disabled.", 0, 0) });
 			return;
 		}
-		// Fetch live quota data (cached 5 min by the auth-gateway) so we can show
-		// real usage windows/reset timers per advisor provider. Non-fatal when absent.
-		const usageProvider = this.ctx.session as { fetchUsageReports?: () => Promise<UsageReport[] | null> };
-		let usageReports: UsageReport[] | null = null;
-		if (usageProvider.fetchUsageReports) {
-			try {
-				usageReports = await usageProvider.fetchUsageReports();
-			} catch {
-				// Network/auth failure is non-fatal — just skip the quota line.
-			}
-		}
+		// Render cached quota data without waiting for the network. Quota lines
+		// are optional, and the refresh below serves the next invocation.
+		const usageProvider = this.ctx.session as {
+			cachedUsageReports?: UsageReport[];
+			fetchUsageReports?: () => Promise<UsageReport[] | null>;
+		};
+		const usageReports: UsageReport[] | null = usageProvider.cachedUsageReports ?? null;
+		// Warm the snapshot for the next invocation. The fetch logs its own
+		// failures, and a missing quota line is non-fatal by design.
+		void usageProvider.fetchUsageReports?.().catch(() => {});
 		// Resolve the active OAuth identity for each advisor's provider so quota
 		// filtering matches the credential actually in use (not sibling accounts).
 		const resolveActiveAdvisorAccount = (provider: string, sessionId?: string): OAuthAccountIdentity | undefined =>
