@@ -1068,21 +1068,30 @@ describe("AgentSession auto-compaction progress guard", () => {
 				cfgCompactionThresholdTokens.set(session.settings, 10_500);
 			});
 
-			it("retries a reasoning-only turn with the length-stop hint instead of compacting", async () => {
-				const handoffSpy = vi.spyOn(compactionModule, "generateHandoffFromContext");
-				const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+			it.each([
+				{ source: "prompt buckets", contextTokens: undefined },
+				// Authoritative occupancy (Cursor checkpoints) includes the cut output.
+				{ source: "reported context occupancy", contextTokens: 11_024 },
+			])(
+				"retries a reasoning-only turn with the length-stop hint instead of compacting ($source)",
+				async ({ contextTokens }) => {
+					const handoffSpy = vi.spyOn(compactionModule, "generateHandoffFromContext");
+					const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+					const message = lengthStop([
+						{ type: "thinking", thinking: "unfinished reasoning", thinkingSignature: "sig" },
+					]);
+					message.usage.contextTokens = contextTokens;
 
-				await endTurn(
-					lengthStop([{ type: "thinking", thinking: "unfinished reasoning", thinkingSignature: "sig" }]),
-				);
+					await endTurn(message);
 
-				expect(handoffSpy).not.toHaveBeenCalled();
-				expect(continueSpy).toHaveBeenCalledTimes(1);
-				expect(session.agent.state.messages.at(-1)).toMatchObject({
-					role: "developer",
-					content: [{ type: "text", text: expect.stringContaining("1024-token output limit") }],
-				});
-			});
+					expect(handoffSpy).not.toHaveBeenCalled();
+					expect(continueSpy).toHaveBeenCalledTimes(1);
+					expect(session.agent.state.messages.at(-1)).toMatchObject({
+						role: "developer",
+						content: [{ type: "text", text: expect.stringContaining("1024-token output limit") }],
+					});
+				},
+			);
 
 			it("keeps a truncated deliverable instead of compacting it away", async () => {
 				cfgCompactionKeepRecentTokens.set(session.settings, 1);
