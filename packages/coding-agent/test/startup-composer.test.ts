@@ -27,6 +27,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 import { installInMemoryRelay, uninstallInMemoryRelay } from "./collab/helpers/in-memory-relay";
+import { cfgTierOpenai } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { createTestSession } from "./utilities";
 
 import {
@@ -299,45 +300,53 @@ describe("Composer prepaint", () => {
 		resetSettingsForTest();
 	});
 
-	it("prepaints the default model's priority tier after a session-only family switch", async () => {
-		const testSession = await createTestSession();
-		const cache = composerCache.ComposerCache.open(path.join(testSession.tempDir, "composer.db"));
-		vi.spyOn(composerCache, "sharedComposerCache").mockReturnValue(cache);
-		const anthropic = testSession.session.model;
-		const openai = getBundledModel("openai", "gpt-5.2");
-		if (!anthropic || !openai) throw new Error("Bundled test models missing");
-		testSession.session.settings.setModelRole("default", `${openai.provider}/${openai.id}`);
-		vi.spyOn(testSession.session.modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
-		vi.spyOn(testSession.session.modelRegistry, "getAvailable").mockReturnValue([openai, anthropic]);
-		testSession.session.setServiceTierFamily("openai", "priority");
-		await testSession.session.setModel(openai);
-		const composer = new Composer({ terminal: new VirtualTerminal() });
-		composer.start();
-		const mode = new InteractiveMode(
-			testSession.session,
-			"test",
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			composer,
-		);
-		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
-		try {
-			await mode.init({ suppressWelcomeIntro: true });
-			await testSession.session.setModel(anthropic);
-			mode.stop();
-			const status = cache.read(testSession.sessionManager.getCwd()).status?.statusLine;
-			expect(status?.model?.id).toBe(openai.id);
-			expect(status?.fastMode).toBe(true);
-		} finally {
-			mode.stop();
-			cache.close();
-			await testSession.cleanup();
-			vi.restoreAllMocks();
-		}
-	});
+	it.each([
+		{ configured: "priority", sessionFast: false, cachedFast: true },
+		{ configured: "none", sessionFast: true, cachedFast: false },
+	] as const)(
+		"prepaints fast mode from tier.openai=$configured, not a session-only /fast toggle",
+		async ({ configured, sessionFast, cachedFast }) => {
+			const testSession = await createTestSession();
+			const cache = composerCache.ComposerCache.open(path.join(testSession.tempDir, "composer.db"));
+			vi.spyOn(composerCache, "sharedComposerCache").mockReturnValue(cache);
+			const anthropic = testSession.session.model;
+			const openai = getBundledModel("openai", "gpt-5.2");
+			if (!anthropic || !openai) throw new Error("Bundled test models missing");
+			testSession.session.settings.setModelRole("default", `${openai.provider}/${openai.id}`);
+			vi.spyOn(testSession.session.modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
+			vi.spyOn(testSession.session.modelRegistry, "getAvailable").mockReturnValue([openai, anthropic]);
+			cfgTierOpenai.set(testSession.session.settings, configured);
+			await testSession.session.setModel(openai);
+			testSession.session.setFastMode(sessionFast);
+			expect(testSession.session.isFastModeActive()).toBe(sessionFast);
+			const composer = new Composer({ terminal: new VirtualTerminal() });
+			composer.start();
+			const mode = new InteractiveMode(
+				testSession.session,
+				"test",
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				composer,
+			);
+			vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
+			try {
+				await mode.init({ suppressWelcomeIntro: true });
+				await testSession.session.setModel(anthropic);
+				mode.stop();
+				const status = cache.read(testSession.sessionManager.getCwd()).status?.statusLine;
+				expect(status?.model?.id).toBe(openai.id);
+				expect(status?.fastMode).toBe(cachedFast);
+			} finally {
+				mode.stop();
+				cache.close();
+				await testSession.cleanup();
+				vi.restoreAllMocks();
+			}
+		},
+	);
 
 	it("keeps one live editor and terminal across handoff", () => {
 		const terminal = new CountingTerminal();

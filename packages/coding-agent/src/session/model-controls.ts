@@ -26,6 +26,7 @@ import {
 	resolveModelRoleValue,
 } from "../config/model-resolver";
 import { getKnownRoleIds } from "../config/model-roles";
+import { buildServiceTierByFamily } from "../config/service-tier";
 import type { Settings } from "../config/settings";
 import { containsMagicKeyword } from "@oh-my-pi/pi-tui/prompt/magic-keywords";
 import type { MagicKeywordId } from "../modes/magic-keywords";
@@ -47,7 +48,13 @@ import { formatRoleModelValue, resolveRoleModelFull } from "./role-models";
 import { EPHEMERAL_MODEL_CHANGE_ROLE } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 
-import { cfgDefaultThinkingLevel, cfgProvidersFireworksTier } from "./settings";
+import {
+	cfgDefaultThinkingLevel,
+	cfgProvidersFireworksTier,
+	cfgTierAnthropic,
+	cfgTierGoogle,
+	cfgTierOpenai,
+} from "./settings";
 import { cfgDisabledProviders, cfgEnabledModels } from "../config/model-settings";
 
 /** Capabilities borrowed from the owning AgentSession. */
@@ -720,21 +727,38 @@ export class ModelControls {
 	}
 
 	/**
-	 * True when a fast tier is actually realized on the wire for `model`, or
-	 * the active model when omitted: `priority` (OpenAI/Google `service_tier`,
-	 * direct Anthropic fast mode, or Fireworks priority), or `ultrafast` where
-	 * the model offers it. Returns false for tiers the model can't realize and
-	 * when no model is selected.
+	 * True when a fast tier is actually realized on the wire for the currently
+	 * selected model: `priority` (OpenAI/Google `service_tier`, direct Anthropic
+	 * fast mode, or Fireworks priority), or `ultrafast` where the model offers
+	 * it. Returns false for tiers the active model can't realize and when no
+	 * model is selected.
 	 */
-	isFastModeActive(model: Model | undefined = this.#model): boolean {
-		if (!model) return false;
-		const tier = this.effectiveServiceTier(model);
-		if (tier === "ultrafast") return shouldSendServiceTier(tier, model);
-		if (!realizesPriorityServiceTier(tier, model)) return false;
-		if (model.provider === "anthropic") {
-			return !isAnthropicFastModeFallbackDisabled(this.#host.providerSessionState, model);
-		}
-		return true;
+	isFastModeActive(): boolean {
+		const model = this.#model;
+		if (!model || !this.#realizesFastTier(model, this.#serviceTierByFamily)) return false;
+		return (
+			model.provider !== "anthropic" || !isAnthropicFastModeFallbackDisabled(this.#host.providerSessionState, model)
+		);
+	}
+
+	/**
+	 * Whether a fresh session started on `model` would realize a fast tier from
+	 * the configured `tier.*` settings, ignoring this session's `/fast` toggles.
+	 * Feeds the next launch's startup status prepaint.
+	 */
+	isFastModeConfiguredFor(model: Model): boolean {
+		const settings = this.#host.settings;
+		const tiers = buildServiceTierByFamily(
+			cfgTierOpenai.get(settings),
+			cfgTierAnthropic.get(settings),
+			cfgTierGoogle.get(settings),
+		);
+		return this.#realizesFastTier(model, tiers);
+	}
+
+	#realizesFastTier(model: Model, tiers: ServiceTierByFamily): boolean {
+		const tier = this.#serviceTierFor(model, tiers);
+		return tier === "ultrafast" ? shouldSendServiceTier(tier, model) : realizesPriorityServiceTier(tier, model);
 	}
 
 	/**
@@ -745,13 +769,16 @@ export class ModelControls {
 	 * per-family tier map down to the entry for its family.
 	 */
 	effectiveServiceTier(model: Model | undefined = this.#model): ServiceTier | undefined {
-		if (model?.provider === "fireworks") {
+		return model ? this.#serviceTierFor(model, this.#serviceTierByFamily) : undefined;
+	}
+
+	#serviceTierFor(model: Model, tiers: ServiceTierByFamily): ServiceTier | undefined {
+		if (model.provider === "fireworks") {
 			return cfgProvidersFireworksTier.get(this.#host.settings) === "priority" && !isFireworksFastModelId(model.id)
 				? "priority"
 				: undefined;
 		}
-		if (!model) return undefined;
-		return resolveModelServiceTier(this.#serviceTierByFamily, model);
+		return resolveModelServiceTier(tiers, model);
 	}
 
 	/** The live per-family tier map, or `null` when empty (for session persistence). */
