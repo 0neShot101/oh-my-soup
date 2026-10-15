@@ -53,8 +53,12 @@ export interface JobsSheetSource {
 	load(): JobsPanelSnapshot;
 	/** The selected job's detail; runs once per frame, undefined once the job is gone. */
 	inspect(id: string): JobsPanelDetail | undefined;
-	/** Cancel a running job. */
-	cancel(id: string): void;
+	/**
+	 * Cancel a running job. Omitted by a read-only sheet (a focused subagent
+	 * view, which only watches that agent): it lists the jobs and offers no way
+	 * to stop them.
+	 */
+	cancel?(id: string): void;
 	/** Dismiss the sheet. */
 	close(): void;
 }
@@ -98,6 +102,8 @@ const FALLBACK_TAIL_LINES = 8;
  * jobs it shows an empty state. It re-reads the session every frame, so the
  * caller re-renders it on a timer while it is open. ↑/↓ select, X cancels the
  * selected running job, Esc or Close dismisses; nothing enters the transcript.
+ * A source without `cancel` renders read-only: the same rows and detail, no
+ * Cancel action.
  */
 export class JobsSheet implements Component {
 	readonly nativeOverlay = {
@@ -141,7 +147,7 @@ export class JobsSheet implements Component {
 						{ role: "omp.jobs.split" },
 						[
 							node("col", { role: "omp.jobs.master" }, [describeJobList(jobs, selected, now)], "master"),
-							describeDetail(selected, detail, now),
+							describeDetail(selected, detail, now, this.#source.cancel !== undefined),
 						],
 						"split",
 					),
@@ -190,14 +196,14 @@ export class JobsSheet implements Component {
 		if (matchesSelectCancel(data)) this.#source.close();
 		else if (matchesSelectUp(data)) this.#move(-1);
 		else if (matchesSelectDown(data)) this.#move(1);
-		else if (matchesKey(data, "x")) this.#cancelSelected();
+		else if (this.#source.cancel && matchesKey(data, "x")) this.#cancelSelected();
 	}
 
 	/** Clicks select a row; Close and Cancel job run what Esc and X run. */
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (event.type === "select" || event.type === "activate") this.#selectedId = event.item;
 		else if (event.type === "action" && event.act === "close") this.#source.close();
-		else if (event.type === "action" && event.act === "cancel") this.#cancelSelected();
+		else if (this.#source.cancel && event.type === "action" && event.act === "cancel") this.#cancelSelected();
 	}
 
 	/** Every job, running first, and the selected one (the first when the selection left). */
@@ -226,7 +232,7 @@ export class JobsSheet implements Component {
 
 	#cancelSelected(): void {
 		const { selected } = this.#current();
-		if (selected?.status === "running") this.#source.cancel(selected.id);
+		if (selected?.status === "running") this.#source.cancel?.(selected.id);
 	}
 }
 
@@ -314,10 +320,16 @@ function describeEmpty(): NativeNode {
 }
 
 /**
- * The selected job: a status line (pill, live elapsed, type · id, Cancel job),
- * its task or full command, facts and the output pane (or its empty state).
+ * The selected job: a status line (pill, live elapsed, type · id, Cancel job
+ * when `cancellable`), its task or full command, facts and the output pane (or
+ * its empty state).
  */
-function describeDetail(job: JobsPanelJob, detail: JobsPanelDetail | undefined, nowMs: number): NativeNode {
+function describeDetail(
+	job: JobsPanelJob,
+	detail: JobsPanelDetail | undefined,
+	nowMs: number,
+	cancellable: boolean,
+): NativeNode {
 	const settled = job.status !== "running";
 	const exit = detail?.exitCode;
 	const age = Math.round(jobAge(job, nowMs));
@@ -347,7 +359,7 @@ function describeDetail(job: JobsPanelJob, detail: JobsPanelDetail | undefined, 
 				}),
 				text([span(`${job.type} · ${job.id}`, "mono")], { role: "omp.jobs.id", wrap: "none", truncate: "end" }),
 				node("spacer", { grow: 1 }),
-				!settled && actionButton("Cancel job", "cancel", { keys: "x", tone: "error" }),
+				cancellable && !settled && actionButton("Cancel job", "cancel", { keys: "x", tone: "error" }),
 			]),
 			{ role: "omp.jobs.status", gap: "sm", align: "center" },
 		),

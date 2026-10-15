@@ -154,4 +154,16 @@ describe("JobsSheet", () => {
 		expect(lines).toContain("pid 41");
 		expect(lines).toContain("running 12 tests");
 	});
+
+	it("renders read-only when the source cannot cancel: the jobs and detail stay, Cancel job is gone", () => {
+		// A focused subagent view only watches that agent's jobs (#14814).
+		const source: JobsSheetSource = { load: () => JOBS, inspect: (id: string) => DETAILS[id], close: vi.fn() };
+		const sheet = new JobsSheet(source);
+		expect(byRole(sheet.describe(CX), "omp.btn").map(btn => btn.key)).toEqual(["close"]);
+
+		sheet.handleInput(DOWN);
+		const lines = sheet.render(100).join("\n");
+		expect(lines).toContain("cargo test --workspace");
+		expect(lines).toContain("pid 41");
+	});
 });
