@@ -8,7 +8,7 @@
 
 ### Changed
 
-- Reduced memory used by bundled model catalog data in standalone and npm installs.
+- Reduced memory used by bundled model catalog data in standalone and npm installs ([#15876](https://github.com/can1357/oh-my-pi/pull/15876) by [@iliaal](https://github.com/iliaal)).
 
 ### Fixed
 
