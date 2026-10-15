@@ -186,6 +186,13 @@ export function sniffBase64ImageMimeType(base64: string): string | undefined {
 	return parseImageMetadata(Buffer.from(base64.slice(0, 64), "base64"))?.mimeType;
 }
 
+/**
+ * Validate provider-bound image input without changing it. Accepts non-empty standard base64
+ * with canonical trailing bits and optional padding, and case-insensitive image MIME syntax.
+ * Does not sniff the MIME type, decode image pixels, or enforce provider-specific format support.
+ *
+ * @throws {AIError.ValidationError} If the base64 data or image MIME type is invalid.
+ */
 export function validateImageInput(image: ImageInput): void {
 	if (!isRecord(image) || typeof image.data !== "string") {
 		throw new AIError.ValidationError("invalid base64 image data");
@@ -197,9 +204,14 @@ export function validateImageInput(image: ImageInput): void {
 
 export function toDataUrl(image: ImageInput): string {
 	validateImageInput(image);
-	return `data:${image.mimeType};base64,${image.data}`;
+	return `data:${image.mimeType.replace(/[#^]/g, char => (char === "#" ? "%23" : "%5E"))};base64,${image.data}`;
 }
 
+/**
+ * Non-empty decoded bytes on success, or a validation failure reason, never both.
+ * Check `reason` before using `bytes`; successful base64 decoding does not establish
+ * that the bytes represent a supported or decodable image.
+ */
 export type Base64ImageDecodeResult =
 	| { bytes: Buffer; reason?: never }
 	| { bytes?: never; reason: "invalid base64 image data" | "empty image data" };
@@ -238,7 +250,7 @@ export function decodeBase64ImageData(data: string): Base64ImageDecodeResult {
 	return bytes.length > 0 ? { bytes } : { reason: "empty image data" };
 }
 
-const IMAGE_MIME_TYPE = /^image\/[A-Za-z0-9][A-Za-z0-9.+-]*$/i;
+const IMAGE_MIME_TYPE = /^image\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$/i;
 const IMAGE_DETAILS: Record<string, true> = {
 	auto: true,
 	low: true,
