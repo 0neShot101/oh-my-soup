@@ -683,6 +683,10 @@ impl ReadCommand {
 		}
 		#[cfg(not(target_family = "wasm"))]
 		{
+			// Seekable input cannot depend on a producer queued on this runtime.
+			if reader.source.reads_ahead() {
+				return read_line_with_reader(&mut reader, &config, &is_cancelled);
+			}
 			tokio::task::spawn_blocking(move || read_line_with_reader(&mut reader, &config, &is_cancelled))
 				.await
 				.map_err(ErrorKind::ThreadingError)?

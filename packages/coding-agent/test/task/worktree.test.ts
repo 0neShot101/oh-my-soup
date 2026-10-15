@@ -873,11 +873,13 @@ describe("detachGitDir", () => {
 				const module = path.join(root, "packages/module");
 				const nested = path.join(module, "nested");
 				const baseline = await captureIsolationBaseline(root, wt);
+				// git realpaths the admin dir; a symlinked tmpdir (macOS /var -> /private/var) must match.
+				const rootReal = await fs.realpath(root);
 				for (const dir of [module, nested]) {
 					expect(await runGit(dir, ["status", "--porcelain=v1"])).toBe("");
 					// git prints forward slashes on Windows; resolve to the platform form.
 					const admin = path.resolve(await runGit(dir, ["rev-parse", "--absolute-git-dir"]));
-					expect(admin.startsWith(root + path.sep)).toBe(true);
+					expect(admin.startsWith(rootReal + path.sep)).toBe(true);
 				}
 				// Submodule clones don't inherit the superproject's identity; CI has no global one.
 				for (const dir of [module, nested]) {
