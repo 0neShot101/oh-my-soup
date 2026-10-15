@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Cursor turns that die mid-stream failing every retry with zero-token `PROVIDER_ERROR` until a new user message; the conversation is now rotated as for `resource_exhausted` ([#15830](https://github.com/can1357/oh-my-pi/issues/15830))
+
 ## [18.11.0] - 2026-10-14
 
 ### Fixed
