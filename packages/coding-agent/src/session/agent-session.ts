@@ -10243,9 +10243,9 @@ export class AgentSession implements SettingsScope {
 		return this.#models.isFastModeEnabled();
 	}
 
-	/** Reports whether priority service is realized by the active model. */
-	isFastModeActive(): boolean {
-		return this.#models.isFastModeActive();
+	/** Reports whether priority service is realized by `model` (or the active model when omitted). */
+	isFastModeActive(model?: Model): boolean {
+		return this.#models.isFastModeActive(model);
 	}
 
 	/** Effective wire service tier for a request to `model` under the live per-family tiers. */

@@ -299,16 +299,18 @@ describe("Composer prepaint", () => {
 		resetSettingsForTest();
 	});
 
-	it("prepaints the default role after a session-only model switch", async () => {
+	it("prepaints the default model's priority tier after a session-only family switch", async () => {
 		const testSession = await createTestSession();
 		const cache = composerCache.ComposerCache.open(path.join(testSession.tempDir, "composer.db"));
 		vi.spyOn(composerCache, "sharedComposerCache").mockReturnValue(cache);
-		const sonnet = testSession.session.model;
-		const opus = getBundledModel("anthropic", "claude-opus-4-5");
-		if (!sonnet || !opus) throw new Error("Bundled test models missing");
-		testSession.session.settings.setModelRole("default", `${sonnet.provider}/${sonnet.id}`);
+		const anthropic = testSession.session.model;
+		const openai = getBundledModel("openai", "gpt-5.2");
+		if (!anthropic || !openai) throw new Error("Bundled test models missing");
+		testSession.session.settings.setModelRole("default", `${openai.provider}/${openai.id}`);
 		vi.spyOn(testSession.session.modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
-		vi.spyOn(testSession.session.modelRegistry, "getAvailable").mockReturnValue([sonnet, opus]);
+		vi.spyOn(testSession.session.modelRegistry, "getAvailable").mockReturnValue([openai, anthropic]);
+		testSession.session.setServiceTierFamily("openai", "priority");
+		await testSession.session.setModel(openai);
 		const composer = new Composer({ terminal: new VirtualTerminal() });
 		composer.start();
 		const mode = new InteractiveMode(
@@ -324,9 +326,11 @@ describe("Composer prepaint", () => {
 		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
 		try {
 			await mode.init({ suppressWelcomeIntro: true });
-			await testSession.session.setModel(opus);
+			await testSession.session.setModel(anthropic);
 			mode.stop();
-			expect(cache.read(testSession.sessionManager.getCwd()).status?.statusLine.model?.id).toBe(sonnet.id);
+			const status = cache.read(testSession.sessionManager.getCwd()).status?.statusLine;
+			expect(status?.model?.id).toBe(openai.id);
+			expect(status?.fastMode).toBe(true);
 		} finally {
 			mode.stop();
 			cache.close();

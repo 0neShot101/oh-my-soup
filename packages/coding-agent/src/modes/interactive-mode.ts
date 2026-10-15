@@ -3710,7 +3710,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				model,
 				thinkingLevel: this.session.thinkingLevel,
 				autoThinking: this.session.isAutoThinking,
-				fastMode: this.session.isFastModeActive(),
+				fastMode: model ? this.session.isFastModeActive(model) : false,
 				usingSubscription: model ? this.session.modelRegistry.isUsingOAuth(model) : false,
 				autoCompactEnabled: this.session.autoCompactionEnabled,
 				compactionBoundaries: model?.contextWindow

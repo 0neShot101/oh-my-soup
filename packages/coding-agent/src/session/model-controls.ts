@@ -720,14 +720,13 @@ export class ModelControls {
 	}
 
 	/**
-	 * True when a fast tier is actually realized on the wire for the currently
-	 * selected model: `priority` (OpenAI/Google `service_tier`, direct Anthropic
-	 * fast mode, or Fireworks priority), or `ultrafast` where the model offers
-	 * it. Returns false for tiers the active model can't realize and when no
-	 * model is selected.
+	 * True when a fast tier is actually realized on the wire for `model`, or
+	 * the active model when omitted: `priority` (OpenAI/Google `service_tier`,
+	 * direct Anthropic fast mode, or Fireworks priority), or `ultrafast` where
+	 * the model offers it. Returns false for tiers the model can't realize and
+	 * when no model is selected.
 	 */
-	isFastModeActive(): boolean {
-		const model = this.#model;
+	isFastModeActive(model: Model | undefined = this.#model): boolean {
 		if (!model) return false;
 		const tier = this.effectiveServiceTier(model);
 		if (tier === "ultrafast") return shouldSendServiceTier(tier, model);
