@@ -990,12 +990,12 @@ describe("Coding Agent Tools", () => {
 			expect(output).not.toContain("Showing line 1");
 		});
 
-		it("tail selector is verbatim under :raw and clamps to the whole file when N exceeds it", async () => {
+		it("raw tail selects the last two addressable lines, not the terminal newline", async () => {
 			const testFile = path.join(testDir, "tail-raw.txt");
 			fs.writeFileSync(testFile, "alpha\nbeta\ngamma\n");
 
 			const raw = getTextOutput(await readTool.execute("test-tail-raw", { path: `${testFile}:raw:-2` }));
-			expect(raw).toBe("gamma\n");
+			expect(raw).toBe("beta\ngamma");
 
 			const clamped = getTextOutput(await readTool.execute("test-tail-clamp", { path: `${testFile}:-50` }));
 			expect(clamped).toContain("alpha");
@@ -2348,14 +2348,13 @@ function b() {
 			expect(result.details?.timeoutSeconds).toBe(300);
 		});
 
-		it("should record wall time in text content and details", async () => {
-			const result = await bashTool.execute("test-call-walltime", { command: "echo wt" });
-
-			const output = getTextOutput(result);
-			expect(output).toContain("wt");
-			expect(output).toMatch(/Wall time: \d+\.\d{2} seconds/);
-			expect(typeof result.details?.wallTimeMs).toBe("number");
-			expect(result.details?.wallTimeMs).toBeGreaterThanOrEqual(0);
+		it("retains wall time and exit status for slow failed commands", async () => {
+			const result = await bashTool.execute("test-call-walltime-slow", { command: "sleep 1.1; echo wt; exit 7" });
+			expect(getTextOutput(result)).toContain("wt");
+			expect(getTextOutput(result)).toMatch(/Wall time: \d+\.\d{2} seconds/);
+			expect(result.details?.wallTimeMs).toBeGreaterThanOrEqual(1000);
+			expect(result.details?.exitCode).toBe(7);
+			expect(result.isError).toBe(true);
 		});
 
 		it("should block built-in interceptor commands when enabled with default patterns", async () => {

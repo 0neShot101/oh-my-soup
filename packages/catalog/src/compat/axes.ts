@@ -329,6 +329,8 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"thinking-suppress-when-off": { key: "suppressWhenOff", set: "thinking", shape: "scalar" },
 	"thinking-supports-display": { key: "supportsDisplay", set: "thinking", shape: "scalar" },
 	"thinking-upgrade-neutral": { key: "upgradeNeutral", set: "thinking", shape: "scalar" },
+	/** Unclassified neutral ids here are capability-unknown: offer the ladder as opt-in. */
+	"thinking-unverified": { key: "unverified", set: "thinking", shape: "scalar" },
 
 	// ── catalog metadata ──
 	"apply-patch-tool-type": {
@@ -338,6 +340,7 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 		values: ["freeform", "function"],
 	},
 	"requires-native-tools": { key: "requiresNativeTools", set: "catalog", shape: "scalar", values: [true, false] },
+	"tool-schemas-in-context": { key: "toolSchemasInContext", set: "catalog", shape: "scalar", values: [true, false] },
 	"requires-tool-free-history-for-tool-opt-out": {
 		key: "requiresToolFreeHistoryForToolOptOut",
 		set: "catalog",
@@ -368,6 +371,19 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 		shape: "scalar",
 		values: [true, false],
 	},
+	/**
+	 * The model's input classifier refuses requests that reproduce assistant
+	 * reasoning as quoted text (`reasoning_extraction`), so reasoning must not
+	 * be replayed as text into its input: compaction archives, summarizer
+	 * transcripts and demoted interrupted turns leave it out. Declared per class
+	 * in `classes/*.kdl`.
+	 */
+	"classifier-cot-extraction": {
+		key: "classifierCotExtraction",
+		set: "catalog",
+		shape: "scalar",
+		values: [true, false],
+	},
 	"clamp-context-override": { key: "clampContextOverride", set: "catalog", shape: "scalar" },
 	"context-promotion-target": { key: "contextPromotionTarget", set: "catalog", shape: "scalar" },
 	"context-window-floor": { key: "contextWindowFloor", set: "catalog", shape: "scalar" },
@@ -388,6 +404,26 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 		set: "catalog",
 		shape: "scalar",
 		values: [true, false],
+	},
+	/**
+	 * The host bills cache writes at this multiple of the row's live `input`
+	 * price, for hosts whose discovery reports cache-write tokens but no
+	 * cache-write rate. It replaces any `cacheWrite` the row carries, including
+	 * a `cost-patch`/`cost-fallback` value and an absolute long-context tier's
+	 * `cacheWrite` (rebased on the tier's `input`).
+	 */
+	"cache-write-rate": { key: "cacheWriteRate", set: "catalog", shape: "scalar" },
+	/**
+	 * How the model line bills a replayed signed thinking block as input:
+	 * `output` bills the reasoning its signature carries, at the size the turn
+	 * billed as output, and not the signature's bytes. Unassigned: estimated
+	 * from the signature's bytes. Read through `./thinking-replay`.
+	 */
+	"thinking-replay-tokens": {
+		key: "thinkingReplayTokens",
+		set: "catalog",
+		shape: "scalar",
+		values: ["output", "signature"],
 	},
 	"delegation-bias": { key: "delegationBias", set: "catalog", shape: "scalar", values: DELEGATION_BIASES },
 	"discovery-api": { key: "discoveryApi", set: "catalog", shape: "scalar" },
@@ -417,6 +453,13 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	 * `ANTHROPIC_BASE_URL`/`FOUNDRY_BASE_URL` reroute (proxy, gateway) need not share.
 	 */
 	"official-image-count-budget": { key: "officialImageCountBudget", set: "catalog", shape: "scalar" },
+	/**
+	 * Opt-in: the reader may get a fresh `read` result as snapcompact frames
+	 * (`snapcompact.toolResults`), because it edits as exactly from frames as
+	 * from text. Unassigned: `read` results stay text, since a reader that
+	 * misreads indentation in frames makes inexact edits.
+	 */
+	"snapcompact-image-reads": { key: "snapcompactImageReads", set: "catalog", shape: "scalar", values: [true, false] },
 	"image-model": { key: "imageModel", set: "catalog", shape: "scalar" },
 	/** Longest image edge the host passes to the model: it downscales larger images to fit first. */
 	"image-max-edge": { key: "imageMaxEdge", set: "catalog", shape: "scalar" },
@@ -429,6 +472,12 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"limits-patch": { key: "limitsPatch", set: "catalog", shape: "object" },
 	"long-context-cost": { key: "longContext", set: "catalog", shape: "object" },
 	"prompt-cache": { key: "promptCache", set: "catalog", shape: "object" },
+	"task-sibling-prompt-cache": {
+		key: "taskSiblingPromptCache",
+		set: "catalog",
+		shape: "scalar",
+		values: [true, false],
+	},
 	/**
 	 * Prompt-cache lookback in block positions: how far back from a cache
 	 * breakpoint the provider looks for an earlier request's cache entry.

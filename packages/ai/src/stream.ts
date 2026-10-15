@@ -12,6 +12,7 @@ import {
 	mapEffortToGoogleThinkingLevel,
 	requireSupportedEffort,
 	resolveWireModelId,
+	withoutUnverifiedThinking,
 } from "@oh-my-pi/pi-catalog/model-thinking";
 import { isOfficialCodexApiUrl } from "@oh-my-pi/pi-catalog/wire/codex";
 import { $env, getProviderInFlightRoot, isEnoent, logger, untilAborted } from "@oh-my-pi/pi-utils";
@@ -1220,6 +1221,11 @@ export function streamSimple<TApi extends Api>(
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
 	const sessionOptions = withInferenceSessionId(options);
+	// Unverified thinking is opt-in: without a requested effort the request is
+	// byte-identical to a non-reasoning model's.
+	const effortRequested =
+		sessionOptions.reasoning !== undefined && !sessionOptions.disableReasoning && !sessionOptions.forceReasoningOff;
+	if (!effortRequested) model = withoutUnverifiedThinking(model);
 	if (!model.requiresGlyphTokenization) {
 		return streamSimpleRequest(model, context, sessionOptions);
 	}
@@ -1829,7 +1835,6 @@ function mapOptionsForApi<TApi extends Api>(
 		minimizeEffort: options?.minimizeEffort,
 		liveSteering: options?.liveSteering,
 		maxInFlightRequests: options?.maxInFlightRequests,
-		toolNamespacesInfo: options?.toolNamespacesInfo,
 		onPayload: options?.onPayload,
 		onResponse: options?.onResponse,
 		onSseEvent: options?.onSseEvent,
@@ -2105,6 +2110,7 @@ function mapOptionsForApi<TApi extends Api>(
 				codexCompaction: options?.codexCompaction,
 				reasoningSummary: options?.hideThinkingSummary ? null : undefined,
 				textVerbosity: options?.textVerbosity,
+				disableReasoning: options?.disableReasoning,
 				forceReasoningOff: options?.forceReasoningOff,
 			});
 

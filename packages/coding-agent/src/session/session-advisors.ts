@@ -86,7 +86,7 @@ import { serviceTierForAllFamilies, serviceTierSettingToTier } from "../config/s
 import type { Settings } from "../config/settings";
 import { CursorExecHandlers, type CursorMcpResourceAdapter } from "../cursor";
 import { bridgeToolMap } from "../cursor-bridge-tools";
-import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
+import { estimateContextToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import type { PlanModeState } from "../plan-mode/state";
 import advisorBoundaryGuidance from "../prompts/advisor/boundary-guidance.md" with { type: "text" };
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
@@ -97,6 +97,7 @@ import {
 	resolveThinkingLevelForModel,
 	shouldDisableReasoning,
 	toReasoningEffort,
+	automaticThinkingLevel,
 } from "@oh-my-pi/pi-tui/thinking";
 import type { AgentSessionEvent } from "./agent-session-events";
 import type { ClientBridge } from "./client-bridge";
@@ -1175,8 +1176,8 @@ export class SessionAdvisors {
 			// is sent and reasoning stays enabled (matching the `auto`-path fix for
 			// Devin models via `clampAutoThinkingEffort`). See #4579.
 			const requestedLevel = autoThinking
-				? this.#autoAdvisorThinkingLevel()
-				: (thinkingLevel ?? ThinkingLevel.Medium);
+				? automaticThinkingLevel(model, this.#autoAdvisorThinkingLevel())
+				: (thinkingLevel ?? automaticThinkingLevel(model, ThinkingLevel.Medium));
 			const resolvedLevel = resolveThinkingLevelForModel(model, requestedLevel);
 			const advisorThinkingLevel: ThinkingLevel = resolvedLevel ?? ThinkingLevel.Inherit;
 			// Record the status entry now (in roster order) so the Map's insertion
@@ -1979,7 +1980,9 @@ export class SessionAdvisors {
 			// A retry-fallback selector pinned its own effort for the fallback
 			// model; the retune resumes once the configured model is restored.
 			if (!advisor.autoThinking || advisor.runtime.disposed || advisor.retryFallback) continue;
-			const next = resolveThinkingLevelForModel(advisor.model, requested) ?? ThinkingLevel.Inherit;
+			const next =
+				resolveThinkingLevelForModel(advisor.model, automaticThinkingLevel(advisor.model, requested)) ??
+				ThinkingLevel.Inherit;
 			if (next === advisor.thinkingLevel) continue;
 			advisor.agent.setThinkingLevel(toReasoningEffort(next));
 			advisor.agent.setDisableReasoning(shouldDisableReasoning(next));
@@ -2357,7 +2360,12 @@ export class SessionAdvisors {
 		const providerContextTokens = this.#estimateAdvisorContextTokens(advisor) + incomingTokens;
 		const localContextTokens =
 			agent.tokenizer.countTokens(agent.state.systemPrompt) +
-			estimateToolSchemaTokens(agent.state.tools, agent.tokenizer, this.#host.settings.revision) +
+			estimateContextToolSchemaTokens(
+				agent.state.tools,
+				agent.tokenizer,
+				advisorModel,
+				this.#host.settings.revision,
+			) +
 			storedConversationTokens +
 			incomingTokens;
 		const contextTokens = compactionContextTokens(providerContextTokens, localContextTokens);
