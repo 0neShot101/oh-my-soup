@@ -365,7 +365,11 @@ export class WorkerCore {
 			const runtime = this.#ensureRuntime(snapshot, runId);
 			runtime.setCwd(snapshot.cwd);
 			runtime.syncPreludes(snapshot.preludes ?? []);
-			const value = await runtime.run(code, filename, hooks, { runId, cwd: snapshot.cwd });
+			const value = await runtime.run(code, filename, hooks, {
+				runId,
+				cwd: snapshot.cwd,
+				localRoots: snapshot.localRoots ?? {},
+			});
 			runtime.displayValue(value, hooks);
 			result = { type: "result", runId, ok: true };
 		} catch (error) {
