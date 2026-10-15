@@ -2932,6 +2932,19 @@ function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | str
 				stopReason: "error",
 				errorMessage: "Provider returned error finish_reason: insufficient_system_resource",
 			};
+		case "unknown":
+		case "other":
+		case "unspecified":
+		case "finish_reason_unspecified":
+			// The provider ended the stream without saying why (a dropped
+			// connection behind a gateway, a backend that lost the stop code).
+			// Pinning it as a terminal error strands a turn that a resample
+			// fixes. Word the message to match the transient-transport retry
+			// pattern; the retry budget bounds the replay.
+			return {
+				stopReason: "error",
+				errorMessage: `Provider returned error finish_reason: ${normalized}`,
+			};
 		default:
 			return {
 				stopReason: "error",

@@ -348,6 +348,18 @@ function isCursorModelNotFound(error: unknown): boolean {
 	);
 }
 
+/**
+ * Failures that, before any token, mean the wire conversation is poisoned
+ * rather than the account: a bare gRPC `resource_exhausted` (#8345), or the
+ * structured PROVIDER_ERROR every resume of a turn cut mid-stream draws (#15830).
+ */
+function isCursorConversationRejected(error: unknown, message: string): boolean {
+	return (
+		(error instanceof AIError.ProviderHttpError && error.code === "PROVIDER_ERROR") ||
+		RESOURCE_EXHAUSTED_PATTERN.test(message)
+	);
+}
+
 const CURSOR_MAX_STREAM_RETRIES = 5;
 const CURSOR_RETRY_BASE_DELAY_MS = 500;
 const NOT_IMPLEMENTED = `Not implemented by this client`;
@@ -1814,13 +1826,14 @@ function streamCursorWithWireMode(
 				flushOpenToolCalls(output, stream, openBlockState);
 			}
 			const result = await AIError.finalize(error, { api: model.api, signal: options?.signal });
-			// #8345: a server-side per-conversation rejection surfaces as a bare
-			// resource_exhausted with zero tokens — the conversation is poisoned,
-			// not the account. Rotate the wire id and rebuild from `context` on
-			// the next attempt (the caller's retry loop). Do not migrate cached
-			// side-state: pendingToolCalls from a mid-turn checkpoint re-poison
-			// the new id. One rotation per failure streak; a new rotation is
-			// allowed only after the current rotated id completed a turn.
+			// #8345/#15830: a server-side per-conversation rejection (a bare
+			// resource_exhausted, or PROVIDER_ERROR after a mid-turn cut) with zero
+			// tokens means the conversation is poisoned, not the account. Rotate
+			// the wire id and rebuild from `context` on the next attempt (the
+			// caller's retry loop). Do not migrate cached side-state:
+			// pendingToolCalls from a mid-turn checkpoint re-poison the new id.
+			// One rotation per failure streak; a new rotation is allowed only
+			// after the current rotated id completed a turn.
 			const currentRotated =
 				baseConversationId === undefined ? undefined : rotatedConversationIds.get(baseConversationId);
 			const canRotate = currentRotated === undefined || successfulRotatedConversationIds.has(currentRotated);
@@ -1829,7 +1842,7 @@ function streamCursorWithWireMode(
 				baseConversationId !== undefined &&
 				usageState !== undefined &&
 				!usageState.sawTokenDelta &&
-				RESOURCE_EXHAUSTED_PATTERN.test(result.message) &&
+				isCursorConversationRejected(error, result.message) &&
 				canRotate
 			) {
 				const rotated = crypto.randomUUID();
