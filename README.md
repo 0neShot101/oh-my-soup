@@ -497,7 +497,7 @@ Inside `pi-natives`, the per-module breakdown (glue and tests omitted):
 
 ## Four entry points: _interactive_, _one-shot_, RPC, and ACP.
 
-Same engine, four wrappers. `omp` runs the TUI. `omp -p` answers a single prompt and exits. The Node SDK embeds the session in your process. `omp --mode rpc` and `omp acp` hand the wheel to another program over stdio. One-shot mode returns exit code `1` when the final assistant result is an unrecovered error.
+Same engine, four wrappers. `omp` runs the TUI. `omp -p` answers a single prompt and exits. The Node SDK embeds the session in your process. `omp --mode rpc` and `omp acp` hand the wheel to another program over stdio.
 
 ### Interactive — when in doubt, the agent asks
 

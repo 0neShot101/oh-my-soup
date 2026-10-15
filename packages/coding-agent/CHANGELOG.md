@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed print mode returning success after length-stop recovery gave up. Print mode now waits for the session to settle before choosing its exit code.
+- Fixed print mode returning success after length-stop recovery gave up; it now waits for the session to settle before choosing its exit code ([#15732](https://github.com/can1357/oh-my-pi/pull/15732) by [@nick-maderight](https://github.com/nick-maderight))
 - Fixed browser `tab.click("text/…")` passing over a match a scroll container shows only a narrow strip of and clicking a later duplicate instead ([#15792](https://github.com/can1357/oh-my-pi/pull/15792) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed `/advisor` status waiting on usage checks; it now renders immediately with cached quota data and refreshes usage in the background ([#15780](https://github.com/can1357/oh-my-pi/pull/15780) by [@mvid](https://github.com/mvid))
 - Fixed a task agent's `autoload-skills` silently dropping a skill added after the parent session started: agents are rediscovered on every spawn but the skill list was fixed at startup, so the spawn now rediscovers skills once when a named skill is missing ([#15723](https://github.com/can1357/oh-my-pi/pull/15723) by [@shyamsivakumar](https://github.com/shyamsivakumar))

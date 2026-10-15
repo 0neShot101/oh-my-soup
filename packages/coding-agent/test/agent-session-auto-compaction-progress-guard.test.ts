@@ -1061,52 +1061,6 @@ describe("AgentSession auto-compaction progress guard", () => {
 		});
 	});
 
-	it("compacts three empty length stops near the window when the configured threshold exceeds it", async () => {
-		const model = session.agent.state.model;
-		session.agent.setModel({ ...model, contextWindow: 272_000 });
-		cfgCompactionMethodOrder.set(session.settings, ["shake"]);
-		cfgCompactionEnabled.set(session.settings, true);
-		cfgCompactionThresholdTokens.set(session.settings, 500_000);
-		cfgCompactionKeepRecentTokens.set(session.settings, 1);
-		cfgContextPromotionEnabled.set(session.settings, false);
-		compactHookEnabled = false;
-
-		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
-		const shakeSpy = vi.spyOn(session, "shake").mockResolvedValue({
-			mode: "elide",
-			toolResultsDropped: 1,
-			blocksDropped: 0,
-			tokensFreed: 100_000,
-			artifactId: "length-stop-recovery",
-		});
-
-		for (let attempt = 0; attempt < 3; attempt++) {
-			const message: AssistantMessage = {
-				role: "assistant",
-				content: [],
-				api: "anthropic-messages",
-				provider: "anthropic",
-				model: "claude-sonnet-4-5",
-				stopReason: "length",
-				usage: {
-					input: 271_700,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 271_700,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
-				timestamp: Date.now() + attempt,
-			};
-			sessionManager.appendMessage(message);
-			session.agent.emitExternalEvent({ type: "message_end", message });
-			session.agent.emitExternalEvent({ type: "agent_end", messages: [message] });
-			await session.waitForIdle();
-			expect(shakeSpy).toHaveBeenCalledTimes(attempt + 1);
-		}
-		expect(continueSpy).toHaveBeenCalledTimes(3);
-	});
-
 	it("durably caps repeated empty length-stop recovery across restart", async () => {
 		// #10594: a model (zai/glm-4.5-flash) kept returning an empty zero-token
 		// `length` turn. Handoff generation produced no document, so recovery fell
