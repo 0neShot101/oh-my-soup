@@ -1637,6 +1637,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			rules: session.ttsrManager?.getRules(),
 		};
 	}
+	approvalOwnsComposer = false;
 	get focusedAgentId(): string | undefined {
 		return this.#focusController.focusedAgentId;
 	}
