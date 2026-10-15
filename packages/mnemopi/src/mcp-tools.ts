@@ -447,7 +447,7 @@ function sharedBeam(): BeamMemory {
 	return new BeamMemory({ sessionId: "mcp_shared_surface", dbPath });
 }
 
-async function withBeam<T>(args: ToolArguments, fn: (beam: BeamMemory, bank: string) => T | Promise<T>): Promise<T> {
+export async function withBeam<T>(args: ToolArguments, fn: (beam: BeamMemory, bank: string) => T | Promise<T>): Promise<T> {
 	const bank = resolveBank(args);
 	const beam = createBeam(args, bank);
 	let result: T;

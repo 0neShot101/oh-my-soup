@@ -14,8 +14,9 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { randomBytes } from "node:crypto";
-import { rmSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import "./setup";
 import { cmdRemember } from "@oh-my-pi/pi-mnemopi/cli";
 import { BeamMemory } from "@oh-my-pi/pi-mnemopi/core/beam";
@@ -24,6 +25,7 @@ import {
 	type ResolvedMnemopiRuntimeOptions,
 	withMnemopiRuntimeOptions,
 } from "@oh-my-pi/pi-mnemopi/core/runtime-options";
+import { withBeam } from "@oh-my-pi/pi-mnemopi/mcp";
 
 interface EmbeddingRow {
 	readonly memory_id: string;
@@ -253,6 +255,53 @@ describe("issue #1832 — embedding write/read coverage", () => {
 		} finally {
 			fresh.close();
 			rmSync(dbPath, { force: true });
+		}
+	});
+
+	it("drains pending embeddings before close even when the handler throws", async () => {
+		// Regression for #15804: withBeam's flushExtractions() must run in a finally
+		// block so that a throw from the handler still drains before close. Without
+		// this, a throwing MCP remember handler would silently drop the embedding row.
+		const { provider, calls } = fakeProvider();
+		const dataDir = `${tmpdir()}/mnemopi-15804-${randomBytes(6).toString("hex")}`;
+		mkdirSync(dataDir, { recursive: true });
+		const dbPath = join(dataDir, "mnemopi.db");
+		const runtimeOptions: ResolvedMnemopiRuntimeOptions = {
+			embeddings: { provider },
+		};
+
+		const originalDataDir = process.env.MNEMOPI_DATA_DIR;
+		process.env.MNEMOPI_DATA_DIR = dataDir;
+		try {
+			await withMnemopiRuntimeOptions(runtimeOptions, async () => {
+				await withBeam({ bank: "default" }, async (beam, bank) => {
+					beam.remember("alpha throw-path regression", { source: "test", importance: 0.5 });
+					throw new Error("simulated handler failure");
+				});
+			});
+		} catch {
+			// Expected: the handler threw, but withBeam should have drained first.
+		} finally {
+			if (originalDataDir === undefined) {
+				delete process.env.MNEMOPI_DATA_DIR;
+			} else {
+				process.env.MNEMOPI_DATA_DIR = originalDataDir;
+			}
+		}
+
+		// Re-open as a separate session to verify the embedding survived the throw.
+		const fresh = new BeamMemory({ dbPath });
+		try {
+			const rows = fresh.db.query("SELECT memory_id, embedding_json FROM memory_embeddings").all() as {
+				memory_id: string;
+				embedding_json: string;
+			}[];
+			expect(rows).toHaveLength(1);
+			expect(JSON.parse(rows[0]?.embedding_json ?? "[]")).toEqual([1, 0, 0, 0]);
+			expect(calls()).toBeGreaterThanOrEqual(1);
+		} finally {
+			fresh.close();
+			rmSync(dataDir, { recursive: true, force: true });
 		}
 	});
 
