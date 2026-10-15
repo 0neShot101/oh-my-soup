@@ -2,9 +2,6 @@
 
 ## [Unreleased]
 
-### Changed
-
-- Changed native OpenAI compaction to truncate over-long replayed message IDs with the shared `truncateResponseItemId`; IDs are unchanged ([#14374](https://github.com/can1357/oh-my-pi/pull/14374) by [@jaredlyon](https://github.com/jaredlyon))
 ## [18.11.1] - 2026-10-15
 
 ### Added
