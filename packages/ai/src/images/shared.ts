@@ -250,9 +250,11 @@ export function resolveOpenAIImageSize(aspectRatio?: string, imageSize?: string)
 	switch (aspectRatio) {
 		case "1:1":
 			return "1024x1024";
+		case "2:3":
 		case "3:4":
 		case "9:16":
 			return "1024x1536";
+		case "3:2":
 		case "4:3":
 		case "16:9":
 			return "1536x1024";
