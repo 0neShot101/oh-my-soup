@@ -34,7 +34,7 @@ import type {
 	ToolChoice,
 	ToolResultMessage,
 } from "../types";
-import { normalizeSystemPrompts, resolveCacheRetention } from "../utils";
+import { normalizeSystemPrompts, normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { isDemotedThinking, kStreamingLastParseLen } from "../utils/block-symbols";
 import { hasVisibleAssistantContent, withReplaySafeStreamRetry } from "../utils/empty-completion-retry";
@@ -127,6 +127,8 @@ import {
 } from "./vision-guard";
 
 export { applyOpenRouterRoutingVariant } from "./openai-shared";
+
+const OPENAI_TOOL_CALL_ID_MAX_LENGTH = 40;
 
 type OpenAICompletionsReasoningField = NonNullable<ResolvedOpenAICompat["reasoningContentField"]>;
 
@@ -2319,10 +2321,10 @@ export function convertMessages(
 	const maxNormalizedToolCallIdLength = compat.requiresMistralToolIds
 		? 9
 		: compat.usesOpenAIToolCallIdLimit
-			? 40
+			? OPENAI_TOOL_CALL_ID_MAX_LENGTH
 			: undefined;
 	const duplicateToolCallIdSuffixPrefix = compat.requiresMistralToolIds ? "dup" : undefined;
-	const normalizeToolCallId = (id: string, source?: AssistantMessage): string => {
+	const normalizeCompletionsToolCallId = (id: string, source?: AssistantMessage): string => {
 		if (compat.requiresMistralToolIds) return normalizeMistralToolId(id, true);
 
 		const isSameModelSource =
@@ -2335,16 +2337,17 @@ export function convertMessages(
 		// Chat Completions IDs are provider-issued opaque correlation tokens.
 		if (!isSameModelSource && id.includes("|")) {
 			const [callId] = id.split("|");
-			return callId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
+			return normalizeToolCallId(callId, OPENAI_TOOL_CALL_ID_MAX_LENGTH);
 		}
 
-		if (compat.usesOpenAIToolCallIdLimit) return id.length > 40 ? id.slice(0, 40) : id;
+		if (compat.usesOpenAIToolCallIdLimit)
+			return id.length > OPENAI_TOOL_CALL_ID_MAX_LENGTH ? id.slice(0, OPENAI_TOOL_CALL_ID_MAX_LENGTH) : id;
 		return id;
 	};
 	const transformedMessages = transformMessages(
 		context.messages,
 		model,
-		(id, _target, source) => normalizeToolCallId(id, source),
+		(id, _target, source) => normalizeCompletionsToolCallId(id, source),
 		maxNormalizedToolCallIdLength,
 		duplicateToolCallIdSuffixPrefix,
 		compat,
@@ -2377,7 +2380,7 @@ export function convertMessages(
 	};
 
 	const ensureToolCallId = (rawId: string, seed: string, source?: AssistantMessage): string => {
-		const normalized = normalizeToolCallId(rawId, source);
+		const normalized = normalizeCompletionsToolCallId(rawId, source);
 		if (normalized.trim().length > 0) return normalized;
 		return generateFallbackToolCallId(seed);
 	};
