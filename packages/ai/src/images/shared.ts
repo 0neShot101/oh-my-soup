@@ -189,8 +189,8 @@ export function sniffBase64ImageMimeType(base64: string): string | undefined {
 /**
  * Validate provider-bound image input without changing it. Accepts non-empty standard base64
  * with canonical trailing bits and optional padding, and case-insensitive image MIME syntax
- * (RFC 6838 restricted names, except `#`, which data URLs cannot carry intact).
- * Does not sniff the MIME type, decode image pixels, or enforce provider-specific format support.
+ * (RFC 6838 restricted names). Does not sniff the MIME type, decode image pixels, or enforce
+ * provider-specific format support; data-URL transports additionally go through `toDataUrl`.
  *
  * @throws {AIError.ValidationError} If the base64 data or image MIME type is invalid.
  */
@@ -203,14 +203,21 @@ export function validateImageInput(image: ImageInput): void {
 	if (!isImageMimeType(image.mimeType)) throw new AIError.ValidationError("invalid image MIME type");
 }
 
+/**
+ * Encode validated image input as a base64 data URL.
+ *
+ * @throws {AIError.ValidationError} If the input is invalid or its MIME type cannot survive a data URL.
+ */
 export function toDataUrl(image: ImageInput): string {
 	validateImageInput(image);
+	if (!isDataUrlMimeType(image.mimeType)) {
+		throw new AIError.ValidationError("image MIME type containing '#' cannot be sent as a data URL");
+	}
 	return `data:${image.mimeType};base64,${image.data}`;
 }
 
-// RFC 6838 restricted-name, minus `#`: a raw `#` starts a URL fragment and data-URL
-// consumers leave a `%23` escape undecoded, so no data-URL transport preserves it.
-const IMAGE_MIME_TYPE = /^image\/[A-Za-z0-9][A-Za-z0-9!$&^_.+-]{0,126}$/i;
+// RFC 6838 restricted-name.
+const IMAGE_MIME_TYPE = /^image\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$/i;
 const IMAGE_DETAILS: Record<string, true> = {
 	auto: true,
 	low: true,
@@ -222,12 +229,21 @@ function isImageMimeType(value: unknown): value is string {
 	return typeof value === "string" && IMAGE_MIME_TYPE.test(value);
 }
 
+/**
+ * Whether a MIME type survives a data URL intact: a raw `#` starts a URL fragment and
+ * data-URL consumers leave a `%23` escape undecoded, so no data-URL transport preserves it.
+ */
+export function isDataUrlMimeType(mimeType: string): boolean {
+	return !mimeType.includes("#");
+}
+
 function isEmbeddedImageShape(image: unknown): image is ImageContent {
 	return (
 		isRecord(image) &&
 		image.type === "image" &&
 		typeof image.data === "string" &&
 		isImageMimeType(image.mimeType) &&
+		isDataUrlMimeType(image.mimeType) &&
 		(image.detail === undefined || (typeof image.detail === "string" && Object.hasOwn(IMAGE_DETAILS, image.detail)))
 	);
 }
