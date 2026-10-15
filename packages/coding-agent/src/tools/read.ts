@@ -1863,7 +1863,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (sqlitePath) {
 				return readSqlite(sqlitePath, signal);
 			}
-			const jsonPath = await resolveJsonReadPath(this.session, literalSplit.path, suffixCache, signal);
+			// local:// and artifact:// locate backing files without their URL query;
+			// restore it only for JSON reads, leaving other schemes' query semantics alone.
+			const jsonQuery = located?.url.indexOf("?") ?? -1;
+			const jsonScheme = jsonQuery >= 0 && located ? extractUriScheme(located.url) : null;
+			const jsonReadPath =
+				located && (jsonScheme === "local" || jsonScheme === "artifact")
+					? `${literalSplit.path}${located.url.slice(jsonQuery)}`
+					: literalSplit.path;
+			const jsonPath = await resolveJsonReadPath(this.session, jsonReadPath, suffixCache, signal);
 			if (jsonPath) {
 				return readJson(this.session, jsonPath, literalSplit.sel, signal);
 			}

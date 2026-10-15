@@ -505,12 +505,13 @@ fn first_match_in_line<M: Matcher>(
 ) -> Option<(usize, usize)> {
 	let buffer = mat.buffer();
 	let range = mat.bytes_range_in_buffer();
+	let terminator = searcher.line_terminator();
+	let terminated = terminator.is_suffix(&buffer[range.clone()]);
 	let end = if searcher.multi_line_with_matcher(matcher) {
 		buffer.len()
 	} else {
 		let mut end = range.end;
-		let terminator = searcher.line_terminator();
-		if terminator.is_suffix(&buffer[range.clone()]) {
+		if terminated {
 			end -= 1;
 			if terminator.is_crlf() && end > range.start && buffer[end - 1] == b'\r' {
 				end -= 1;
@@ -522,14 +523,17 @@ fn first_match_in_line<M: Matcher>(
 		.find_at(&buffer[..end], range.start)
 		.ok()
 		.flatten()?;
-	if found.start() >= range.end {
+	// A match at `range.end` begins on the next line, except an empty one
+	// (`$`, `\z`) after an unterminated last line.
+	if found.start() > range.end || (found.start() == range.end && terminated) {
 		return None;
 	}
 	let block = mat.bytes();
 	let (start, stop) = (found.start() - range.start, found.end().min(range.end) - range.start);
 	// `line` is `block` decoded and trimmed: offsets carry over unless lossy
 	// decoding replaced invalid bytes, which changes the byte lengths before
-	// them.
+	// them. An offset in the trimmed trailing whitespace maps to the end of
+	// `line`, the last column it shows.
 	let lossy = std::str::from_utf8(block).is_err();
 	let to_line = |offset: usize| -> usize {
 		let offset = if lossy {
@@ -2976,6 +2980,19 @@ mod tests {
 		let found = search_long_line("\u{FFFD}|needle", &content, false);
 		assert!(found.line.contains("needle"), "{}", found.line);
 		assert_eq!(found.column, Some(14_002));
+	}
+
+	#[test]
+	fn long_line_window_shows_an_empty_match_at_the_end_of_input() {
+		let line = "a".repeat(5_000);
+		for (pattern, multiline) in
+			[("$", false), (r"\z", false), ("x|$", false), ("$", true), (r"\z", true)]
+		{
+			let found = search_long_line(pattern, &line, multiline);
+			assert_eq!(found.column, Some(5_001), "{pattern} multiline={multiline}");
+			assert!(found.line.starts_with("...a"), "{pattern}: {}", found.line);
+			assert!(found.line.ends_with('a'), "{pattern}: {}", found.line);
+		}
 	}
 
 	#[cfg(unix)]

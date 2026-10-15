@@ -764,9 +764,11 @@ export interface ProcessTerminalOptions {
 	conpty?: boolean;
 	/**
 	 * Whether stdin is a native Windows console handle (win32, not WSL), whose
-	 * console host answers `CSI ? 9001 h` with win32-input-mode key records.
-	 * Defaults to `process.platform === "win32"`; only consulted when `conpty`
-	 * is also true.
+	 * console host is certain to answer `CSI ? 9001 h` with win32-input-mode key
+	 * records. When false (WSL), the keyboard fallback requests modifyOtherKeys
+	 * alongside win32-input-mode, since a WSL pty may not be relayed by a console
+	 * host. Defaults to `process.platform === "win32"`; only consulted when
+	 * `conpty` is also true.
 	 */
 	nativeWindowsConsole?: boolean;
 }
@@ -1682,8 +1684,11 @@ export class ProcessTerminal implements Terminal {
 
 		// Handler that pipes stdin data through the buffer
 		this.#stdinDataHandler = (data: string) => {
-			// Recover modes reset by the host before the user's next paste.
-			if (data && this.#active && this.#rearmBracketedPaste) this.#safeWrite("\x1b[?2004h");
+			// Recover modes reset by the host before the user's next paste. Not
+			// mid-paste: the host is plainly in 2004 then, and per-key reads would
+			// turn one paste into thousands of writes (#15757).
+			if (data && this.#active && this.#rearmBracketedPaste && !this.#stdinBuffer!.pasting)
+				this.#safeWrite("\x1b[?2004h");
 			if (this.#win32PasteNormalizer) this.#win32PasteNormalizer.process(data);
 			else this.#stdinBuffer!.process(data);
 		};
@@ -1976,10 +1981,11 @@ export class ProcessTerminal implements Terminal {
 	#enableModifyOtherKeysFallback(): void {
 		if (this.#kittyProtocolActive || this.#modifyOtherKeysActive || this.#win32InputDecoder) return;
 		const ssh = isSshSession();
-		if (this.#conpty && this.#nativeWindowsConsole && !ssh) {
+		if (this.#conpty && !ssh) {
 			// The Windows console host ignores modifyOtherKeys and folds Shift+Enter
-			// into a bare CR. win32-input-mode is answered by the console host
-			// serving this process, so it works under every local ConPTY terminal.
+			// into a bare CR (Ctrl+Enter into LF). win32-input-mode is answered by the
+			// console host serving this process, so it works under every local ConPTY
+			// terminal, and under WSL through the `wsl.exe` relay's console host too.
 			// Under sshd the console host is fed the remote terminal's VT stream,
 			// and the mode splits arrow keys into Escape plus literal text (#14034).
 			this.#safeWrite("\x1b[?9001h");
@@ -1990,7 +1996,10 @@ export class ProcessTerminal implements Terminal {
 				data => this.#stdinBuffer?.process(data),
 				() => this.#releaseWin32PendingSequence(),
 			);
-			return;
+			// A WSL pty is not always relayed by a console host (tmux, VS Code
+			// Remote-WSL, WSLg terminals). Those ignore 9001 and keep sending plain
+			// VT, which the decoder passes through, so also ask for modifyOtherKeys.
+			if (this.#nativeWindowsConsole) return;
 		}
 		// A remote terminal with no identifying env may not understand the request.
 		if (ssh && (TERMINAL.id === "base" || TERMINAL.id === "trueColor")) return;
