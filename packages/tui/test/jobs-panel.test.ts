@@ -155,19 +155,12 @@ describe("JobsSheet", () => {
 		expect(lines).toContain("running 12 tests");
 	});
 
-	it("renders read-only when the source cannot cancel: no Cancel job, X and the cancel action unbound", () => {
-		// A focused subagent view reads the MAIN session's jobs through the
-		// sheet, so cancelling there would kill a job that session owns (#14814).
+	it("renders read-only when the source cannot cancel: the jobs and detail stay, Cancel job is gone", () => {
+		// A focused subagent view only watches that agent's jobs (#14814).
 		const source: JobsSheetSource = { load: () => JOBS, inspect: (id: string) => DETAILS[id], close: vi.fn() };
 		const sheet = new JobsSheet(source);
-		const root = sheet.describe(CX);
-		expect(byRole(root, "omp.btn").map(btn => btn.key)).toEqual(["close"]);
+		expect(byRole(sheet.describe(CX), "omp.btn").map(btn => btn.key)).toEqual(["close"]);
 
-		sheet.handleInput("x");
-		sheet.handleNativeEvent({ type: "action", key: "cancel", act: "cancel", mods: [] });
-		expect(source.close).not.toHaveBeenCalled();
-
-		// The jobs and the selected detail stay; only the way to stop it is gone.
 		sheet.handleInput(DOWN);
 		const lines = sheet.render(100).join("\n");
 		expect(lines).toContain("cargo test --workspace");

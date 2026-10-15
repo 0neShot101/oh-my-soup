@@ -54,9 +54,9 @@ export interface JobsSheetSource {
 	/** The selected job's detail; runs once per frame, undefined once the job is gone. */
 	inspect(id: string): JobsPanelDetail | undefined;
 	/**
-	 * Cancel a running job. Omitted by a read-only sheet — one whose jobs belong
-	 * to another session (a focused subagent view reads the main session's jobs) —
-	 * which lists them and offers no way to stop them.
+	 * Cancel a running job. Omitted by a read-only sheet (a focused subagent
+	 * view, which only watches that agent): it lists the jobs and offers no way
+	 * to stop them.
 	 */
 	cancel?(id: string): void;
 	/** Dismiss the sheet. */
@@ -322,8 +322,7 @@ function describeEmpty(): NativeNode {
 /**
  * The selected job: a status line (pill, live elapsed, type · id, Cancel job
  * when `cancellable`), its task or full command, facts and the output pane (or
- * its empty state). A read-only sheet passes `cancellable: false` — one whose
- * jobs belong to another session — and shows no way to stop them.
+ * its empty state).
  */
 function describeDetail(
 	job: JobsPanelJob,

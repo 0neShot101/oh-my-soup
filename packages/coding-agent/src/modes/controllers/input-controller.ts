@@ -1439,9 +1439,8 @@ export class InputController {
 			const parsed = parseSlashCommand(text);
 			if (parsed && FOCUSED_VIEW_COMMANDS[parsed.name]?.(parsed.args)) {
 				// Viewer-scoped commands: /btw asks about the focused transcript, /export
-				// writes it (with its own subagents), /jobs and /usage are read-only views
-				// of the main session's jobs (its Cancel action stays behind, so a focused
-				// view stops no job — see handleJobsCommand) and account-wide limits.
+				// writes it (with its own subagents), /jobs lists the focused agent's jobs
+				// without a way to cancel them, /usage reports account-wide limits.
 				this.#recordSlashCommandUsage(text);
 				if ((await executeBuiltinSlashCommand(text, { ctx: this.ctx })) === true) {
 					if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);

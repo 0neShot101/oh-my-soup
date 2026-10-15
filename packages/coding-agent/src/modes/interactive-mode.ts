@@ -706,9 +706,7 @@ class HudPillsRow implements Component {
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (event.type !== "action") return;
 		if (event.act === "agents.open") this.mode.showAgentHub();
-		// The pill stays reachable while a subagent view is focused, and the sheet
-		// it opens reads the main session's jobs: read-only there, as for `/jobs`.
-		else if (event.act === "jobs.open") this.mode.showJobsSheet({ readOnly: this.mode.focusedAgentId !== undefined });
+		else if (event.act === "jobs.open") this.mode.showJobsSheet();
 	}
 }
 
@@ -7457,24 +7455,24 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * Unlike `/jobs` it adds nothing to the transcript, so a click mid-turn
 	 * leaves no deferred command preview above the editor.
 	 *
-	 * `readOnly` drops the Cancel action — the sheet then lists jobs and stops
-	 * none. A focused subagent view reads the MAIN session's jobs through it, so
-	 * cancelling there would kill a job that session owns (#14814).
+	 * It lists the viewed session's jobs, as the pill counts them. A focused
+	 * subagent view opens it without the Cancel action: the view only watches
+	 * that agent, as `/jobs kill` stays main-session only.
 	 */
-	showJobsSheet(options?: { readOnly?: boolean }): void {
+	showJobsSheet(): void {
 		if (this.#jobsSheetHandle) return;
-		if (!this.session.getAsyncJobSnapshot()) {
+		const session = this.viewSession;
+		if (!session.getAsyncJobSnapshot()) {
 			this.showWarning("Async background jobs are unavailable in this session.");
 			return;
 		}
-		const readOnly = options?.readOnly === true;
 		const sheet = new JobsSheet({
-			load: () => this.session.getAsyncJobSnapshot({ recentLimit: 5 }) ?? { running: [], recent: [] },
-			inspect: id => this.session.inspectAsyncJob(id),
-			cancel: readOnly
+			load: () => session.getAsyncJobSnapshot({ recentLimit: 5 }) ?? { running: [], recent: [] },
+			inspect: id => session.inspectAsyncJob(id),
+			cancel: this.focusedAgentId
 				? undefined
 				: id => {
-						this.session.cancelAsyncJob(id);
+						session.cancelAsyncJob(id);
 						this.ui.requestRender();
 					},
 			close: () => this.#hideJobsSheet(),
