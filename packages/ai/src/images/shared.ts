@@ -203,7 +203,7 @@ export function validateImageInput(image: ImageInput): void {
 
 export function toDataUrl(image: ImageInput): string {
 	validateImageInput(image);
-	return `data:${image.mimeType};base64,${image.data}`;
+	return `data:${image.mimeType.replace(/[#^]/g, char => (char === "#" ? "%23" : "%5E"))};base64,${image.data}`;
 }
 
 /**
@@ -249,7 +249,7 @@ export function decodeBase64ImageData(data: string): Base64ImageDecodeResult {
 	return bytes.length > 0 ? { bytes } : { reason: "empty image data" };
 }
 
-const IMAGE_MIME_TYPE = /^image\/[A-Za-z0-9][A-Za-z0-9.+-]*$/i;
+const IMAGE_MIME_TYPE = /^image\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$/i;
 
 function isImageMimeType(value: unknown): value is string {
 	return typeof value === "string" && IMAGE_MIME_TYPE.test(value);
