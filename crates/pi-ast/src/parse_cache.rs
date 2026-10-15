@@ -53,9 +53,15 @@ const COST_PER_NODE: usize = 64;
 /// the working set).
 pub const MAX_RETAINED_BYTES: usize = 32 << 20;
 
-/// Largest source that can occupy a slot: its source term alone fills
-/// [`MAX_RETAINED_BYTES`]. Larger files are still parsed, just never retained.
-pub const MAX_ENTRY_SOURCE_BYTES: usize = MAX_RETAINED_BYTES / COST_PER_SOURCE_BYTE;
+/// Largest source worth parsing for retention.
+///
+/// At a typical density of one visible node per 4 source bytes (TypeScript
+/// and Python run ~1 per 4.3), a larger tree would exceed
+/// [`MAX_RETAINED_BYTES`] on its own. This is only a pre-filter: a smaller but
+/// node-dense source can still exceed the budget and be dropped after
+/// parsing. Larger files are still parsed on demand.
+pub const MAX_ENTRY_SOURCE_BYTES: usize =
+	MAX_RETAINED_BYTES / (COST_PER_SOURCE_BYTE + COST_PER_NODE / 4);
 
 /// Slot ceiling, independent of size.
 ///
@@ -320,8 +326,13 @@ fn input_edit(old: &str, new: &str) -> InputEdit {
 /// Incremental and fresh parses of error-free source produce the same tree,
 /// but error recovery can settle differently. A tree with errors is therefore
 /// always a fresh parse, so a result never depends on what was cached before.
+/// A broken base goes straight to the fresh parse: its successor is usually
+/// broken too (auto-repair probes a file's broken variants back to back), and
+/// the incremental attempt would only be thrown away.
 fn parse_from(language: &Language, code: &str, base: Option<Base>) -> Result<Option<Tree>> {
-	if let Some(Base { source, mut tree }) = base {
+	if let Some(Base { source, mut tree }) = base
+		&& !tree.root_node().has_error()
+	{
 		tree.edit(&input_edit(&source, code));
 		if let Some(tree) = grammar::parse(language, code, Some(&tree))?
 			&& !tree.root_node().has_error()

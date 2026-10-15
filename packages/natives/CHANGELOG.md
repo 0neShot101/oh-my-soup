@@ -4,7 +4,8 @@
 
 ### Changed
 
-- Reduced memory held by cached code-structure parses: the cache now caps estimated syntax-tree memory instead of source size, drops a file's old parse as soon as its new content is parsed, and reparses edited files incrementally ([#15886](https://github.com/can1357/oh-my-pi/pull/15886))
+- Reduced memory held by cached code-structure parses: the cache now caps estimated syntax-tree memory instead of source size, drops a file's old parse as soon as its new content is parsed, and reparses edited files incrementally ([#15886](https://github.com/can1357/oh-my-pi/pull/15886) by [@H4vC](https://github.com/H4vC))
+- Changed `warmBlockParse` to skip files over 1 MiB (was 4 MiB), the size above which a typical parse no longer fits the cache ([#15886](https://github.com/can1357/oh-my-pi/pull/15886) by [@H4vC](https://github.com/H4vC))
 
 ## [18.11.1] - 2026-10-15
 

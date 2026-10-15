@@ -344,8 +344,9 @@ pub struct NodeSpan {
 ///
 /// The next block query over the same source and language is then a cache
 /// hit. Does nothing for empty source or an unrecognized language, where the
-/// queries never parse either, nor for a source the cache will not retain
-/// (the tree would be discarded and parsed again by the query).
+/// queries never parse either, nor for a source over
+/// [`MAX_ENTRY_SOURCE_BYTES`], where a typical tree would not fit the cache's
+/// memory budget (it would be discarded and parsed again by the query).
 pub fn warm_parse(code: &str, lang: Option<&str>, path: Option<&str>) -> Result<()> {
 	if !code.is_empty()
 		&& code.len() <= MAX_ENTRY_SOURCE_BYTES
