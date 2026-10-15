@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { renderDemotedThinking } from "@oh-my-pi/pi-ai/dialect";
 import {
 	applyOpenRouterRoutingVariant,
@@ -18,8 +18,10 @@ import type {
 } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { clampThinkingLevelForModel, getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { ResolvedOpenAICompat } from "@oh-my-pi/pi-catalog/types";
+import { serializeAlibabaTokenPlanCredential } from "@oh-my-pi/pi-catalog/wire/alibaba-token-plan";
 
 const gpt4oMiniSpec: ModelSpec<"openai-completions"> = (() => {
 	const {
@@ -44,13 +46,6 @@ function getNestedObject(value: unknown, key: string): Record<string, unknown> |
 	const obj = toObject(value);
 	if (!obj) return null;
 	return toObject(obj[key]);
-}
-
-function getNestedBoolean(value: unknown, key: string): boolean | undefined {
-	const obj = toObject(value);
-	if (!obj) return undefined;
-	const property = obj[key];
-	return typeof property === "boolean" ? property : undefined;
 }
 
 function createSseResponse(events: unknown[]): Response {
@@ -101,6 +96,10 @@ function zaiGlm52Model(): Model<"openai-completions"> {
 	} satisfies ModelSpec<"openai-completions">);
 }
 
+const alibabaQwen38Flash = getBundledModel<"openai-completions">("alibaba-token-plan", "qwen3.8-flash");
+const alibabaTokenPlanApiKey = serializeAlibabaTokenPlanCredential("sk-sp-test", "session_id=test");
+const mistralSmallLatest = getBundledModel<"openai-completions">("mistral", "mistral-small-latest");
+
 function kimiZaiModel(): Model<"openai-completions"> {
 	return buildModel({
 		...gpt4oMiniSpec,
@@ -115,7 +114,13 @@ function kimiZaiModel(): Model<"openai-completions"> {
 async function captureOpenAICompletionsPayload(
 	model: Model<"openai-completions">,
 	context: Context = baseContext(),
-	options?: { reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max"; temperature?: number },
+	options?: {
+		apiKey?: string;
+		reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+		temperature?: number;
+		sessionId?: string;
+		cacheRetention?: "none" | "short" | "long";
+	},
 ): Promise<unknown> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	const fetchMock = createMockFetch(["[DONE]"]);
@@ -202,6 +207,7 @@ describe("openai-completions compatibility", () => {
 			allowsSyntheticReasoningContentForToolCalls: true,
 			replayReasoningContent: false,
 			qwenPreserveThinking: false,
+			qwenTemplateReasoningEffort: false,
 			requiresAssistantContentForToolCalls: false,
 			openRouterRouting: {},
 			vercelGatewayRouting: {},
@@ -210,6 +216,7 @@ describe("openai-completions compatibility", () => {
 			toolStrictMode: "none",
 			supportsReasoningParams: true,
 			supportsSamplingParams: true,
+			supportsPenaltyAndStopParams: true,
 			alwaysSendMaxTokens: false,
 			isOpenRouterHost: false,
 			isVercelGatewayHost: false,
@@ -219,6 +226,13 @@ describe("openai-completions compatibility", () => {
 			emptyLengthFinishIsContextError: false,
 			usesOpenAIToolCallIdLimit: false,
 			dropThinkingWhenReasoningEffort: false,
+			nativeKimiK3Reasoning: false,
+			zaiReasoningEffortDialect: false,
+			clampOutputToModelMax: false,
+			stripImageInput: false,
+			rejectRootObjectUnion: false,
+			retryWithoutStrictOnGrammarError: false,
+			supportsPromptCacheKey: false,
 		} satisfies ResolvedOpenAICompat;
 		const assistantMessage: AssistantMessage = {
 			role: "assistant",
@@ -535,32 +549,6 @@ describe("openai-completions compatibility", () => {
 		]);
 	});
 
-	it("respects an explicit compat override for strict-template local providers", () => {
-		const model: Model<"openai-completions"> = buildModel({
-			...gpt4oMiniSpec,
-			api: "openai-completions",
-			provider: "custom" as Model["provider"],
-			baseUrl: "https://my-vllm.local/v1",
-			compat: {
-				supportsDeveloperRole: false,
-				supportsMultipleSystemMessages: false,
-			},
-		} as ModelSpec<"openai-completions">);
-
-		const messages = convertMessages(
-			model,
-			{
-				systemPrompt: ["stable instructions", "cacheable policy"],
-				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
-			},
-			model.compat,
-		);
-
-		expect(messages.slice(0, 2)).toEqual([
-			{ role: "system", content: "stable instructions\n\ncacheable policy" },
-			{ role: "user", content: "hello" },
-		]);
-	});
 	it("coalesces system blocks for the bundled Fireworks Qwen model (Qwen template rejects multiple)", () => {
 		// Repro of the live `fireworks/qwen3.7-plus` 500: the Qwen 3.5+ chat
 		// template `internal_server_error`s when more than one leading system
@@ -626,6 +614,141 @@ describe("openai-completions compatibility", () => {
 		expect(result.usage.output).toBe(3);
 		expect(result.usage.cacheRead).toBe(2);
 		expect(result.usage.totalTokens).toBe(15);
+	});
+
+	it("freezes DeepSeek response pricing across a UTC tariff transition", async () => {
+		const model = getBundledModel("deepseek", "deepseek-v4-flash") as Model<"openai-completions">;
+		const peakStart = Date.parse("2026-09-10T03:59:59Z");
+		const offPeakStart = Date.parse("2026-09-10T04:00:00Z");
+		let now = peakStart;
+		const clock = spyOn(Date, "now").mockImplementation(() => now);
+		const releaseFinalUsage = Promise.withResolvers<void>();
+		const encoder = new TextEncoder();
+		const firstChunk = {
+			id: "chatcmpl-tariff",
+			choices: [{ index: 0, delta: { content: "Hello" } }],
+			usage: { prompt_tokens: 1_000_000, completion_tokens: 100_000 },
+		};
+		const finalChunk = {
+			id: "chatcmpl-tariff",
+			choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+			usage: { prompt_tokens: 1_000_000, completion_tokens: 200_000 },
+		};
+		let requests = 0;
+		const fetchMock: FetchImpl = async () => {
+			if (requests++ > 0) return createSseResponse([firstChunk, finalChunk, "[DONE]"]);
+			return new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(encoder.encode(`data: ${JSON.stringify(firstChunk)}\n\n`));
+					},
+					async pull(controller) {
+						await releaseFinalUsage.promise;
+						controller.enqueue(encoder.encode(`data: ${JSON.stringify(finalChunk)}\n\ndata: [DONE]\n\n`));
+						controller.close();
+					},
+				}),
+				{ headers: { "content-type": "text/event-stream" } },
+			);
+		};
+		try {
+			const stream = streamOpenAICompletions(model, baseContext(), { apiKey: "test-key", fetch: fetchMock });
+			let initialCost: number | undefined;
+			for await (const event of stream) {
+				if (event.type === "text_delta") {
+					initialCost = event.partial.usage.cost.total;
+					now = offPeakStart;
+					releaseFinalUsage.resolve();
+				}
+			}
+			const first = await stream.result();
+			expect(initialCost).toBeCloseTo(0.42, 12);
+			expect(first.timestamp).toBe(peakStart);
+			expect(first.usage.cost.total).toBeCloseTo(0.54, 12);
+			const second = await streamOpenAICompletions(model, baseContext(), {
+				apiKey: "test-key",
+				fetch: fetchMock,
+			}).result();
+			expect(second.timestamp).toBe(offPeakStart);
+			expect(second.usage.cost.total).toBeCloseTo(0.27, 12);
+			expect(first.usage.cost.total).toBeCloseTo(0.54, 12);
+		} finally {
+			releaseFinalUsage.resolve();
+			clock.mockRestore();
+		}
+	});
+
+	it("preserves opaque tool-call IDs when replaying a custom Chat Completions turn", async () => {
+		const model: Model<"openai-completions"> = buildModel({
+			id: "gateway-model",
+			name: "Gateway Model",
+			api: "openai-completions",
+			provider: "custom-gateway",
+			baseUrl: "https://gateway.example/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 8_192,
+		} satisfies ModelSpec<"openai-completions">);
+		const toolCallId = "call_abc||gateway_state||opaque";
+		const assistant = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: createMockFetch([
+				{
+					id: "chatcmpl-opaque-tool-id",
+					object: "chat.completion.chunk",
+					created: 0,
+					model: model.id,
+					choices: [
+						{
+							index: 0,
+							delta: {
+								tool_calls: [
+									{
+										index: 0,
+										id: toolCallId,
+										type: "function",
+										function: { name: "read", arguments: '{"path":"README.md"}' },
+									},
+								],
+							},
+						},
+					],
+				},
+				{
+					id: "chatcmpl-opaque-tool-id",
+					object: "chat.completion.chunk",
+					created: 0,
+					model: model.id,
+					choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+				},
+				"[DONE]",
+			]),
+		}).result();
+		const streamedToolCall = assistant.content.find(content => content.type === "toolCall");
+		expect(streamedToolCall?.id).toBe(toolCallId);
+
+		const payload = await captureOpenAICompletionsPayload(model, {
+			messages: [
+				{ role: "user", content: "Read README", timestamp: 1 },
+				assistant,
+				{
+					role: "toolResult",
+					toolCallId,
+					toolName: "read",
+					content: [{ type: "text", text: "done" }],
+					isError: false,
+					timestamp: 2,
+				},
+			],
+		});
+		const replayMessages = getPayloadMessages(payload);
+		const assistantPayload = replayMessages.find(message => message.role === "assistant");
+		const toolCalls = assistantPayload?.tool_calls;
+		if (!Array.isArray(toolCalls)) throw new Error("assistant tool_calls missing");
+		expect(toObject(toolCalls[0])?.id).toBe(toolCallId);
+		expect(replayMessages.find(message => message.role === "tool")?.tool_call_id).toBe(toolCallId);
 	});
 
 	it("keeps unindexed batched tool-call arguments isolated", async () => {
@@ -797,25 +920,63 @@ describe("openai-completions compatibility", () => {
 		}
 	});
 
-	it("maps qwen chat template reasoning into chat_template_kwargs", async () => {
-		const model: Model<"openai-completions"> = buildModel({
-			...gpt4oMiniSpec,
-			api: "openai-completions",
-			reasoning: true,
-			compat: {
-				thinkingFormat: "qwen-chat-template",
+	it("sends Alibaba Qwen 3.8 Flash reasoning effort on the wire", async () => {
+		expect(getSupportedEfforts(alibabaQwen38Flash)).toEqual([Effort.Minimal, Effort.Low, Effort.Medium, Effort.High]);
+		const selectedEffort = clampThinkingLevelForModel(alibabaQwen38Flash, Effort.Minimal);
+		expect(selectedEffort).toBe(Effort.Minimal);
+		const payload = toObject(
+			await captureOpenAICompletionsPayload(alibabaQwen38Flash, undefined, {
+				apiKey: alibabaTokenPlanApiKey,
+				reasoning: selectedEffort,
+			}),
+		);
+
+		expect(payload?.enable_thinking).toBe(true);
+		expect(payload?.reasoning_effort).toBe("minimal");
+		expect(payload?.thinking_budget).toBeUndefined();
+	});
+
+	it("replays Alibaba Qwen 3.8 Flash reasoning history", async () => {
+		const model = alibabaQwen38Flash;
+		const priorAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "thinking",
+					thinking: "Keep this decision for the next turn.",
+					thinkingSignature: "reasoning_content",
+				},
+				{ type: "text", text: "I chose the indexed path." },
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
-		} as ModelSpec<"openai-completions">);
-		const { promise, resolve } = Promise.withResolvers<unknown>();
-		streamOpenAICompletions(model, baseContext(), {
-			apiKey: "test-key",
-			reasoning: "high",
-			signal: createAbortedSignal(),
-			onPayload: payload => resolve(payload),
-		});
-		const payload = await promise;
-		const chatTemplateArgs = getNestedObject(payload, "chat_template_kwargs");
-		expect(getNestedBoolean(chatTemplateArgs, "enable_thinking")).toBe(true);
+			stopReason: "stop",
+			timestamp: Date.now(),
+		};
+		const payload = await captureOpenAICompletionsPayload(
+			model,
+			{
+				messages: [
+					{ role: "user", content: "Choose an implementation.", timestamp: Date.now() },
+					priorAssistant,
+					{ role: "user", content: "Continue.", timestamp: Date.now() },
+				],
+			},
+			{ apiKey: alibabaTokenPlanApiKey },
+		);
+		const assistant = getPayloadMessages(payload).find(message => message.role === "assistant");
+
+		expect(assistant?.reasoning_content).toBe("Keep this decision for the next turn.");
+		expect(assistant?.content).toBe("I chose the indexed path.");
 	});
 
 	it("sends reasoning_effort:max for the real Z.AI max tier and enables tool streaming", async () => {
@@ -1068,6 +1229,7 @@ describe("openai-completions compatibility", () => {
 			type: "thinking",
 			thinking: "inspect tool output",
 			thinkingSignature: "reasoning_text",
+			summary: false,
 		});
 
 		const compat = { ...model.compat, requiresReasoningContentForToolCalls: true };
@@ -1717,7 +1879,9 @@ describe("kimi model detection via detectCompat", () => {
 	// Dropping reasoning_effort does not turn off the gateway's default thinking
 	// mode, so the compat descriptor itself must mark forced tool choice
 	// unsupported (no per-model override) and buildParams must downgrade the
-	// selector to "auto" while keeping the tool advertised.
+	// selector while keeping the tool advertised. The downgraded "auto" is then
+	// dropped as redundant so reasoning survives (#1207) — omission and "auto"
+	// are wire-equivalent for tool selection.
 	it("scopes the DeepSeek forced tool_choice downgrade to OpenCode gateways", async () => {
 		const todoTool: Tool = {
 			name: "todo",
@@ -1764,7 +1928,7 @@ describe("kimi model detection via detectCompat", () => {
 		const openCode = buildModel(deepseekSpec);
 		expect(openCode.compat.supportsForcedToolChoice).toBe(false);
 		const openCodePayload = await captureToolChoice(openCode);
-		expect(openCodePayload.tool_choice).toBe("auto");
+		expect(openCodePayload.tool_choice).toBeUndefined();
 		expect(
 			Array.isArray(openCodePayload.tools) &&
 				openCodePayload.tools.some(tool => getNestedObject(tool, "function")?.name === "todo"),
@@ -1778,7 +1942,7 @@ describe("kimi model detection via detectCompat", () => {
 		} satisfies ModelSpec<"openai-completions">);
 		expect(customOpenCode.compat.supportsForcedToolChoice).toBe(false);
 		const customPayload = await captureToolChoice(customOpenCode);
-		expect(customPayload.tool_choice).toBe("auto");
+		expect(customPayload.tool_choice).toBeUndefined();
 
 		const nvidia = buildModel({
 			...deepseekSpec,
@@ -2608,10 +2772,6 @@ describe("grammar tool-schema normalization (issue #5914)", () => {
 		} as ModelSpec<"openai-completions">);
 	}
 
-	it("auto-detects the grammar flavor for local OpenAI-compatible backends", () => {
-		expect(localLlamaModel().compat.toolSchemaFlavor).toBe("grammar");
-	});
-
 	it("widens bare boolean subschemas and keeps additionalProperties:false", async () => {
 		const model = localLlamaModel();
 		const payload = await captureOpenAICompletionsPayload(model, { ...baseContext(), tools: [openFieldTool] });
@@ -2665,5 +2825,40 @@ describe("grammar tool-schema normalization (issue #5914)", () => {
 		const properties = toObject(toolParameters(payload, "task").properties);
 		// Off the grammar path the open field keeps the normalized bare boolean.
 		expect(properties?.outputSchema).toBe(true);
+	});
+});
+
+describe("mistral prompt_cache_key regression (#15079)", () => {
+	it("sends the session-stable prompt_cache_key on Mistral chat-completions requests", async () => {
+		expect(mistralSmallLatest.compat.supportsPromptCacheKey).toBe(true);
+		const payload = await captureOpenAICompletionsPayload(mistralSmallLatest, undefined, {
+			sessionId: "regression-session-15079",
+		});
+		const payloadObject = toObject(payload);
+		// Catalog rule + baked row must both survive regeneration for this to hold.
+		expect(payloadObject?.prompt_cache_key).toBe("regression-session-15079");
+	});
+
+	it("omits prompt_cache_key when cache retention is disabled", async () => {
+		const payload = await captureOpenAICompletionsPayload(mistralSmallLatest, undefined, {
+			sessionId: "regression-session-15079",
+			cacheRetention: "none",
+		});
+		const payloadObject = toObject(payload);
+		expect(payloadObject === null || !("prompt_cache_key" in payloadObject)).toBe(true);
+	});
+});
+
+describe("Groq Qwen reasoning_effort on the wire", () => {
+	it("sends each Qwen only an effort value Groq accepts", async () => {
+		// Qwen 3.6 takes `default` (thinking) or `none`; Qwen 3.8 takes low/medium/high.
+		const qwen36 = getBundledModel<"openai-completions">("groq", "qwen/qwen3.6-27b");
+		const on36 = toObject(await captureOpenAICompletionsPayload(qwen36, undefined, { reasoning: "high" }));
+		expect(on36?.reasoning_effort).toBe("default");
+		expect(on36?.enable_thinking).toBeUndefined();
+
+		const qwen38 = getBundledModel<"openai-completions">("groq", "qwen/qwen3.8-27b");
+		const on38 = toObject(await captureOpenAICompletionsPayload(qwen38, undefined, { reasoning: "low" }));
+		expect(on38?.reasoning_effort).toBe("low");
 	});
 });

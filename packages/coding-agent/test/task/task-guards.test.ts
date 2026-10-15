@@ -9,6 +9,7 @@ import { formatResultOutputFallback } from "@oh-my-pi/pi-coding-agent/task";
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { createSessionDefaults } from "../helpers/session-defaults";
 
 /**
  * Contract: runaway-subagent guards.
@@ -27,7 +28,7 @@ import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 
 interface SteerCall {
 	content: string;
-	options?: { deliverAs?: "steer" | "followUp" };
+	options?: { deliverAs?: "steer" | "followUp" | "aside" };
 }
 
 interface FakeSessionConfig {
@@ -76,13 +77,13 @@ function createFakeSession(config: FakeSessionConfig = {}): FakeSessionHandle {
 	if (!config.hang) releaseHang();
 
 	const session: Partial<AgentSession> = {
+		...createSessionDefaults(),
 		state: { messages: [] } as never,
 		agent: { state: { systemPrompt: ["test"] } } as never,
 		extensionRunner: undefined as never,
 		sessionManager: { appendSessionInit: () => {} } as never,
 		getActiveToolNames: () => ["read", "yield"],
 		getEnabledToolNames: () => ["read", "yield"],
-		setActiveToolsByName: async (_names: string[]) => {},
 		subscribe: (listener: (event: AgentSessionEvent) => void) => {
 			if (config.events?.length) {
 				const events = config.events;
@@ -107,8 +108,6 @@ function createFakeSession(config: FakeSessionConfig = {}): FakeSessionHandle {
 			abortCount += 1;
 			releaseHang();
 		},
-		dispose: async () => {},
-		setIrcWakeTurnObserver: () => {},
 	};
 	return {
 		session: session as AgentSession,
@@ -223,6 +222,35 @@ describe("runSubprocess request guards", () => {
 		expect(result.aborted).toBe(false);
 		expect(handle.steerCalls.length).toBe(1);
 		expect(handle.steerCalls[0].content).toContain("[budget notice]");
+	});
+
+	it("uses the agent's own task.agentSoftRequestBudget entry instead of the global budget", async () => {
+		// The global budget 2 would stop this run at request 3; the agent's
+		// entry of 4 moves the notice to request 4 and the stop to 6.
+		const settings = Settings.isolated({
+			"task.maxRuntimeMs": 0,
+			"task.softRequestBudget": 2,
+			"task.agentSoftRequestBudget": { task: 4 },
+		});
+		const handle = createFakeSession({
+			events: [
+				assistantMessageEnd("1"),
+				assistantMessageEnd("2"),
+				assistantMessageEnd("3"),
+				assistantMessageEnd("4"),
+				assistantMessageEnd("5"),
+				yieldToolEnd(),
+			],
+		});
+		mockCreateAgentSession(handle.session);
+
+		const result = await runSubprocess({ ...baseOptions, id: "subagent-agent-budget", settings });
+
+		expect(result.requests).toBe(5);
+		expect(result.aborted).toBe(false);
+		expect(handle.steerCalls.length).toBe(1);
+		expect(handle.steerCalls[0].content).toContain("used 4 requests");
+		expect(handle.steerCalls[0].content).toContain("soft budget: 4");
 	});
 
 	it("still force-stops at 1.5x the soft budget when budget notices are disabled", async () => {

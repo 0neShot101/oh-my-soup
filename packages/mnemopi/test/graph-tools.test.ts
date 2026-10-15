@@ -50,6 +50,36 @@ describe("EpisodicGraph CRUD", () => {
 	});
 });
 
+describe("EpisodicGraph gist location extraction", () => {
+	it("captures capitalized proper-noun places and ignores lowercase prose", () => {
+		withGraph(graph => {
+			expect(graph.extractGist("Met Bob in Paris yesterday.", "mem_loc_1").location).toBe("Paris");
+			// Regression for #7917: the /i flag made [A-Z] match lowercase mid-sentence
+			// prose, so ordinary text like "...in your loaded context plus" leaked in as a location.
+			expect(graph.extractGist("We stored the summary in your loaded context plus.", "mem_loc_2").location).toBe(
+				null,
+			);
+		});
+	});
+});
+
+describe("EpisodicGraph non-Latin participants", () => {
+	it("extracts proper nouns from Greek and Cyrillic content (issue #7918)", () => {
+		withGraph(graph => {
+			const greek = graph.extractGist("Ο Βασίλης συνάντησε τη Μαρία στην Αθήνα.", "mem_el");
+			expect(greek.participants).toContain("Βασίλης");
+			expect(greek.participants).toContain("Μαρία");
+
+			const cyrillic = graph.extractGist("Иван встретил Анну в Москве.", "mem_ru");
+			expect(cyrillic.participants).toContain("Иван");
+			expect(cyrillic.participants).toContain("Анну");
+
+			graph.storeGist(greek, "mem_el");
+			expect(graph.findGistsByParticipant("Βασίλης")).toHaveLength(1);
+		});
+	});
+});
+
 describe("EpisodicGraph links and traversal", () => {
 	it("creates idempotent weighted links and traverses neighborhoods", () => {
 		withGraph(graph => {
@@ -123,6 +153,32 @@ describe("EpisodicGraph scoring and proactive links", () => {
 			expect(neighbors.map(item => item.memoryId)).toContain("gist_mem_2");
 			expect(graph.getStats().gists).toBe(2);
 			expect(graph.getStats().facts).toBe(first.facts.length + second.facts.length);
+		});
+	});
+
+	it("does not link memories that only share a time scope", () => {
+		withGraph(graph => {
+			graph.ingestMemory("Yesterday the database migration finished on staging.", "mem_db");
+			const unrelated = graph.ingestMemory("Today I bought fresh vegetables at the market.", "mem_food");
+			expect(unrelated.gist.timeScope).toBe("point_in_time");
+			expect(graph.getGist("gist_mem_db")?.timeScope).toBe("point_in_time");
+			expect(unrelated.edges.filter(item => item.target === "mem_db")).toEqual([]);
+
+			const related = graph.ingestMemory("Today the database migration finished on production.", "mem_db_prod");
+			const linked = related.edges.filter(item => item.target === "mem_db").map(item => item.edgeType);
+			expect(linked.sort()).toEqual(["ctx", "related_to"]);
+			expect(related.edges.filter(item => item.target === "mem_food")).toEqual([]);
+
+			graph.ingestMemory("Alice uses Python.", "mem_alice");
+			const entityOnly = graph.ingestMemory(
+				"Alice uses Python during long winter evenings while sketching harbor boats.",
+				"mem_alice_evenings",
+			);
+			const toAlice = entityOnly.edges.filter(item => item.target === "mem_alice");
+			const references = toAlice.find(item => item.edgeType === "references");
+			expect(references?.weight).toBeGreaterThanOrEqual(0.35);
+			expect(toAlice.some(item => item.edgeType === "related_to")).toBe(false);
+			expect(toAlice.find(item => item.edgeType === "ctx")?.weight).toBe(references?.weight);
 		});
 	});
 });

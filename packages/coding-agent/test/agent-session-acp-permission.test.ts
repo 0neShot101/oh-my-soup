@@ -11,8 +11,10 @@ import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { createMockModel, type MockModelOptions } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { type SettingPath, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EditTool } from "@oh-my-pi/pi-coding-agent/edit";
+import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+import { ExtensionToolWrapper } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/wrapper";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type {
 	ClientBridge,
@@ -22,6 +24,7 @@ import type {
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { dispatchXdevTool, resolveMountedXdevExecutable, type XdevState } from "@oh-my-pi/pi-coding-agent/tools/xdev";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -82,7 +85,7 @@ function makeBridge(outcome: ClientBridgePermissionOutcome): ClientBridge {
 async function createSession(
 	tools: AgentTool[],
 	bridge?: ClientBridge,
-	settingsOverrides: Partial<Record<SettingPath, unknown>> = {},
+	settingsOverrides: Record<string, unknown> = {},
 	options?: {
 		xdev?: XdevState;
 		builtInToolNames?: string[];
@@ -169,21 +172,15 @@ afterAll(async () => {
 	await tempDir.remove();
 });
 
-// ---------------------------------------------------------------------------
-// 1. Allow once: bridge called once, underlying execute called once
-// ---------------------------------------------------------------------------
-
-it("allow_once: calls bridge once and executes the underlying tool", async () => {
+it("eval bridge dispatch uses the same ACP gate as a direct tool call", async () => {
 	const bashTool = makeFakeTool("bash");
 	const bridge = makeBridge({ outcome: "selected", optionId: "allow_once", kind: "allow_once" });
 	const permissionSpy = spyOn(bridge, "requestPermission");
 	session = await createSession([bashTool], bridge);
 
 	await session.setActiveToolsByName(["bash"]);
-	// Get the wrapped tool from the agent's active set.
-	const wrappedBash = session.agent.state.tools.find(t => t.name === "bash");
-
-	await wrappedBash!.execute("call-1", { command: "echo hi" }, undefined, undefined as never, undefined as never);
+	const bridgedBash = session.getToolForEvalBridge("bash");
+	await bridgedBash!.execute("call-bridge", { command: "echo hi" }, undefined, undefined as never, undefined as never);
 
 	expect(permissionSpy).toHaveBeenCalledTimes(1);
 	expect(bashTool.executeCalls).toBe(1);
@@ -220,6 +217,115 @@ it("explicit yolo still gates tools whose per-tool policy requires a prompt", as
 
 	expect(permissionSpy).toHaveBeenCalledTimes(1);
 	expect(bashTool.executeCalls).toBe(1);
+});
+
+/**
+ * Minimal runner for wrapping a tool exactly as an ACP session does: no
+ * interactive UI (so the inner tier gate fails closed) and no event handlers.
+ */
+function noUiRunner(): ExtensionRunner {
+	return {
+		hasHandlers: () => false,
+		consumeToolCallEmitted: () => false,
+		hasUI: () => false,
+		sessionId: "acp-permission-test",
+		runScoped<T>(fn: () => T): T {
+			return fn();
+		},
+	} as unknown as ExtensionRunner;
+}
+
+it("always-ask: an ACP grant satisfies the inner wrapper's explicit prompt policy", async () => {
+	// In a real ACP session every registry tool is wrapped by ExtensionToolWrapper,
+	// then again by the ACP permission gate. The client has answered the explicit
+	// prompt, so the inner wrapper must not request the unavailable interactive UI.
+	const bashTool = makeFakeTool("bash");
+	const wrapped = new ExtensionToolWrapper(bashTool, noUiRunner()) as unknown as AgentTool;
+	const bridge = makeBridge({ outcome: "selected", optionId: "allow_once", kind: "allow_once" });
+	const permissionSpy = spyOn(bridge, "requestPermission");
+	const approvalSettings: Record<string, unknown> = {
+		"tools.approvalMode": "always-ask",
+		"tools.approval": { bash: "prompt" },
+	};
+	session = await createSession([wrapped], bridge, approvalSettings);
+
+	await session.setActiveToolsByName(["bash"]);
+	const gatedBash = session.agent.state.tools.find(t => t.name === "bash");
+	const ctx = { settings: Settings.isolated(approvalSettings) } as never;
+
+	await gatedBash!.execute("call-1", { command: "echo hi" }, undefined, undefined as never, ctx);
+
+	expect(permissionSpy).toHaveBeenCalledTimes(1);
+	expect(bashTool.executeCalls).toBe(1);
+});
+
+it("ACP bash uses pattern decisions and scopes persistent grants to noncritical commands", async () => {
+	const settingsOverrides = {
+		"tools.approvalMode": "always-ask",
+		"tools.approval": { bash: "prompt" },
+		"bash.patterns": [
+			{ match: "echo safe*", approval: "allow" },
+			{ match: "echo denied*", approval: "deny" },
+		],
+	};
+	const settings = Settings.isolated(settingsOverrides);
+	const requests: string[] = [];
+	const bridge: ClientBridge = {
+		capabilities: { requestPermission: true },
+		async requestPermission(toolCall) {
+			const input = toolCall.rawInput;
+			if (!input || typeof input !== "object" || !("command" in input) || typeof input.command !== "string") {
+				throw new Error("Missing bash command");
+			}
+			const command = input.command;
+			requests.push(command);
+			return { outcome: "selected", optionId: "allow_always", kind: "allow_always" };
+		},
+	};
+	const bashTool = makeFakeTool("bash");
+	bashTool.approval = new BashTool({ ...makeToolSession(bridge), settings }).approval;
+	const wrapped = new ExtensionToolWrapper(bashTool, noUiRunner()) as unknown as AgentTool;
+	session = await createSession([wrapped], bridge, settingsOverrides);
+	await session.setActiveToolsByName(["bash"]);
+	const gatedBash = session.agent.state.tools.find(tool => tool.name === "bash");
+	if (!gatedBash) throw new Error("Missing bash tool");
+	const ctx = { settings } as never;
+	const run = (command: string) =>
+		gatedBash.execute(`call-${command}`, { command }, undefined, undefined as never, ctx);
+
+	await run("echo safe-read");
+	expect(requests).toEqual([]);
+	await expect(run("echo denied-write")).rejects.toThrow(/blocked by tool policy/);
+	expect(requests).toEqual([]);
+	await run("echo probe-1");
+	await run("echo probe-2");
+	// "Always allow" covers later ordinary commands, as before.
+	expect(requests).toEqual(["echo probe-1"]);
+	await run("rm -rf /");
+	await run("rm -rf /");
+	// Critical commands ask on every call, whatever was granted.
+	expect(requests).toEqual(["echo probe-1", "rm -rf /", "rm -rf /"]);
+	expect(bashTool.executeCalls).toBe(5);
+});
+
+it("always-ask: an ordinary edit without an ACP grant still faces the inner approval gate", async () => {
+	const editTool = makeFakeTool("edit");
+	editTool.approval = "write";
+	const wrapped = new ExtensionToolWrapper(editTool, noUiRunner()) as unknown as AgentTool;
+	const bridge = makeBridge({ outcome: "selected", optionId: "allow_once", kind: "allow_once" });
+	const permissionSpy = spyOn(bridge, "requestPermission");
+	session = await createSession([wrapped], bridge, { "tools.approvalMode": "always-ask" });
+
+	await session.setActiveToolsByName(["edit"]);
+	const gatedEdit = session.agent.state.tools.find(t => t.name === "edit");
+	const ctx = { settings: Settings.isolated({ "tools.approvalMode": "always-ask" }) } as never;
+
+	await expect(
+		gatedEdit!.execute("call-edit", { path: "/tmp/foo.ts" }, undefined, undefined as never, ctx),
+	).rejects.toThrow(/requires approval but no interactive UI/);
+
+	expect(permissionSpy).not.toHaveBeenCalled();
+	expect(editTool.executeCalls).toBe(0);
 });
 
 it("delete and move tools request ACP permission before executing", async () => {
@@ -574,32 +680,6 @@ it("always-allowing edit moves does not bypass patch-mode calls that also delete
 	expect(editTool.executeCalls).toBe(2);
 });
 
-it("permission requests report the gated tool call as pending", async () => {
-	const bashTool = makeFakeTool("bash");
-	const requests: ClientBridgePermissionToolCall[] = [];
-	const bridge: ClientBridge = {
-		capabilities: { requestPermission: true },
-		async requestPermission(toolCall, _options, _signal) {
-			requests.push(toolCall);
-			return { outcome: "selected", optionId: "allow_once", kind: "allow_once" };
-		},
-	};
-	session = await createSession([bashTool], bridge);
-
-	await session.setActiveToolsByName(["bash"]);
-	const wrappedBash = session.agent.state.tools.find(t => t.name === "bash");
-
-	await wrappedBash!.execute("call-bash", { command: "echo hi" }, undefined, undefined as never, undefined as never);
-
-	expect(requests).toHaveLength(1);
-	expect(requests[0]).toMatchObject({
-		toolCallId: "call-bash",
-		toolName: "bash",
-		status: "pending",
-	});
-	expect(bashTool.executeCalls).toBe(1);
-});
-
 it("bash permission requests include execute metadata and command content", async () => {
 	const bashTool = makeFakeTool("bash");
 	const requests: ClientBridgePermissionToolCall[] = [];
@@ -795,28 +875,6 @@ it("unknown selected permission option ID fails closed without executing", async
 	expect(bashTool.executeCalls).toBe(0);
 });
 
-// ---------------------------------------------------------------------------
-// 3. Always allow caches: bridge called exactly once across two executions
-// ---------------------------------------------------------------------------
-
-it("allow_always: caches decision and calls bridge only once for subsequent executes", async () => {
-	const bashTool = makeFakeTool("bash");
-	const bridge = makeBridge({ outcome: "selected", optionId: "allow_always", kind: "allow_always" });
-	const permissionSpy = spyOn(bridge, "requestPermission");
-	session = await createSession([bashTool], bridge);
-
-	await session.setActiveToolsByName(["bash"]);
-	const wrappedBash = session.agent.state.tools.find(t => t.name === "bash");
-
-	// First call — bridge is consulted, decision cached.
-	await wrappedBash!.execute("call-1", { command: "echo a" }, undefined, undefined as never, undefined as never);
-	// Second call — must skip the bridge entirely.
-	await wrappedBash!.execute("call-2", { command: "echo b" }, undefined, undefined as never, undefined as never);
-
-	expect(permissionSpy).toHaveBeenCalledTimes(1);
-	expect(bashTool.executeCalls).toBe(2);
-});
-
 it.each(boundaryCases)(
 	"%s permission decisions prompt again after a successful %s session boundary",
 	async (decision, transition) => {
@@ -893,7 +951,7 @@ it("setActiveToolsByName normalizes legacy tool names", async () => {
 	const globTool = makeFakeTool("glob");
 	session = await createSession([grepTool, globTool]);
 
-	await session.setActiveToolsByName(["Search", "find", "grep"]);
+	await session.setActiveToolsByName(["Search", "glob", "grep"]);
 
 	expect(session.getActiveToolNames()).toEqual(["grep", "glob"]);
 });

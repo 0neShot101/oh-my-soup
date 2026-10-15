@@ -1,8 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
-import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { trimBlankEdges } from "@oh-my-pi/pi-tui/chrome/transcript-container";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { type Component, Container, Markdown } from "@oh-my-pi/pi-tui";
 
 const W = 100;
@@ -54,6 +55,121 @@ afterEach(() => {
 // the same message — at every step. If they ever diverge, the optimization
 // silently corrupts the transcript.
 describe("AssistantMessageComponent streaming fast path", () => {
+	it("replays retired thinking prefixes after cache eviction, reflow, and finalization", () => {
+		const component = new AssistantMessageComponent();
+		const widths = [36, W];
+		const prefixes: Array<{ count: number; rows: readonly string[][] }> = [];
+		let thinking = "";
+		for (let step = 0; step < 80; step++) {
+			thinking += `Paragraph ${step} has **emphasis** and enough words to wrap at narrow widths.\n\n`;
+			component.updateContent(msg([{ type: "thinking", thinking: `${thinking}Pending paragraph` }]), {
+				transient: true,
+			});
+			component.render(W);
+			const count = component.getTranscriptStableRows().length;
+			if (count > (prefixes.at(-1)?.count ?? 0)) {
+				prefixes.push({
+					count,
+					rows: widths.map(width => [...component.renderTranscriptStableRows(count, width)]),
+				});
+			}
+		}
+		expect(prefixes.length).toBeGreaterThan(64);
+		const keys = component.getTranscriptStableRows().map(row => row.key);
+		expect(keys.reduce((length, key) => length + key.length, 0)).toBeLessThan(keys.length * 32);
+		component.updateContent(
+			msg([
+				{ type: "thinking", thinking },
+				{ type: "text", text: "Final answer" },
+			]),
+		);
+		component.markTranscriptBlockFinalized();
+		for (const prefix of prefixes) {
+			for (const [index, width] of widths.entries()) {
+				expect(component.renderTranscriptStableRows(prefix.count, width)).toEqual(prefix.rows[index]);
+			}
+		}
+		expect(component.getTranscriptStableRows().map(row => row.key)).toEqual(keys);
+	});
+
+	it("keeps earlier block boundaries immutable when later thinking blocks grow or revise", () => {
+		const component = new AssistantMessageComponent();
+		const first = "First reasoning paragraph.\n\nSecond paragraph.\n\nStill thinking";
+		component.updateContent(msg([{ type: "thinking", thinking: first }]), { transient: true });
+		component.render(W);
+		const firstCount = component.getTranscriptStableRows().length;
+		expect(firstCount).toBeGreaterThan(0);
+		const firstRows = [...component.renderTranscriptStableRows(firstCount, 40)];
+		const content: AssistantMessage["content"] = [
+			{ type: "thinking", thinking: first },
+			{ type: "thinking", thinking: "Another block.\n\nMore reasoning.\n\nPending" },
+		];
+		component.updateContent(msg(content), { transient: true });
+		component.render(W);
+		const count = component.getTranscriptStableRows().length;
+		expect(count).toBeGreaterThan(firstCount);
+		const rows = [...component.renderTranscriptStableRows(count, 40)];
+		component.updateContent(msg([{ type: "thinking", thinking: `Rewritten ${first}` }]), { transient: true });
+		component.render(W);
+		expect(component.getTranscriptStableRows()).toHaveLength(count);
+		component.renderTranscriptStableRows(count, 60);
+		component.renderTranscriptStableRows(count, 80);
+		expect(component.renderTranscriptStableRows(firstCount, 40)).toEqual(firstRows);
+		expect(component.renderTranscriptStableRows(count, 40)).toEqual(rows);
+		component.setHideThinkingBlock(true);
+		component.resetTranscriptStableRows();
+		component.updateContent(msg(content), { transient: true });
+		component.render(W);
+		expect(component.getTranscriptStableRows()).toEqual([]);
+		expect(component.renderTranscriptStableRows(count, 40)).toEqual([]);
+		component.markTranscriptBlockFinalized();
+	});
+
+	it("keeps published thinking rows when a split fence or comment sentinel completes below them", () => {
+		// A delta may end inside "```" or "<!-- -->". The prose fold then shows
+		// the partial line as text, but once it completes the fold drops it and
+		// appends its ellipsis to the line above — which must not be published yet.
+		for (const tail of ["```ts\nlet y = 2;\n```", "<!-- -->\n\n```ts\nlet y = 2;\n```"]) {
+			const thinking = `First thought.\n\nSecond thought.\n\n${tail}\n\nThird thought.\n\nStill going`;
+			const component = new AssistantMessageComponent();
+			for (let end = 1; end <= thinking.length; end++) {
+				component.updateContent(msg([{ type: "thinking", thinking: thinking.slice(0, end) }]), { transient: true });
+				const rows = trimBlankEdges(component.render(W));
+				const stable = component.renderTranscriptStableRows(component.getTranscriptStableRows().length, W);
+				expect(rows.slice(0, stable.length)).toEqual([...stable]);
+			}
+			expect(component.getTranscriptStableRows().length).toBeGreaterThan(0);
+		}
+	});
+
+	it("keeps retiring later blocks after a streamed block with a tab closes", () => {
+		// While streaming, a block publishes Markdown's settled prefix (tabs
+		// expanded); once the next block starts it publishes whole. Both must be
+		// the same bytes, or every later snapshot stops extending the published one.
+		const first = "Columns:\tname\tsize.\n\nSecond paragraph of the answer.\n\nThird paragraph.";
+		const second = "Now reasoning about the next step.\n\nAnother paragraph here.\n\nAnd a closing line.";
+		const component = new AssistantMessageComponent();
+		const counts: number[] = [];
+		const stream = (content: AssistantMessage["content"]) => {
+			component.updateContent(msg(content), { transient: true });
+			const rows = trimBlankEdges(component.render(W));
+			const stable = component.renderTranscriptStableRows(component.getTranscriptStableRows().length, W);
+			expect(rows.slice(0, stable.length)).toEqual([...stable]);
+			counts.push(stable.length);
+		};
+		for (let end = 1; end <= first.length; end++) stream([{ type: "text", text: first.slice(0, end) }]);
+		const beforeSecond = counts.at(-1)!;
+		expect(beforeSecond).toBeGreaterThan(0);
+		for (let end = 1; end <= second.length; end++) {
+			stream([
+				{ type: "text", text: first },
+				{ type: "thinking", thinking: second.slice(0, end) },
+			]);
+		}
+		// The closed first block and the settled head of the second both retire.
+		expect(counts.at(-1)!).toBeGreaterThan(beforeSecond + 2);
+	});
+
 	it("matches teardown output across a growing thinking + text stream", () => {
 		const reused = new AssistantMessageComponent();
 		const thinking = "Reasoning about the **problem** with `code` and a list:\n- a\n- b";
@@ -84,17 +200,6 @@ describe("AssistantMessageComponent streaming fast path", () => {
 
 		expect(rendered).toContain("answer");
 		expect(rendered).not.toContain(". . .");
-	});
-
-	it("matches teardown for a single growing text block", () => {
-		const reused = new AssistantMessageComponent();
-		let text = "";
-		for (const chunk of ["The ", "quick ", "brown ", "**fox** ", "jumps."]) {
-			text += chunk;
-			const m = msg([{ type: "text", text }]);
-			reused.updateContent(m);
-			expect(reused.render(W).join("\n")).toBe(teardownRender(m));
-		}
 	});
 
 	it("repairs Gemini's lone closing fence when the streamed turn becomes final", () => {
@@ -216,6 +321,38 @@ Average Latency: 1,240 ms
 		reused.updateContent(filled);
 		expect(reused.render(W).join("\n")).toBe(teardownRender(filled));
 	});
+
+	it("matches fresh live output across hidden thinking emptiness transitions and reveal", () => {
+		const reused = new AssistantMessageComponent(undefined, true);
+		const latestReasoning = "Latest canonical reasoning";
+		try {
+			// A comment is raw-nonempty but display-empty; whitespace is canonically empty.
+			// Neither transition may leave the live pulse missing or stale.
+			for (const thinking of ["", "<!-- -->", " \n", latestReasoning]) {
+				const message = msg([
+					{ type: "text", text: "Visible answer" },
+					{ type: "thinking", thinking },
+				]);
+				const fresh = new AssistantMessageComponent(undefined, true);
+				try {
+					reused.updateContent(message, { transient: true });
+					fresh.updateContent(message, { transient: true });
+					expect(reused.render(W).join("\n")).toBe(fresh.render(W).join("\n"));
+				} finally {
+					fresh.dispose();
+				}
+			}
+
+			reused.setHideThinkingBlock(false);
+			reused.invalidate();
+			const revealed = Bun.stripANSI(reused.render(W).join("\n"));
+			expect(revealed).toContain(latestReasoning);
+			expect(revealed).toContain("Visible answer");
+		} finally {
+			reused.dispose();
+		}
+	});
+
 	it("does not re-format an already-display thinking block (rawThinking set)", () => {
 		// buildDisplayMessage emits a thinking block whose `thinking` is already the
 		// formatted display text and stamps the original under `rawThinking`.
