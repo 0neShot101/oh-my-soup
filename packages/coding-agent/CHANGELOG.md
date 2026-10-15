@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a job tree to `/jobs`, `/jobs full` and the jobs pill's sheet: subagents' background jobs now appear nested under the task that runs them, with the busiest branches listed first; only your own jobs offer Cancel ([#14814](https://github.com/can1357/oh-my-pi/issues/14814))
+
 ### Fixed
 
 - Fixed `/jobs` doing nothing in a focused subagent view: it now lists that subagent's own background jobs, as does the jobs pill's sheet, without a way to cancel them; `/jobs kill` still requires returning to the main session ([#15161](https://github.com/can1357/oh-my-pi/pull/15161) by [@yuzu-octopus](https://github.com/yuzu-octopus))
