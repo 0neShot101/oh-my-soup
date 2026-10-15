@@ -161,8 +161,17 @@ enum Lookup {
 	Miss(Option<Base>),
 }
 
+/// Paths whose latest lookup ticket is remembered for fencing stale parses.
+/// A stale completion needs a parse still in flight, so only recently active
+/// paths matter; the least recently advanced path is forgotten first.
+const MAX_TRACKED_PATHS: usize = 64;
+
 struct Cache {
 	entries:            HashMap<Key, Entry>,
+	/// Per path, the ticket of the lookup that last made it current in each
+	/// language. Kept apart from `entries` so the fence outlives evicted or
+	/// rejected trees.
+	path_tickets:       HashMap<Box<str>, Vec<(SupportLang, u64)>>,
 	retained_bytes:     usize,
 	clock:              u64,
 	hits:               u64,
@@ -177,6 +186,7 @@ impl Cache {
 	fn new(max_entries: usize, max_retained_bytes: usize) -> Self {
 		Self {
 			entries: HashMap::new(),
+			path_tickets: HashMap::new(),
 			retained_bytes: 0,
 			clock: 0,
 			hits: 0,
@@ -225,12 +235,35 @@ impl Cache {
 	/// Whether `path` got its current version from a lookup newer than the
 	/// one that issued `ticket`.
 	fn path_moved_since(&self, lang: SupportLang, path: &str, ticket: u64) -> bool {
-		self.entries.iter().any(|(key, entry)| {
-			key.lang == lang
-				&& entry
-					.binding(path)
-					.is_some_and(|binding| binding.current && binding.since > ticket)
+		self.path_tickets.get(path).is_some_and(|tickets| {
+			tickets
+				.iter()
+				.any(|&(other, latest)| other == lang && latest > ticket)
 		})
+	}
+
+	/// Record that lookup `ticket` made `path` current in `lang`.
+	fn note_path(&mut self, lang: SupportLang, path: &str, ticket: u64) {
+		if let Some(tickets) = self.path_tickets.get_mut(path) {
+			if let Some((_, latest)) = tickets.iter_mut().find(|(other, _)| *other == lang) {
+				*latest = (*latest).max(ticket);
+			} else {
+				tickets.push((lang, ticket));
+			}
+			return;
+		}
+		if self.path_tickets.len() >= MAX_TRACKED_PATHS
+			&& let Some(oldest) = self
+				.path_tickets
+				.iter()
+				.min_by_key(|(_, tickets)| tickets.iter().map(|&(_, latest)| latest).max())
+				.map(|(path, _)| path.clone())
+		{
+			self.path_tickets.remove(&oldest);
+		}
+		self
+			.path_tickets
+			.insert(Box::from(path), vec![(lang, ticket)]);
 	}
 
 	/// Store a tree parsed after the lookup that issued `ticket`.
@@ -290,6 +323,7 @@ impl Cache {
 	/// previous version loses its binding — and its slot, unless another path
 	/// still binds it.
 	fn advance_path(&mut self, key: Key, path: &str, since: u64) {
+		self.note_path(key.lang, path, since);
 		if let Some(binding) = self.entries.get_mut(&key).and_then(|entry| {
 			entry
 				.bindings
@@ -378,6 +412,7 @@ impl Cache {
 		self.misses = 0;
 		self.evictions = 0;
 		self.superseded = 0;
+		self.path_tickets.clear();
 	}
 }
 
@@ -854,6 +889,24 @@ mod tests {
 		assert_eq!(reparse_base(&mut cache, "a.ts").as_deref(), Some(new), "`new` stays current");
 		assert!(hit(&mut cache, old).is_some(), "the stale tree is still cached");
 		assert!(hit(&mut cache, new).is_some());
+	}
+
+	#[test]
+	fn the_stale_fence_outlives_a_rejected_newer_tree() {
+		let old = "const a = 1;\n";
+		let new = "function f() {\n  a();\n  b();\n}\n";
+		let old_cost = tree_cost(old, &tree_of(old, TS), TS);
+		// Room for `old` only, so the newer tree is parsed but never retained.
+		let mut cache = cache(MAX_ENTRIES, old_cost);
+		let stale_ticket = lookup_ticket(&mut cache);
+		put(&mut cache, new, Some("a.ts"));
+		assert!(hit(&mut cache, new).is_none());
+
+		let tree = tree_of(old, TS);
+		cache.insert(key_for(old, TS), old, &tree, Some("a.ts"), old_cost, stale_ticket);
+
+		assert!(hit(&mut cache, old).is_some(), "the stale tree is still cached");
+		assert_eq!(reparse_base(&mut cache, "a.ts"), None, "but it is not a.ts's current version");
 	}
 
 	#[test]
