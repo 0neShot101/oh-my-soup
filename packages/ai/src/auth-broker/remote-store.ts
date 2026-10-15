@@ -3,9 +3,9 @@
  * snapshot. Refresh tokens never leave the broker; mutating methods (`replace*`,
  * `upsert*`, `delete*ForProvider`) throw because login flows are server-side.
  *
- * Cache (`getCache`/`setCache`/`cleanExpiredCache`) is in-memory and ephemeral —
- * usage reports cache TTL is 5 minutes per credential, so durability across
- * runs isn't required.
+ * Cache (`getCache`/`setCache`/`cleanExpiredCache`) is in-memory and ephemeral.
+ * The bounded hot set preserves recently used session pins without keeping
+ * every gateway client's 30-day sticky row resident.
  */
 import * as os from "node:os";
 import { getAppName, getInstallId, logger, postmortem } from "@oh-my-pi/pi-utils";
@@ -35,6 +35,11 @@ import type {
 	SnapshotResponse,
 	SnapshotStreamEvent,
 } from "./types";
+
+// Bound both the number of distinct session pins and the size of caller-supplied
+// keys/values; an evicted session falls back to normal credential selection.
+const REMOTE_CACHE_MAX_ENTRIES = 4096;
+const REMOTE_CACHE_MAX_CHARACTERS = 4 * 1024 * 1024;
 
 /**
  * Per-provider OAuth identities visible to this trusted broker client.
@@ -289,6 +294,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	/** Present while the background loop is parked; resolved by `#noteActivity` or `close()`. */
 	#activityWakeup: PromiseWithResolvers<void> | null = null;
 	#cache: Map<string, CacheEntry> = new Map();
+	#cacheCharacters = 0;
 	#usageCache?: UsageCacheEntry;
 	#usageInflight?: Promise<UsageReport[] | null>;
 	#credentialBlockReconcileAfter: Map<string, number> = new Map();
@@ -1177,28 +1183,46 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const entry = this.#cache.get(key);
 		if (!entry) return null;
 		if (entry.expiresAtSec * 1000 <= Date.now()) {
-			this.#cache.delete(key);
+			this.#deleteCache(key);
 			return null;
 		}
+		this.#cache.delete(key);
+		this.#cache.set(key, entry);
 		return entry.value;
 	}
 
 	setCache(key: string, value: string, expiresAtSec: number): void {
 		this.#noteActivity();
+		this.#deleteCache(key);
+		const size = key.length + value.length;
+		if (size > REMOTE_CACHE_MAX_CHARACTERS) return;
 		this.#cache.set(key, { value, expiresAtSec });
+		this.#cacheCharacters += size;
+		while (this.#cache.size > REMOTE_CACHE_MAX_ENTRIES || this.#cacheCharacters > REMOTE_CACHE_MAX_CHARACTERS) {
+			const oldest = this.#cache.keys().next().value;
+			if (oldest === undefined) break;
+			this.#deleteCache(oldest);
+		}
+	}
+
+	#deleteCache(key: string): void {
+		const entry = this.#cache.get(key);
+		if (!entry) return;
+		this.#cacheCharacters -= key.length + entry.value.length;
+		this.#cache.delete(key);
 	}
 
 	/** Drop all cache rows whose keys start with the supplied prefix. */
 	deleteCachePrefix(prefix: string): void {
 		for (const key of this.#cache.keys()) {
-			if (key.startsWith(prefix)) this.#cache.delete(key);
+			if (key.startsWith(prefix)) this.#deleteCache(key);
 		}
 	}
 
 	cleanExpiredCache(): void {
 		const nowSec = Math.floor(Date.now() / 1000);
 		for (const [key, entry] of this.#cache) {
-			if (entry.expiresAtSec <= nowSec) this.#cache.delete(key);
+			if (entry.expiresAtSec <= nowSec) this.#deleteCache(key);
 		}
 	}
 
@@ -1572,6 +1596,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		// process exiting right after close() still sends it; failures are dropped.
 		void this.#flushObservedUsage().finally(() => this.#cancelObservedUsageExitFlush?.());
 		this.#cache.clear();
+		this.#cacheCharacters = 0;
 		this.#usageOverlays.clear();
 	}
 }
@@ -1582,9 +1607,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
  * pick the one whose identity (accountId / email / projectId) lines up with
  * the credential the caller is asking about.
  *
- * Falls back to the lone candidate when only one matches the provider; falls
- * through to `null` when nothing matches, which `AuthStorage` treats as "no
- * usage data" (ranking proceeds without a usage signal for this credential).
+ * Falls back to the provider's lone report when it shares no identity field
+ * with the credential; falls through to `null` when nothing matches, which
+ * `AuthStorage` treats as "no usage data" (ranking proceeds without a usage
+ * signal for this credential).
  */
 function matchUsageReport(reports: UsageReport[], provider: Provider, credential: OAuthCredential): UsageReport | null {
 	const all = reports.filter(report => report.provider === provider);
@@ -1635,7 +1661,17 @@ function matchUsageReport(reports: UsageReport[], provider: Provider, credential
 		report => !readMetadataString((report.metadata ?? {}) as Record<string, unknown>, "orgId"),
 	);
 	if (candidates.length === 0) return null;
-	if (all.length === 1 && candidates.length === 1) return candidates[0];
+	// The sole report stands in for a credential it shares no identity field
+	// with; otherwise identity decides, because a report naming another email,
+	// account or project is a sibling's pool whose fetch succeeded where this
+	// credential's failed.
+	if (
+		all.length === 1 &&
+		candidates.length === 1 &&
+		!reportHasComparableIdentity(candidates[0], accountId, email, projectId)
+	) {
+		return candidates[0];
+	}
 	for (const report of candidates) {
 		if (reportMatchesIdentity(report, accountId, email, projectId)) return report;
 	}
@@ -1699,7 +1735,13 @@ function findMatchingReportIndex(reports: UsageReport[], overlay: UsageReport): 
 		candidate => !readMetadataString((candidate.report.metadata ?? {}) as Record<string, unknown>, "orgId"),
 	);
 	if (candidates.length === 0) return -1;
-	if (all.length === 1 && candidates.length === 1) return candidates[0]!.index;
+	if (
+		all.length === 1 &&
+		candidates.length === 1 &&
+		!reportHasComparableIdentity(candidates[0]!.report, accountId, email, projectId)
+	) {
+		return candidates[0]!.index;
+	}
 	for (const candidate of candidates) {
 		if (reportMatchesIdentity(candidate.report, accountId, email, projectId)) return candidate.index;
 	}
@@ -1721,15 +1763,35 @@ function reportMatchesIdentity(
 		const metaAccount = readMetadataString(metadata, "accountId") ?? readMetadataString(metadata, "account_id");
 		if (metaAccount && metaAccount.toLowerCase() === accountId) return true;
 		for (const limit of report.limits) {
-			if (limit.scope.accountId?.toLowerCase() === accountId) return true;
+			if (limit.scope.accountId?.trim().toLowerCase() === accountId) return true;
 		}
 	}
 	if (projectId) {
 		const metaProject = readMetadataString(metadata, "projectId") ?? readMetadataString(metadata, "project_id");
 		if (metaProject && metaProject.toLowerCase() === projectId) return true;
 		for (const limit of report.limits) {
-			if (limit.scope.projectId?.toLowerCase() === projectId) return true;
+			if (limit.scope.projectId?.trim().toLowerCase() === projectId) return true;
 		}
+	}
+	return false;
+}
+
+/** Whether the report names an email, account or project the caller can compare against. */
+function reportHasComparableIdentity(
+	report: UsageReport,
+	accountId: string | undefined,
+	email: string | undefined,
+	projectId: string | undefined,
+): boolean {
+	const metadata = report.metadata ?? {};
+	if (email && readMetadataString(metadata, "email")) return true;
+	if (accountId) {
+		if (readMetadataString(metadata, "accountId") ?? readMetadataString(metadata, "account_id")) return true;
+		if (report.limits.some(limit => limit.scope.accountId?.trim())) return true;
+	}
+	if (projectId) {
+		if (readMetadataString(metadata, "projectId") ?? readMetadataString(metadata, "project_id")) return true;
+		if (report.limits.some(limit => limit.scope.projectId?.trim())) return true;
 	}
 	return false;
 }

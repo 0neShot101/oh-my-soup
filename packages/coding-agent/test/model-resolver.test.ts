@@ -12,12 +12,14 @@ import {
 	formatModelStringWithRouting,
 	parseModelPattern,
 	pickDefaultAvailableModel,
+	resolveAgentAdvisorRolePattern,
 	resolveAgentAdvisorSelection,
 	resolveAgentModelPatterns,
 	resolveAgentModelSelection,
 	resolveAgentPrewalkPattern,
 	resolveAllowedModels,
 	resolveCliModel,
+	resolveConfiguredModelPatterns,
 	resolveExplicitModelRole,
 	resolveModelFromSettings,
 	resolveModelFromString,
@@ -962,6 +964,20 @@ describe("role priorities and chains", () => {
 		expect(resolveModelFromSettings({ settings, availableModels: [chat, image] })).toBe(chat);
 	});
 
+	test("judge defaults follow the @tiny/@smol/@default roles instead of matching Vertex `@default` ids", () => {
+		const vertex = roleChainModel("google-vertex", "claude-opus-4-8@default");
+		const small = roleChainModel("local", "qwen-small");
+		const big = roleChainModel("local", "big");
+		const settings = Settings.isolated({ modelRoles: { tiny: "local/qwen-small", default: "local/big" } });
+
+		const chain = resolveRoleChain("judge", settings, [vertex, small, big]);
+
+		expect(chain.map(candidate => formatModelStringWithRouting(candidate.model))).toEqual([
+			"local/qwen-small",
+			"local/big",
+		]);
+	});
+
 	test("memory inherits configured tiny without kind roles inheriting configured default", () => {
 		const tiny = roleChainModel("local", "tiny-model");
 		const defaultModel = roleChainModel("local", "default-model");
@@ -1148,6 +1164,19 @@ describe("resolveAgentAdvisorSelection", () => {
 	test("blank override falls through to the agent definition", () => {
 		expect(resolveAgentAdvisorSelection({ settingsOverride: "  ", agentAdvisor: true })).toEqual({});
 		expect(resolveAgentAdvisorSelection({ settingsOverride: "", agentAdvisor: false })).toBeUndefined();
+	});
+});
+describe("resolveAgentAdvisorRolePattern", () => {
+	test("a self-referential @advisor resolves to the owner's advisor role inside the spawned session", () => {
+		const owner = Settings.isolated({ modelRoles: { advisor: "anthropic/claude-haiku-4-5" } });
+		const child = Settings.isolated({
+			modelRoles: {
+				...owner.getModelRoles(),
+				advisor: resolveAgentAdvisorRolePattern("@advisor:high", owner),
+			},
+		});
+
+		expect(resolveConfiguredModelPatterns("@advisor", child)).toEqual(["anthropic/claude-haiku-4-5:high"]);
 	});
 });
 describe("resolveAgentModelPatterns", () => {
