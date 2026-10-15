@@ -113,7 +113,8 @@ pub struct GrepOptions<'env> {
 	pub pattern:            String,
 	/// Directory or file to search: a host path or an absolute `scheme://` URL.
 	pub path:               String,
-	/// Glob filter for filenames (e.g., "*.ts").
+	/// Glob filter for file paths (e.g., "*.ts"); a matched directory selects
+	/// every file under it.
 	pub glob:               Option<String>,
 	/// Match simple glob patterns at any depth (default: true; `*.ts` ->
 	/// `**/*.ts`). Set false when `glob` is already relative to `path`.
@@ -1318,8 +1319,9 @@ fn build_grep_walk_request(
 ) -> Result<pi_walker::WalkRequest> {
 	let mut filter = pi_walker::WalkFilter::files_only();
 	if let Some(pattern) = glob {
-		let compiled = pi_walker::CompiledWalkGlob::new([pattern])
-			.map_err(|err| Error::from_reason(format!("Invalid glob pattern: {err}")))?;
+		let compiled =
+			pi_walker::CompiledWalkGlob::new(glob_util::search_scope_patterns(pattern.to_owned()))
+				.map_err(|err| Error::from_reason(format!("Invalid glob pattern: {err}")))?;
 		filter = filter.glob(compiled);
 	}
 
@@ -3353,6 +3355,35 @@ mod tests {
 		let mut paths: Vec<&str> = result.matches.iter().map(|m| m.path.as_str()).collect();
 		paths.sort_unstable();
 		assert_eq!(paths, ["svc/y.go", "x.go"]);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn grep_glob_naming_directories_searches_their_files() {
+		let root = TempDirGuard::new();
+		write_file(&root.path().join("backend/auth/a.ts"), "needle auth\n");
+		write_file(&root.path().join("frontend/src/main.tsx"), "needle main\n");
+		write_file(&root.path().join("frontend/src/deep/x.tsx"), "needle deep\n");
+		write_file(&root.path().join("other/z.ts"), "needle other\n");
+
+		for (glob, expected) in [
+			(
+				"{backend/auth,frontend/src}",
+				&["backend/auth/a.ts", "frontend/src/deep/x.tsx", "frontend/src/main.tsx"][..],
+			),
+			("frontend/sr?", &["frontend/src/deep/x.tsx", "frontend/src/main.tsx"][..]),
+			("frontend/sr**", &["frontend/src/deep/x.tsx", "frontend/src/main.tsx"][..]),
+			("frontend/src/{main.tsx,App.tsx}", &["frontend/src/main.tsx"][..]),
+		] {
+			let mut config = base_grep_config(root.path());
+			config.glob = Some(glob.to_string());
+			config.recursive = Some(false);
+			let result = grep_sync(config, None, task::CancelToken::default())
+				.expect("directory glob grep should succeed");
+			let mut paths: Vec<&str> = result.matches.iter().map(|m| m.path.as_str()).collect();
+			paths.sort_unstable();
+			assert_eq!(paths, expected, "glob {glob}");
+		}
 	}
 
 	#[cfg(unix)]
