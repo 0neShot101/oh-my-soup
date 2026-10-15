@@ -2,13 +2,30 @@
 
 ## [Unreleased]
 
+## [18.11.0] - 2026-10-14
+
+### Fixed
+
+- Providers → Subscription windows no longer mixes Codex 5-hour and 7-day quotas across plans: Team and weekly-only (ProLite) accounts now share the 7-day row, the 5-hour row counts only accounts that have one, and labels no longer flip with whichever account reported last ([#15664](https://github.com/can1357/oh-my-pi/issues/15664))
+
+## [18.10.4] - 2026-10-13
+
+### Fixed
+
+- Usage recorded at $0 for a model whose catalog price changes on a date (Gemini 4 Argon, Devin SWE-2) is now priced at the rate in force on the request's date, instead of staying $0 like peak/off-peak tariff usage ([#15620](https://github.com/can1357/oh-my-pi/pull/15620) by [@eggpeat](https://github.com/eggpeat))
+
+## [18.9.0] - 2026-10-11
+
+### Fixed
+
+- Fixed the stats dashboard favicon so dashboard tabs and bookmarks display the OMP icon correctly.
+
+## [18.8.0] - 2026-10-07
+
 ### Changed
 
-- Dashboard pages refetch only when stats data actually changed, including commits from other omp processes ([#14723](https://github.com/can1357/oh-my-pi/pull/14723) by [@H4vC](https://github.com/H4vC))
-- Sped up session syncs, stats database opening, package import and the `/usage`, models and timeseries endpoints ([#14723](https://github.com/can1357/oh-my-pi/pull/14723) by [@H4vC](https://github.com/H4vC))
-- Trace polls revalidate with `If-None-Match`, so unchanged traces are not re-downloaded ([#14724](https://github.com/can1357/oh-my-pi/pull/14724) by [@H4vC](https://github.com/H4vC))
-- Cancelled abandoned dashboard requests, e.g. large traces when switching sessions or closing a drawer mid-load ([#14724](https://github.com/can1357/oh-my-pi/pull/14724) by [@H4vC](https://github.com/H4vC))
-- Reduced dashboard re-rendering during trace timeline hover, pan and zoom ([#14727](https://github.com/can1357/oh-my-pi/pull/14727) by [@H4vC](https://github.com/H4vC))
+- Improved dashboard responsiveness and efficiency by reducing unnecessary data refreshes and re-rendering, speeding up session synchronization, database access, package imports, and usage, model, and time-series requests, and avoiding repeated downloads of unchanged traces.
+- Dashboard requests are now cancelled when no longer needed, improving responsiveness when switching sessions or closing trace views during loading.
 
 ## [18.7.0] - 2026-10-06
 

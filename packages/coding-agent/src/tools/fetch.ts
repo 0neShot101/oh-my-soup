@@ -9,6 +9,7 @@ import { type FetchImpl, getEnvApiKey, type ImageContent, type TextContent } fro
 import { htmlToMarkdown, notebookToEditableText } from "@oh-my-pi/pi-natives";
 import { $which, ptree } from "@oh-my-pi/pi-utils";
 import { type ArchiveFormat, listArchiveRoot, sniffArchiveFormat } from "@oh-my-pi/pi-utils/ar";
+import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import type { ToolSession } from "../sdk";
 import type { AgentStorage } from "../session/agent-storage";
@@ -1046,13 +1047,14 @@ async function handleSpecialUrls(
 	timeout: number,
 	signal: AbortSignal | undefined,
 	storage: AgentStorage | null,
+	modelRegistry: ModelRegistry | undefined,
 ): Promise<FetchRenderResult | null> {
 	const specialHandlers = await loadSpecialHandlers();
 	for (const handler of specialHandlers) {
 		if (signal?.aborted) {
 			throw new ToolAbortError();
 		}
-		const result = await handler(url, timeout, signal, storage);
+		const result = await handler(url, timeout, signal, storage, modelRegistry);
 		if (result) return result;
 	}
 	return null;
@@ -1072,6 +1074,7 @@ async function renderUrl(
 	settings: Settings,
 	signal: AbortSignal | undefined,
 	storage: AgentStorage | null,
+	modelRegistry: ModelRegistry | undefined,
 	fetchOverride?: FetchImpl,
 	excludeWebP?: true,
 ): Promise<FetchRenderResult> {
@@ -1100,7 +1103,7 @@ async function renderUrl(
 
 	// Step 1: Try special handlers for known sites (unless raw mode)
 	if (!raw) {
-		const specialResult = await handleSpecialUrls(url, timeout, signal, storage);
+		const specialResult = await handleSpecialUrls(url, timeout, signal, storage, modelRegistry);
 		if (specialResult) return specialResult;
 	}
 
@@ -1137,6 +1140,19 @@ async function renderUrl(
 				response.status ? `Failed to fetch URL (HTTP ${response.status})` : "Failed to fetch URL",
 				...(response.error ? [`Cause: ${response.error}`] : []),
 			],
+		};
+	}
+
+	if (response.status === 204) {
+		return {
+			url,
+			finalUrl: response.finalUrl,
+			contentType: response.contentType || "unknown",
+			method: "no-content",
+			content: "",
+			fetchedAt,
+			truncated: false,
+			notes: ["HTTP 204 No Content"],
 		};
 	}
 
@@ -1660,6 +1676,7 @@ export async function fetchReadUrl(
 		session.settings,
 		signal,
 		storage,
+		session.modelRegistry,
 		session.fetch,
 		webpExclusionForModel(session.getActiveModel?.()),
 	);
