@@ -118,7 +118,7 @@ export class BracketedPasteHandler {
 		// neither lost nor held forever, and reset paste mode so subsequent
 		// input recovers. See `StdinBuffer#abortPaste` for the sibling recovery
 		// semantics inside `StdinBuffer`.
-		if (this.#buffer.length > this.#byteLimit) {
+		if (Buffer.byteLength(this.#buffer, "utf8") > this.#byteLimit) {
 			const pasteContent = this.#buffer;
 			this.#buffer = "";
 			this.#active = false;
