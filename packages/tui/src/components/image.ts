@@ -11,6 +11,7 @@ import {
 	TERMINAL,
 } from "../terminal-capabilities";
 import { nativeImageNode } from "../native/blobs";
+import { linkedImageText, transcriptImageLink } from "../prompt/image-references";
 import type { DescribeContext, NativeNode } from "../native/node";
 import type { Component } from "../tui";
 
@@ -22,6 +23,8 @@ export interface ImageOptions {
 	maxWidthCells?: number;
 	maxHeightCells?: number;
 	filename?: string;
+	/** File the image was read from; its link target. Images without one link to a blob copy of their bytes. */
+	sourcePath?: string;
 	/** Shared budget that caps how many inline images render as live graphics. */
 	budget?: ImageBudget;
 	/**
@@ -739,6 +742,7 @@ export class Image implements Component {
 		if (this.#native) return this.#native;
 		const maxW = this.#options.maxWidthCells;
 		const maxH = this.#options.maxHeightCells;
+		const href = transcriptImageLink({ data: this.#base64Data, mimeType: this.#mimeType }, this.#options.sourcePath);
 		this.#native = nativeImageNode(Buffer.from(this.#base64Data, "base64"), this.#mimeType, {
 			alt: imageFallback(this.#mimeType, this.#dimensions, this.#options.filename),
 			w: this.#dimensions.widthPx,
@@ -750,6 +754,8 @@ export class Image implements Component {
 							h: maxH && maxH > 0 ? `${maxH}lines` : undefined,
 						}
 					: undefined,
+			// A click zooms the image in the terminal; the file opens from its context menu.
+			...(href ? { href, actions: { menu: ["open"] } } : {}),
 		});
 		return this.#native;
 	}
@@ -864,7 +870,11 @@ export class Image implements Component {
 	 */
 	#fallbackLines(): string[] {
 		const fallback = this.#theme.fallbackColor(
-			imageFallback(this.#mimeType, this.#dimensions, this.#options.filename),
+			linkedImageText(
+				imageFallback(this.#mimeType, this.#dimensions, this.#options.filename),
+				{ data: this.#base64Data, mimeType: this.#mimeType },
+				this.#options.sourcePath,
+			),
 		);
 		if (this.#renderedGraphicRows <= 1) return [fallback];
 		const lines: string[] = [];

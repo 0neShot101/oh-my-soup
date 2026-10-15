@@ -6,7 +6,9 @@ import { blobExtensionForImageMimeType } from "./image-format";
 interface ImageBlobResult {
 	displayPath: string;
 }
-import { fileHyperlink } from "../render/hyperlink";
+import type { TspSpan } from "@oh-my-pi/pi-wire";
+import { span } from "../native/describe";
+import { fileHyperlink, fileLinkSpan, isHyperlinkEnabled } from "../render/hyperlink";
 
 /** Probed pixel dimensions riding on the draft image object itself; `null` records a failed
  *  probe so the chips band never re-decodes a corrupt header every frame. */
@@ -99,4 +101,57 @@ export function materializeImageReferenceLinksSync(
 	if (!images || images.length === 0) return undefined;
 	const links = images.map((image, index) => materializeImageReferenceLink(image, index + 1, putBlob));
 	return links.some(link => link !== undefined) ? links : undefined;
+}
+
+let hostBlobWriter: ImageBlobWriterSync | undefined;
+/** Blob paths already written for an image payload, keyed by mime type and content hash. */
+const blobLinks = new Map<string, string>();
+const BLOB_LINK_CACHE_LIMIT = 256;
+
+/** Register (or clear, with `undefined`) the host's blob writer that backs links for images without a file of their own. */
+export function setImageBlobWriter(next: ImageBlobWriterSync | undefined): void {
+	hostBlobWriter = next;
+	blobLinks.clear();
+}
+
+/**
+ * The file a transcript image opens: `sourcePath` when it was read from one, else a
+ * blob copy of its bytes written through the host. Undefined when neither exists.
+ */
+export function transcriptImageLink(
+	image: Pick<ImageContent, "data" | "mimeType">,
+	sourcePath?: string,
+): string | undefined {
+	if (sourcePath) return sourcePath;
+	if (!hostBlobWriter || !image.data) return undefined;
+	const key = `${image.mimeType}:${Bun.hash(image.data)}`;
+	const cached = blobLinks.get(key);
+	if (cached) return cached;
+	const link = materializeImageReferenceLink({ type: "image", ...image }, 1, hostBlobWriter);
+	if (!link) return undefined;
+	if (blobLinks.size >= BLOB_LINK_CACHE_LIMIT) blobLinks.delete(blobLinks.keys().next().value as string);
+	blobLinks.set(key, link);
+	return link;
+}
+
+/** `text` (an image's placeholder) as an OSC 8 link to the image's file; plain when hyperlinks are off or no file exists. */
+export function linkedImageText(
+	text: string,
+	image: Pick<ImageContent, "data" | "mimeType">,
+	sourcePath?: string,
+): string {
+	if (!isHyperlinkEnabled()) return text;
+	const target = transcriptImageLink(image, sourcePath);
+	return target ? fileHyperlink(target, text) : text;
+}
+
+/** Native counterpart of {@link linkedImageText}: a span linking to the image's file when one exists. */
+export function linkedImageSpan(
+	text: string,
+	image: Pick<ImageContent, "data" | "mimeType">,
+	sourcePath: string | undefined,
+	s?: string,
+): TspSpan {
+	const target = transcriptImageLink(image, sourcePath);
+	return target ? fileLinkSpan(target, text, s) : span(text, s);
 }

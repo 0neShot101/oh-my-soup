@@ -33,6 +33,7 @@ import { plainText } from "../native/spans";
 import { diagnosticsSection, displayPath, toolHead } from "../tools/native-view";
 import type { FileDiagnosticsResult } from "../tools/lsp";
 import { NativeImageCache, readMediaPath, shownMedia } from "../native/blobs";
+import { linkedImageText } from "../prompt/image-references";
 import { Memo } from "../native/memo";
 import { type EditMode, type PerFileDiffPreview, renderStreamingFallback } from "../tools/edit";
 import { taskCardAgentIds } from "../tools/task";
@@ -1255,7 +1256,7 @@ export class ToolExecutionComponent extends Container {
 		const images: NativeNode[] = [];
 		this.#getAllImageBlocks().forEach((image, index) => {
 			if (!image.data || !image.mimeType) return;
-			const described = this.#nativeImages.get(`img${index}`, image.data, image.mimeType);
+			const described = this.#nativeImages.get(`img${index}`, image.data, image.mimeType, mediaPath);
 			if (!shown.blobs.has((described.p as { blob?: string } | undefined)?.blob ?? "")) images.push(described);
 		});
 		return images;
@@ -1694,6 +1695,7 @@ export class ToolExecutionComponent extends Container {
 
 		if (this.#result) {
 			const imageBlocks = this.#getAllImageBlocks();
+			const sourcePath = readMediaPath(this.#result.details);
 
 			for (let i = 0; i < imageBlocks.length; i++) {
 				const img = imageBlocks[i];
@@ -1721,6 +1723,7 @@ export class ToolExecutionComponent extends Container {
 						{ fallbackColor: (s: string) => theme.fg("toolOutput", s) },
 						{
 							...resolveImageOptions(),
+							sourcePath,
 							budget: this.#ui.imageBudget,
 							imageKey: `te${this.#instanceId}:${i}`,
 							requestRender: () => this.#ui.requestRender(),
@@ -1876,7 +1879,10 @@ export class ToolExecutionComponent extends Container {
 				.map(img => {
 					const mimeType = String(img.mimeType);
 					const dims = img.data ? (getImageDimensions(img.data, mimeType) ?? undefined) : undefined;
-					return imageFallback(mimeType, dims);
+					const placeholder = imageFallback(mimeType, dims);
+					return img.data
+						? linkedImageText(placeholder, { data: img.data, mimeType }, readMediaPath(this.#result?.details))
+						: placeholder;
 				})
 				.join("\n");
 			output = output ? `${output}\n${imageIndicators}` : imageIndicators;

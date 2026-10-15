@@ -18,7 +18,7 @@ import {
 	skillChipStyle,
 } from "../prompt/composer-attachments";
 import { MODEL_MENTION_TAG_RE } from "../prompt/model-mention-syntax";
-import { expandKeyHint, fileHyperlink } from "../render";
+import { expandKeyHint, fileHyperlink, fileLinkSpan } from "../render";
 import { imageReferenceHyperlink } from "../prompt/image-references";
 import { highlightMagicKeywords } from "../prompt/magic-keywords";
 import type { ReactionTarget } from "./reaction";
@@ -262,7 +262,7 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 		if (thumbs.length > 0) {
 			children.push(row(thumbs, { gap: "sm", wrap: true, align: "start", role: "omp.user.images" }));
 		}
-		const marks = this.#synthetic ? [] : tokenMarks(this.#text, this.#tokens);
+		const marks = this.#synthetic ? [] : tokenMarks(this.#text, this.#tokens, this.#imageLinks);
 		children.push(md(this.#text, marks.length > 0 ? { marks } : undefined));
 		const badges: NativeChild[] = [];
 		if (this.#liveSteered) {
@@ -359,13 +359,13 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 /**
  * The composer tokens in `text` as `md` marks, styled as the composer
  * decorates them (`CustomEditor.describeDecorations`), so a sent prompt keeps
- * its chips highlighted.
+ * its chips highlighted. Image and video chips link to their file, as in text mode.
  */
-function tokenMarks(text: string, tokens: RegExp): TspSpan[] {
+function tokenMarks(text: string, tokens: RegExp, imageLinks: readonly (string | undefined)[] | undefined): TspSpan[] {
 	// One mark per distinct token: Tern styles every occurrence of its text.
-	const styles = new Map<string, string>();
+	const marks = new Map<string, TspSpan>();
 	const mark = (s: string) => (label: string) => {
-		styles.set(label, s);
+		marks.set(label, { t: label, s });
 		return "";
 	};
 	renderPlaceholders(
@@ -374,11 +374,16 @@ function tokenMarks(text: string, tokens: RegExp): TspSpan[] {
 			renderText: () => "",
 			renderSkill: mark("customMessageLabel strong"),
 			renderMention: mark("statusLineModel strong"),
-			renderReference: mark("accent strong"),
+			renderReference: (label, kind, index) => {
+				const s = "accent strong";
+				const link = kind === "image" || kind === "video" ? imageLinks?.[index - 1] : undefined;
+				marks.set(label, link ? fileLinkSpan(link, label, s) : { t: label, s });
+				return "";
+			},
 		},
 		tokens,
 	);
-	return [...styles].map(([t, s]) => ({ t, s }));
+	return [...marks.values()];
 }
 
 /**

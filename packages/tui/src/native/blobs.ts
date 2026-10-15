@@ -11,6 +11,7 @@ import type { TspProps } from "@oh-my-pi/pi-wire";
 import { resolveImageOptions } from "../render/render-utils";
 import { getImageDimensions } from "../terminal-capabilities";
 import { node } from "./describe";
+import { transcriptImageLink } from "../prompt/image-references";
 import type { NativeChild, NativeNode } from "./node";
 
 export interface NativeBlob {
@@ -92,14 +93,20 @@ export function base64ImageNode(
 	);
 }
 
-/** `image` nodes for base64 payloads, one per slot key, rebuilt only when the slot's payload changes. */
+/**
+ * `image` nodes for base64 payloads, one per slot key, rebuilt only when the slot's payload
+ * changes. Each opens its file (`sourcePath`, else a blob copy) from the context menu.
+ */
 export class NativeImageCache {
 	#entries = new Map<string, { data: string; node: NativeNode }>();
 
-	get(key: string, data: string, mimeType: string): NativeNode {
+	get(key: string, data: string, mimeType: string, sourcePath?: string): NativeNode {
 		const cached = this.#entries.get(key);
 		if (cached?.data === data) return cached.node;
-		const image = base64ImageNode(data, mimeType, { alt: mimeType }, key);
+		const href = transcriptImageLink({ data, mimeType }, sourcePath);
+		// A click zooms the image in the terminal; the file opens from its context menu.
+		const open = href ? { href, actions: { menu: ["open"] } } : {};
+		const image = base64ImageNode(data, mimeType, { alt: mimeType, ...open }, key);
 		this.#entries.set(key, { data, node: image });
 		return image;
 	}
