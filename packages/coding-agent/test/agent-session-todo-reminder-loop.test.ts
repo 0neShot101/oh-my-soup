@@ -7,6 +7,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TodoTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { cfgTodoEnabled, cfgTodoReminders } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
@@ -204,13 +205,13 @@ describe("AgentSession todo reminder self-continuation suppression", () => {
 			expect(reminderAttempts).toEqual([1]);
 
 			if (control === "roster") await session.setActiveToolsByName([]);
-			else session.settings.override(control, false);
+			else (control === "todo.enabled" ? cfgTodoEnabled : cfgTodoReminders).override(session.settings, false);
 			emitTextOnlyStop();
 			await session.waitForIdle();
 			expect(continueSpy).toHaveBeenCalledTimes(1);
 
 			if (control === "roster") await session.setActiveToolsByName(["todo"]);
-			else session.settings.override(control, true);
+			else (control === "todo.enabled" ? cfgTodoEnabled : cfgTodoReminders).override(session.settings, true);
 			expect(session.getActiveToolNames()).toContain("todo");
 			emitTextOnlyStop();
 			await session.waitForIdle();
