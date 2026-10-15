@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed AST searches missing parse errors caused by missing tokens, and AST edits rewriting affected files ([#15530](https://github.com/can1357/oh-my-pi/issues/15530)).
+
 ## [18.10.4] - 2026-10-13
 
 ### Fixed
