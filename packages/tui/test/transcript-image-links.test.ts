@@ -95,6 +95,27 @@ function collectMarks(value: unknown, out: TspSpan[] = []): TspSpan[] {
 	return out;
 }
 
+/** The first object in a described tree matching `match`. */
+function findProps(
+	value: unknown,
+	match: (p: Record<string, unknown>) => boolean,
+): Record<string, unknown> | undefined {
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			const found = findProps(item, match);
+			if (found) return found;
+		}
+	} else if (value && typeof value === "object") {
+		const record = Object.fromEntries(Object.entries(value));
+		if (match(record)) return record;
+		for (const child of Object.values(record)) {
+			const found = findProps(child, match);
+			if (found) return found;
+		}
+	}
+	return undefined;
+}
+
 describe("native user message image chips", () => {
 	it("links each #N chip to the Nth attachment's file", () => {
 		const first = path.resolve("shots", "first.png");
@@ -110,5 +131,20 @@ describe("native user message image chips", () => {
 		const hrefFor = (n: number) => marks.find(mark => mark.t.endsWith(`#${n}`))?.href;
 		expect(hrefFor(1)).toBe(url.pathToFileURL(first).href);
 		expect(hrefFor(2)).toBe(url.pathToFileURL(second).href);
+	});
+
+	it("opens thumbnails as file URLs and drops every link when the policy turns off", () => {
+		setNativeRendering(true);
+		const file = path.resolve("shots", "first.png");
+		const user = new UserMessageComponent("see [Image #1, 1x1]", {
+			images: [{ type: "image", ...IMAGE }],
+			imageLinks: [file],
+		});
+		const thumbHref = (tree: unknown) => findProps(tree, p => p.title === "#1" && "blob" in p)?.href;
+		expect(thumbHref(user.describe())).toBe(url.pathToFileURL(file).href);
+		applyHyperlinkSetting("off");
+		const described = user.describe();
+		expect(thumbHref(described)).toBeUndefined();
+		expect(collectMarks(described).some(mark => mark.href !== undefined)).toBe(false);
 	});
 });

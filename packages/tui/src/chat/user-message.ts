@@ -19,7 +19,7 @@ import {
 } from "../prompt/composer-attachments";
 import { MODEL_MENTION_TAG_RE } from "../prompt/model-mention-syntax";
 import { expandKeyHint, fileHyperlink, fileLinkSpan } from "../render";
-import { imageReferenceHyperlink } from "../prompt/image-references";
+import { imageLinksEnabled, imageReferenceHyperlink } from "../prompt/image-references";
 import { highlightMagicKeywords } from "../prompt/magic-keywords";
 import type { ReactionTarget } from "./reaction";
 import { card, md, node, row, span, text } from "../native/describe";
@@ -145,8 +145,9 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 	readonly #tokens: RegExp;
 	#reaction: string | undefined;
 	#native: NativeNode | undefined;
-	/** The terminal's clock {@link #native} was described with. */
+	/** The terminal's clock and the image link policy {@link #native} was described with. */
 	#nativeHour12: boolean | undefined;
+	#nativeLinked = false;
 
 	constructor(text: string, options: UserBubbleOptions = {}) {
 		super();
@@ -204,8 +205,11 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 	override describe(cx?: DescribeContext): NativeNode {
 		// The terminal's clock: Bun's own default locale ignores the user's.
 		const hour12 = cx?.hour12;
-		if (this.#native && this.#nativeHour12 === hour12) return this.#native;
+		// Chip marks and thumbnails carry links only under an enabled policy.
+		const linked = imageLinksEnabled();
+		if (this.#native && this.#nativeHour12 === hour12 && this.#nativeLinked === linked) return this.#native;
 		this.#nativeHour12 = hour12;
+		this.#nativeLinked = linked;
 		const children: NativeChild[] = [];
 		if (!this.#synthetic && hasTranscriptActions()) {
 			const tools: NativeChild[] = [
@@ -253,7 +257,7 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 			this.#images.forEach((image, i) => {
 				if (!image.mimeType.startsWith("image/")) return;
 				const label = `#${i + 1}`;
-				const open = openableImageProps(this.#imageLinks?.[i]);
+				const open = openableImageProps(linked ? this.#imageLinks?.[i] : undefined);
 				thumbs.push(base64ImageNode(image.data, image.mimeType, { alt: label, title: label, ...open }, label));
 			});
 		}
