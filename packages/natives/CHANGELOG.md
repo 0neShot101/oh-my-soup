@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Reduced memory held by cached code-structure parses: the cache now caps estimated syntax-tree memory instead of source size, drops a file's old parse as soon as its new content is parsed, and reparses edited files incrementally
+- Reduced memory held by cached code-structure parses: the cache now caps estimated syntax-tree memory instead of source size, drops a file's old parse as soon as its new content is parsed, and reparses edited files incrementally ([#15886](https://github.com/can1357/oh-my-pi/pull/15886))
 
 ## [18.11.1] - 2026-10-15
 
