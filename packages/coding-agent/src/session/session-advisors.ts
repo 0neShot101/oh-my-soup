@@ -86,7 +86,7 @@ import { serviceTierForAllFamilies, serviceTierSettingToTier } from "../config/s
 import type { Settings } from "../config/settings";
 import { CursorExecHandlers, type CursorMcpResourceAdapter } from "../cursor";
 import { bridgeToolMap } from "../cursor-bridge-tools";
-import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
+import { estimateContextToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import type { PlanModeState } from "../plan-mode/state";
 import advisorBoundaryGuidance from "../prompts/advisor/boundary-guidance.md" with { type: "text" };
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
@@ -2360,7 +2360,12 @@ export class SessionAdvisors {
 		const providerContextTokens = this.#estimateAdvisorContextTokens(advisor) + incomingTokens;
 		const localContextTokens =
 			agent.tokenizer.countTokens(agent.state.systemPrompt) +
-			estimateToolSchemaTokens(agent.state.tools, agent.tokenizer, this.#host.settings.revision) +
+			estimateContextToolSchemaTokens(
+				agent.state.tools,
+				agent.tokenizer,
+				advisorModel,
+				this.#host.settings.revision,
+			) +
 			storedConversationTokens +
 			incomingTokens;
 		const contextTokens = compactionContextTokens(providerContextTokens, localContextTokens);
