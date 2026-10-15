@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Python Eval displays preserve integers outside JavaScript's safe range as decimal strings in structured JSON instead of silently rounding them ([#15847](https://github.com/can1357/oh-my-pi/issues/15847)).
+
 ## [18.11.0] - 2026-10-14
 
 ### Added
