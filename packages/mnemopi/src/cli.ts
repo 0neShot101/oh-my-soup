@@ -77,7 +77,10 @@ function getMemory(context?: CliContext): { memory: BeamMemory; owned: boolean }
 	return { memory: new BeamMemory({ dbPath: resolveDbPath(context) }), owned: true };
 }
 
-export async function withMemory<T>(context: CliContext | undefined, fn: (memory: BeamMemory) => T | Promise<T>): Promise<T> {
+export async function withMemory<T>(
+	context: CliContext | undefined,
+	fn: (memory: BeamMemory) => T | Promise<T>,
+): Promise<T> {
 	const { memory, owned } = getMemory(context);
 	try {
 		return await fn(memory);

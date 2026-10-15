@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed `withMemory` (CLI) and `withBeam` (MCP) not draining background fact-extraction and embedding tasks when the handler throws, so a throwing `mnemopi store` or MCP `remember` call could still race the SQLite handle close and silently drop `memory_embeddings` rows. The drain now runs in a `finally` block on both success and throw paths. ([#15804](https://github.com/can1357/oh-my-pi/issues/15804))
+- Fixed a failing `mnemopi` CLI command or MCP memory call dropping the embeddings of memories it had just stored ([#15804](https://github.com/can1357/oh-my-pi/pull/15804) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ## [18.11.0] - 2026-10-14
 
