@@ -7,9 +7,7 @@ import { AuthStorage } from "@oh-my-pi/pi-ai/auth-storage";
 import { generateImage } from "@oh-my-pi/pi-ai/images";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { Api, FetchImpl, Model } from "@oh-my-pi/pi-catalog/types";
-import { ValidationError } from "../src/error";
 import { toDataUrl } from "../src/images/shared";
-import { parseRequest } from "../src/providers/images-server";
 
 const IMAGE_DATA = Buffer.from("gateway-image").toString("base64");
 
@@ -268,24 +266,10 @@ describe("auth gateway images", () => {
 		expect(upstreamCalls).toBe(0);
 	});
 
-	it("rejects malformed escaped MIME metadata as an image validation error", async () => {
-		await expect(
-			parseRequest(
-				{
-					model: "gpt-image-test",
-					prompt: "paint",
-					input_references: [{ url: "data:image/png%ZZ;base64,YQ==" }],
-				},
-				"generations",
-			),
-		).rejects.toBeInstanceOf(ValidationError);
-	});
-
-	it("preserves escaped legal MIME metadata through gateway edits", async () => {
+	it("preserves legal MIME punctuation through gateway edits", async () => {
 		const model = imageModel("openai", "gpt-image-mime-test", "openai-images");
-		const mimeType = "image/x!#$&^_.+-test";
+		const mimeType = "image/x!$&^_.+-test";
 		const inlineImage = toDataUrl({ data: IMAGE_DATA, mimeType });
-		expect(inlineImage).toContain("%23");
 		let upstreamCalls = 0;
 		let upstreamImage: File | undefined;
 		const fetchStub: FetchImpl = async (_input, init) => {

@@ -442,6 +442,16 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		this.#pasteByteLimit = options.pasteByteLimit ?? PASTE_MAX_BYTES;
 	}
 
+	/**
+	 * Whether a bracketed paste has started and its end marker has not arrived.
+	 * Terminal skips its per-read DEC 2004 reassertion meanwhile: the host is
+	 * evidently in bracketed-paste mode, and a paste delivered one key record
+	 * per read would otherwise cost one terminal write per pasted key (#15757).
+	 */
+	get pasting(): boolean {
+		return this.#pasteMode;
+	}
+
 	process(data: string | Buffer): void {
 		// Handle high-byte conversion (for compatibility with parseKeypress)
 		// If buffer has single byte > 127, convert to ESC + (byte - 128)

@@ -203,6 +203,10 @@ const invalidInputs: Array<{ name: string; input: ImageInput }> = [
 	{ name: "unsupported MIME type", input: { data: PADDED_IMAGE_DATA, mimeType: "text/plain" } },
 	{ name: "malformed MIME syntax", input: { data: PADDED_IMAGE_DATA, mimeType: "image/x?test" } },
 	{
+		name: "MIME subtype containing a URL fragment marker",
+		input: { data: PADDED_IMAGE_DATA, mimeType: "image/x#test" },
+	},
+	{
 		name: "MIME subtype over 127 characters",
 		input: { data: PADDED_IMAGE_DATA, mimeType: `image/x${"a".repeat(127)}` },
 	},
@@ -233,16 +237,14 @@ for (const client of clients) {
 	});
 }
 
-it("preserves legal MIME punctuation and image bytes through hosted provider data URL encoding", async () => {
-	const subtype = `x_test!#$&-^_.+${"a".repeat(112)}`;
+it("delivers legal MIME punctuation and image bytes intact through hosted provider data URLs", async () => {
+	const subtype = `x_test!$&-^_.+${"a".repeat(113)}`;
 	expect(subtype).toHaveLength(127);
 	const input = { data: PADDED_IMAGE_DATA, mimeType: `image/${subtype}` };
-	const ordinaryInput = { data: PADDED_IMAGE_DATA, mimeType: "image/svg+xml" };
-	const caretInput = { data: PADDED_IMAGE_DATA, mimeType: "image/x^test" };
 	const calls: FetchCall[] = [];
 	await generateHostedImage(
 		hostedImageModel,
-		{ prompt: "edit the image", inputImages: [input, ordinaryInput, caretInput] },
+		{ prompt: "edit the image", inputImages: [input] },
 		{ apiKey: API_KEY, fetch: createFetch(calls), carrier: hostedCarrier },
 	);
 	const call = calls.find(item => item.url.endsWith("/responses"));
@@ -250,26 +252,10 @@ it("preserves legal MIME punctuation and image bytes through hosted provider dat
 	const body = jsonBody(call) as {
 		input?: Array<{ content?: Array<{ type?: string; image_url?: string }> }>;
 	};
-	const content = body.input?.[0]?.content ?? [];
-	const imageUrl = content.find(part => part.type === "input_image")?.image_url;
+	const imageUrl = body.input?.[0]?.content?.find(part => part.type === "input_image")?.image_url;
 	if (!imageUrl) throw new Error("Expected the hosted input image data URL");
-	expect(content.find(part => part.image_url?.startsWith("data:image/svg+xml;base64,"))?.image_url).toBe(
-		`data:image/svg+xml;base64,${PADDED_IMAGE_DATA}`,
-	);
-
-	expect(imageUrl).toBe(`data:image/x_test!%23$&-^_.+${"a".repeat(112)};base64,${PADDED_IMAGE_DATA}`);
-	const parsedUrl = new URL(imageUrl);
-	expect(parsedUrl.hash).toBe("");
-	const comma = parsedUrl.pathname.indexOf(",");
-	expect(comma).toBeGreaterThanOrEqual(0);
-	const metadata = parsedUrl.pathname.slice(0, comma);
-	const base64Marker = ";base64";
-	expect(metadata.endsWith(base64Marker)).toBe(true);
-	expect(decodeURIComponent(metadata.slice(0, -base64Marker.length))).toBe(input.mimeType);
-	expect(Buffer.from(parsedUrl.pathname.slice(comma + 1), "base64")).toEqual(IMAGE_BYTES);
-	const caretImageUrl = content.find(part => part.image_url?.startsWith("data:image/x^test;base64,"))?.image_url;
-	if (!caretImageUrl) throw new Error("Expected the hosted caret MIME image data URL");
-	const caretResponse = await fetch(new URL(caretImageUrl));
-	expect(caretResponse.headers.get("content-type")).toBe(caretInput.mimeType);
-	expect(Buffer.from(await caretResponse.arrayBuffer())).toEqual(IMAGE_BYTES);
+	// Consume the URL the way a provider's data-URL parser does.
+	const consumed = await fetch(new URL(imageUrl));
+	expect(consumed.headers.get("content-type")).toBe(input.mimeType);
+	expect(Buffer.from(await consumed.arrayBuffer())).toEqual(IMAGE_BYTES);
 });

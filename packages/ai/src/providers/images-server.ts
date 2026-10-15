@@ -56,15 +56,7 @@ function decodeInputReference(value: unknown): { data: string; mimeType: string 
 	}
 	if (typeof raw !== "string" || raw.length === 0) validation("input image must be base64 or a data URL");
 	const match = raw.match(/^data:([^;]+);base64,(.+)$/s);
-	if (match) {
-		let mimeType: string;
-		try {
-			mimeType = decodeURIComponent(match[1] ?? "image/png");
-		} catch {
-			validation("invalid image MIME type");
-		}
-		return { data: match[2] ?? "", mimeType };
-	}
+	if (match) return { data: match[2] ?? "", mimeType: match[1] ?? "image/png" };
 	if (/^[A-Za-z0-9+/]+={0,2}$/.test(raw)) return { data: raw, mimeType: "image/png" };
 	validation("input image URLs are not supported; send a data URL or base64 bytes");
 }
