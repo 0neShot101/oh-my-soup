@@ -206,26 +206,25 @@ export function chunkForConPTY(data: string, maxChunkBytes: number = MAX_CONPTY_
 				cuBytes = 3;
 			}
 			if (bytes + cuBytes > maxChunkBytes && i > pos) {
-				// Cut at the last line terminator, keeping a `\r\n` pair together:
-				// a tracked `\r` that is the immediate predecessor of the tracked
-				// `\n` must not be chosen on its own, or the pair is split across
-				// two `WriteFile` calls. Falls back to the code-point boundary `i`
-				// only when the window holds no terminator at all (a single row
-				// longer than the cap), which still makes forward progress.
-				let cut = -1;
-				if (lastNewlineEnd > pos) cut = lastNewlineEnd;
-				if (lastCarriageReturnEnd > pos && lastCarriageReturnEnd !== lastNewlineEnd - 1) {
-					cut = cut === -1 ? lastCarriageReturnEnd : Math.max(cut, lastCarriageReturnEnd);
-				}
-				if (cut <= pos) cut = i;
-				chunks.push(data.slice(pos, cut));
-				pos = cut;
+				// Cut at the last line terminator. A `\r` that opens a `\r\n` pair is
+				// never tracked (see below), so the pair always stays in one
+				// `WriteFile` call. Falls back to the code-point boundary `i` only
+				// when the window holds no terminator at all (a single row longer
+				// than the cap), which still makes forward progress.
+				const cut = Math.max(lastNewlineEnd, lastCarriageReturnEnd);
+				let end = cut > pos ? cut : i;
+				// A hard cut landing between `\r` and `\n` moves back before the `\r`.
+				if (end === i && data.charCodeAt(i) === 0x0a && data.charCodeAt(i - 1) === 0x0d && i - 1 > pos) end = i - 1;
+				chunks.push(data.slice(pos, end));
+				pos = end;
 				break;
 			}
 			bytes += cuBytes;
 			i += cuLen;
+			// A `\r` directly followed by `\n` is half of a `\r\n` pair, even when the
+			// `\n` lies past the cap, so it is never a cut point on its own.
 			if (cu === 0x0a) lastNewlineEnd = i;
-			else if (cu === 0x0d) lastCarriageReturnEnd = i;
+			else if (cu === 0x0d && data.charCodeAt(i) !== 0x0a) lastCarriageReturnEnd = i;
 		}
 		if (i >= len) {
 			chunks.push(data.slice(pos));

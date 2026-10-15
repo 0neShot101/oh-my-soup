@@ -140,6 +140,17 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 			expect(chunks.join("")).toBe(data);
 		});
 
+		it("never splits a `\\r\\n` pair whose `\\n` falls just past the cap", () => {
+			// 9 columns of text, then `\r\n`: the `\r` is the 10th byte, the cap.
+			const data = `${"a".repeat(9)}\r\n${"b".repeat(9)}\r\n`;
+			const chunks = chunkForConPTY(data, 10);
+			expect(chunks.join("")).toBe(data);
+			for (const chunk of chunks) {
+				expect(chunk.startsWith("\n")).toBe(false);
+				expect(chunk.endsWith("\r")).toBe(false);
+			}
+		});
+
 		it("falls back to a raw split when the buffer contains no newlines", () => {
 			const data = "x".repeat(20_000);
 			const chunks = chunkForConPTY(data, 4 * 1024);
