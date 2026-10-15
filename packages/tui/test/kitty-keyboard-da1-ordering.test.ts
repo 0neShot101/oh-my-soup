@@ -190,7 +190,7 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 		expect(exitOut).not.toContain("\x1b[>4;0m");
 	});
 
-	it("pops the kitty keyboard frame on fullscreen overlay exit", async () => {
+	it("pops the kitty keyboard frame on fullscreen overlay exit and reasserts main-screen flags", async () => {
 		harness = createProcessTerminalRenderHarness(100, 30);
 		await harness.settle();
 		await harness.feed("\x1b[?0u", "\x1b[?1;2c");
@@ -212,7 +212,9 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 
 		const exitOut = harness.writes.join("");
 		// Kitty keyboard flags are per-screen, so the matching pop must precede
-		// the alt-screen exit to balance the push from overlay entry.
-		expect(exitOut).toContain("\x1b[<u\x1b[?1049l");
+		// the alt-screen exit to balance the push from overlay entry. Windows
+		// Terminal 1.25–1.27 drop the main-screen flags on `?1049l`
+		// (microsoft/terminal#20763), so omp replaces them right after.
+		expect(exitOut).toContain("\x1b[<u\x1b[?1049l\x1b[=5;1u");
 	});
 });

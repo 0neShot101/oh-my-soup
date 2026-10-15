@@ -590,6 +590,11 @@ export interface Terminal {
 	// so custom Terminals built against older pi-tui versions keep working.
 	readonly keyboardEnhancementExitSequence?: string | null;
 
+	// Re-asserts the main-screen enhanced keyboard mode after alternate-screen
+	// exit, or null when none is needed. Optional so custom Terminals built
+	// against older pi-tui versions keep working.
+	readonly keyboardEnhancementRestoreSequence?: string | null;
+
 	// Cursor positioning (relative to current position)
 	moveBy(lines: number): void; // Move cursor up (negative) or down (positive) by N lines
 
@@ -785,7 +790,8 @@ export class ProcessTerminal implements Terminal {
 	#isLoopStalled?: () => boolean;
 	#stdoutResizeListener?: () => void;
 	#kittyProtocolActive = false;
-	#kittyEnableSeq: string | null = null;
+	// Kitty flags omp pushed on its own stack frame; meaningful only while kitty is active.
+	#kittyFlags = 0;
 	#modifyOtherKeysActive = false;
 	#modifyOtherKeysTimeout?: Timer;
 	// Windows console fallback when kitty is unavailable: key records arrive as
@@ -921,12 +927,20 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	get kittyEnableSequence(): string | null {
-		return this.#kittyProtocolActive ? this.#kittyEnableSeq : null;
+		return this.#kittyProtocolActive ? `\x1b[>${this.#kittyFlags}u` : null;
 	}
 
 	get keyboardEnhancementEnterSequence(): string | null {
-		if (this.#kittyProtocolActive) return this.#kittyEnableSeq;
+		if (this.#kittyProtocolActive) return `\x1b[>${this.#kittyFlags}u`;
 		return this.#modifyOtherKeysActive ? "\x1b[>4;2m" : null;
+	}
+
+	get keyboardEnhancementRestoreSequence(): string | null {
+		// `CSI = flags ; 1 u` replaces the main-screen stack top, which is omp's own
+		// frame, so it is a no-op wherever per-screen stacks work. Windows Terminal
+		// 1.25–1.27 restore the pre-push flags on `?1049l` (microsoft/terminal#20763),
+		// dropping to legacy keys: Shift+Enter arrives as `\r`, Ctrl+Enter as `\n`.
+		return this.#kittyProtocolActive ? `\x1b[=${this.#kittyFlags};1u` : null;
 	}
 
 	get keyboardEnhancementExitSequence(): string | null {
@@ -1547,19 +1561,17 @@ export class ProcessTerminal implements Terminal {
 					// ConPTY (native Windows and WSL) drops Shift+letter keypresses
 					// entirely when flag 4 (report alternate keys) is set. Use flag 1
 					// (disambiguate only), preserving flag 2 if already active.
-					this.#kittyEnableSeq = (reportedFlags & 2) !== 0 ? "\x1b[>3u" : "\x1b[>1u";
-					this.#safeWrite(this.#kittyEnableSeq);
+					this.#kittyFlags = (reportedFlags & 2) !== 0 ? 3 : 1;
 				} else if ((reportedFlags & 2) !== 0) {
 					// Preserve event-type reporting already enabled by a parent app.
 					// Push level-2 to keep its shortcuts reporting consistently.
-					this.#kittyEnableSeq = "\x1b[>7u";
-					this.#safeWrite(this.#kittyEnableSeq);
+					this.#kittyFlags = 7;
 				} else {
 					// Disambiguate escape codes and report base-layout keys for physical
 					// shortcut matching, without event reporting that caused regression #3259.
-					this.#kittyEnableSeq = "\x1b[>5u";
-					this.#safeWrite(this.#kittyEnableSeq);
+					this.#kittyFlags = 5;
 				}
+				this.#safeWrite(`\x1b[>${this.#kittyFlags}u`);
 				return;
 			}
 
