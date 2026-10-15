@@ -4,6 +4,10 @@ import type { ObservableSession } from "./session-observer-registry";
 
 export type AgentMetrics = AgentMetricsSummary;
 
+export interface AgentCostSnapshot {
+	cost: number | undefined;
+}
+
 export interface AggregateMetrics extends AgentMetrics {
 	reportedAgents: number;
 	/** Rows whose duration is an observer-measured active runtime. */
@@ -226,6 +230,49 @@ export function hubRowMetrics<TRecord extends AgentRecordLike>(
 	if (historyMetrics) return withDirectCost(historyMetrics, cost);
 	if (!session && retainedEntry?.metrics) return withDirectCost(retainedEntry.metrics, cost);
 	return withDirectCost(liveEntry?.metrics, cost);
+}
+
+/** Cost-only projection for frequent status updates; full roster metrics keep their own cache. */
+export function aggregateCost<TRecord extends AgentRecordLike>(args: {
+	rows: readonly TRecord[];
+	observedById: ReadonlyMap<string, ObservableSession>;
+	sessionCosts: WeakMap<object, AgentCostSnapshot>;
+}): number {
+	let total = 0;
+	const countedSessions = new Set<NonNullable<AgentRecordLike["session"]>>();
+	for (const ref of args.rows) {
+		const observed = args.observedById.get(ref.id);
+		const session = hubFallbackStatsSession(ref, observed);
+		let cached = session ? args.sessionCosts.get(session) : undefined;
+		if (session) {
+			const directCost = readSessionDirectCost(session);
+			if (directCost !== undefined) {
+				cached = { cost: directCost };
+				args.sessionCosts.set(session, cached);
+			} else if (!cached || !fallbackReadCurrent(cached, session)) {
+				const stamp = fallbackReadStamp(session);
+				cached = { cost: readSessionMetrics(session, undefined)?.cost };
+				if (stamp) fallbackReadStamps.set(cached, stamp);
+				args.sessionCosts.set(session, cached);
+			}
+			if (cached?.cost !== undefined) args.sessionCosts.set(ref, cached);
+		}
+		const retainedCost = args.sessionCosts.get(ref)?.cost;
+		const directCost = cached?.cost ?? ref.history?.directCost ?? retainedCost;
+		let cost: number | undefined;
+		if (observed?.progress) {
+			const progress = progressMetrics(observed);
+			if (progress) cost = directCost ?? progress.cost;
+		} else if (ref.history?.metrics) {
+			cost = directCost ?? ref.history.metrics.cost;
+		} else {
+			cost = session ? cached?.cost : retainedCost;
+		}
+		if (cost === undefined || (session && countedSessions.has(session))) continue;
+		if (session) countedSessions.add(session);
+		total += finiteMetric(cost);
+	}
+	return total;
 }
 
 export function aggregateMetrics<TRecord extends AgentRecordLike>(args: {
