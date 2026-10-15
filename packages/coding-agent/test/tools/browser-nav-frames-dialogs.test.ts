@@ -38,6 +38,40 @@ const server = Bun.serve({
 			);
 		}
 		const iframe = `<iframe id="f" name="payment" srcdoc="<!doctype html><input id='in'><div id='out'>ready</div><script>document.querySelector('#in').addEventListener('input',e=>document.querySelector('#out').textContent=e.target.value)</script>"></iframe>`;
+		const headers = { "content-type": "text/html" };
+		if (pathname === "/card") return new Response(`<input aria-label="Card"><button>Pay</button>`, { headers });
+		// Answers its load, then never returns from script again.
+		if (pathname === "/stuck") {
+			return new Response(
+				`<button>Stuck</button><script>onload = () => setTimeout(() => { for (;;) {} })</script>`,
+				{
+					headers,
+				},
+			);
+		}
+		if (pathname === "/observe-frames") {
+			// localhost and 127.0.0.1 are different sites, so the frame runs out of process.
+			const card = `http://localhost:${new URL(request.url).port}/card`;
+			return new Response(
+				`<section id="checkout" aria-label="Checkout"><button>Main</button><iframe id="pay" src="${card}"></iframe></section><iframe srcdoc="<button>Outside</button>"></iframe>`,
+				{ headers },
+			);
+		}
+		if (pathname === "/observe-shadow-frame") {
+			const card = `http://localhost:${new URL(request.url).port}/card`;
+			return new Response(
+				`<section id="checkout"><button>Main</button><pay-widget></pay-widget></section><script>
+					customElements.define("pay-widget", class extends HTMLElement {
+						constructor() { super(); this.attachShadow({ mode: "open" }).innerHTML = '<iframe src="${card}"></iframe>'; }
+					});
+				</script>`,
+				{ headers },
+			);
+		}
+		if (pathname === "/observe-stuck-frame") {
+			const stuck = `http://localhost:${new URL(request.url).port}/stuck`;
+			return new Response(`<button>Main</button><iframe id="stuck" src="${stuck}"></iframe>`, { headers });
+		}
 		return new Response(
 			`<!doctype html><title>${pathname}</title><body data-path="${pathname}">${iframe}<script>
 				sessionStorage.setItem('loads', String(Number(sessionStorage.getItem('loads') || 0) + 1));
@@ -65,8 +99,8 @@ function createHost() {
 		}),
 	};
 	const prelude = createBrowserPrelude(session);
-	return (parameters: unknown) =>
-		prelude.invoke(parameters, { session, toolCallId: "browser-nav-frames-dialogs-test" });
+	return (parameters: unknown, signal?: AbortSignal) =>
+		prelude.invoke(parameters, { session, toolCallId: "browser-nav-frames-dialogs-test", signal });
 }
 
 function valueOf(result: { details?: unknown }): unknown {
@@ -75,11 +109,19 @@ function valueOf(result: { details?: unknown }): unknown {
 	return details.value;
 }
 
+async function observe(invoke: (parameters: unknown) => Promise<{ details?: unknown }>, name: string, options: object) {
+	const { elements } = valueOf(
+		await invoke({ action: "call", name, chain: [{ method: "observe", args: [options] }] }),
+	) as { elements: Array<{ id: number; role: string; name: string }> };
+	return { elements, names: elements.map(entry => `${entry.role}:${entry.name}`) };
+}
+
+// Chromium takes about 10 s to shut down while the stuck-frame test's renderer is still spinning.
 afterAll(async () => {
 	await releaseAllTabs({ kill: true });
 	await disposeAllVmContexts();
 	server.stop(true);
-});
+}, 30_000);
 
 function fakePage(frame: { _lifecycleEvents: Set<string>; detached?: boolean }, closed = () => false): Page {
 	return {
@@ -360,6 +402,19 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser navigation, frames, dialogs, and t
 				}),
 			),
 		).toBe("run");
+		expect(
+			valueOf(await invoke({ action: "run", name: "frames", code: 'return await (await tab.frame("#f")).text();' })),
+		).toContain("run");
+		// Only an omitted selector means the body; `null` is still rejected, as on the tab.
+		expect(
+			valueOf(
+				await invoke({
+					action: "run",
+					name: "frames",
+					code: 'const f = await tab.frame("#f"); try { await f.text(null); return "read"; } catch (e) { return String(e.message); }',
+				}),
+			),
+		).toContain("selector must be a string");
 		await invoke({
 			action: "call",
 			name: "frames",
@@ -382,6 +437,74 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser navigation, frames, dialogs, and t
 		).toBe("direct");
 	}, 30_000);
 
+	test("observes controls inside iframes and acts on them by id", async () => {
+		const invoke = createHost();
+		await invoke({ action: "open", name: "observe-frames", url: `${baseUrl}/observe-frames` });
+		// A selector reads only the iframes inside it.
+		expect((await observe(invoke, "observe-frames", { selector: "#checkout" })).names).toEqual([
+			"button:Main",
+			"textbox:Card",
+			"button:Pay",
+		]);
+		const observed = await observe(invoke, "observe-frames", {});
+		expect(observed.names).toEqual(["button:Main", "textbox:Card", "button:Pay", "button:Outside"]);
+		const card = observed.elements.find(entry => entry.name === "Card")!;
+		await invoke({
+			action: "call",
+			name: "observe-frames",
+			chain: [
+				{ method: "id", args: [card.id] },
+				{ method: "fill", args: ["4242"] },
+			],
+		});
+		expect(
+			valueOf(
+				await invoke({
+					action: "call",
+					name: "observe-frames",
+					chain: [
+						{ method: "frame", args: ["#pay"] },
+						{ method: "value", args: ["input"] },
+					],
+				}),
+			),
+		).toBe("4242");
+	}, 30_000);
+
+	test("scoped observe reads an iframe inside a web component's shadow root under the selector", async () => {
+		const invoke = createHost();
+		await invoke({ action: "open", name: "observe-shadow-frame", url: `${baseUrl}/observe-shadow-frame` });
+		expect((await observe(invoke, "observe-shadow-frame", { selector: "#checkout" })).names).toEqual([
+			"button:Main",
+			"textbox:Card",
+			"button:Pay",
+		]);
+	}, 30_000);
+
+	test("skips a cross-site frame stuck in script until it navigates", async () => {
+		const invoke = createHost();
+		await invoke({ action: "open", name: "observe-stuck-frame", url: `${baseUrl}/observe-stuck-frame` });
+		// The first observation waits out the frame, then still lists the page.
+		expect((await observe(invoke, "observe-stuck-frame", {})).names).toEqual(["button:Main"]);
+		const started = performance.now();
+		expect((await observe(invoke, "observe-stuck-frame", {})).names).toEqual(["button:Main"]);
+		expect(performance.now() - started).toBeLessThan(2_500);
+		// Navigating the frame clears the memo; the evaluation settles once the new document has loaded.
+		await invoke({
+			action: "call",
+			name: "observe-stuck-frame",
+			chain: [
+				{
+					method: "evaluate",
+					args: [
+						`(async () => { const { promise, resolve } = Promise.withResolvers(); const frame = document.querySelector("#stuck"); frame.onload = () => resolve(true); frame.srcdoc = "<button>Fresh</button>"; await promise; })()`,
+					],
+				},
+			],
+		});
+		expect((await observe(invoke, "observe-stuck-frame", {})).names).toEqual(["button:Main", "button:Fresh"]);
+	}, 60_000);
+
 	test("lists managed tabs with live metadata", async () => {
 		const invoke = createHost();
 		await invoke({ action: "open", name: "listed-one", url: `${baseUrl}/one`, persist: true });
@@ -402,5 +525,123 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser navigation, frames, dialogs, and t
 			url: `${baseUrl}/two`,
 			persist: false,
 		});
+	}, 30_000);
+
+	test("stops the page load when a run is cancelled mid-goto", async () => {
+		const requested = Promise.withResolvers<AbortSignal>();
+		const slow = Bun.serve({
+			port: 0,
+			idleTimeout: 0,
+			fetch(request) {
+				requested.resolve(request.signal);
+				return new Promise<Response>(() => {});
+			},
+		});
+		try {
+			const invoke = createHost();
+			await invoke({ action: "open", name: "cancelled", url: `${baseUrl}/one` });
+			const cancel = new AbortController();
+			const run = invoke(
+				{ action: "run", name: "cancelled", code: `await tab.goto("http://127.0.0.1:${slow.port}/slow");` },
+				cancel.signal,
+			);
+			const request = await requested.promise;
+			cancel.abort();
+			// The cancel itself, not a cleanup failure from a page still loading.
+			expect(await run.catch((error: unknown) => error)).toMatchObject({ message: "Operation aborted" });
+			// Chrome drops the request once the load is stopped; a load left running keeps waiting.
+			const dropped = new Promise<string>(resolve => {
+				if (request.aborted) resolve("stopped");
+				request.addEventListener("abort", () => resolve("stopped"));
+			});
+			expect(await Promise.race([dropped, Bun.sleep(5_000).then(() => "still loading")])).toBe("stopped");
+		} finally {
+			slow.stop(true);
+		}
+	}, 30_000);
+
+	test("leaves the page's in-flight fetches alone when a run that is not navigating is cancelled", async () => {
+		const pending = Promise.withResolvers<AbortSignal>();
+		const waiting = Promise.withResolvers<void>();
+		const slow = Bun.serve({
+			port: 0,
+			idleTimeout: 0,
+			fetch(request) {
+				if (new URL(request.url).pathname === "/pending") pending.resolve(request.signal);
+				else waiting.resolve();
+				return new Promise<Response>(() => {});
+			},
+		});
+		try {
+			const invoke = createHost();
+			await invoke({ action: "open", name: "cancelled-wait", url: `${baseUrl}/one` });
+			await invoke({
+				action: "run",
+				name: "cancelled-wait",
+				code: `await page.evaluate(url => { fetch(url, { mode: "no-cors" }).catch(() => {}); }, "http://127.0.0.1:${slow.port}/pending");`,
+			});
+			const request = await pending.promise;
+			const cancel = new AbortController();
+			const run = invoke(
+				{
+					action: "run",
+					name: "cancelled-wait",
+					code: `await page.evaluate(url => { fetch(url, { mode: "no-cors" }).catch(() => {}); }, "http://127.0.0.1:${slow.port}/waiting");
+						await wait(60_000);`,
+				},
+				cancel.signal,
+			);
+			await waiting.promise;
+			cancel.abort();
+			expect(await run.catch((error: unknown) => error)).toMatchObject({ message: "Operation aborted" });
+			const dropped = new Promise<string>(resolve => {
+				if (request.aborted) resolve("dropped");
+				request.addEventListener("abort", () => resolve("dropped"));
+			});
+			// Proving the fetch survives needs real time: nothing signals "Chrome did not cancel it".
+			expect(await Promise.race([dropped, Bun.sleep(1_000).then(() => "pending")])).toBe("pending");
+		} finally {
+			slow.stop(true);
+		}
+	}, 30_000);
+
+	test("does not call a cancelled run's page listeners for the requests the cancel stops", async () => {
+		const requested = Promise.withResolvers<void>();
+		const slow = Bun.serve({
+			port: 0,
+			idleTimeout: 0,
+			fetch() {
+				requested.resolve();
+				return new Promise<Response>(() => {});
+			},
+		});
+		try {
+			const invoke = createHost();
+			await invoke({ action: "open", name: "cancelled-listener", url: `${baseUrl}/one` });
+			const cancel = new AbortController();
+			const run = invoke(
+				{
+					action: "run",
+					name: "cancelled-listener",
+					code: `page.on("requestfailed", () => {
+							globalThis.failedCalls = (globalThis.failedCalls ?? 0) + 1;
+							page.url();
+						});
+						await tab.goto("http://127.0.0.1:${slow.port}/slow");`,
+				},
+				cancel.signal,
+			);
+			await requested.promise;
+			cancel.abort();
+			expect(await run.catch((error: unknown) => error)).toMatchObject({ message: "Operation aborted" });
+			const after = await invoke({
+				action: "run",
+				name: "cancelled-listener",
+				code: "return { url: page.url(), failedCalls: globalThis.failedCalls ?? 0 };",
+			});
+			expect(valueOf(after)).toEqual({ url: `${baseUrl}/one`, failedCalls: 0 });
+		} finally {
+			slow.stop(true);
+		}
 	}, 30_000);
 });
