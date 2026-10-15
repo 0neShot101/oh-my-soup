@@ -32,7 +32,7 @@ afterEach(() => {
 
 function makeRegistry(models: Model<Api>[], keys: Record<string, string> = {}): ModelRegistry {
 	const authStorage = createInMemoryAuthStorage();
-	for (const provider in keys) authStorage.setRuntimeApiKey(provider, keys[provider]!);
+	for (const provider in keys) authStorage.keys.setRuntime(provider, keys[provider]!);
 	const registry = new ModelRegistry(authStorage, "/nonexistent/unexpected-stop-models.yml");
 	vi.spyOn(registry, "getAvailable").mockReturnValue(models);
 	return registry;
@@ -104,10 +104,15 @@ describe("isUnexpectedStopCandidate", () => {
 		expect(isUnexpectedStopCandidate(message)).toBe(false);
 	});
 
-	it("returns false when the thinking block is only whitespace", () => {
+	it("returns false for a signed empty-thinking stop that delivered an image", () => {
+		// OpenAI Responses image generation: a signed reasoning item with empty
+		// text plus the generated image. Retrying would regenerate the image.
 		const message = makeAssistantMessage({
 			stopReason: "stop",
-			content: [{ type: "thinking", thinking: "   \n\t  ", thinkingSignature: "reasoning_content" }],
+			content: [
+				{ type: "thinking", thinking: "", thinkingSignature: "rs_123" },
+				{ type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+			],
 		});
 		expect(isUnexpectedStopCandidate(message)).toBe(false);
 	});

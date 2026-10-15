@@ -21,6 +21,10 @@ declare module "@oh-my-pi/pi-agent-core" {
 		xdevTierResolved?(tier: "read" | "write" | "exec"): void;
 		/** Set only after an interactive prompt approves provider computer safety checks. */
 		providerSafetyApproved?: boolean;
+		/** Set by the Cursor exec bridge, whose read frames compose `:raw` only to
+		 *  drop line gutters. `read` then still returns image files as images
+		 *  instead of their bytes decoded as text, which Cursor rejects (#15630). */
+		rawImages?: boolean;
 	}
 }
 
@@ -38,6 +42,9 @@ export class ToolContextStore {
 			hasUI: this.#hasUI,
 			toolNames: this.#toolNames,
 			toolCall,
+			// Loop-dispatched calls carry the loop's passive-context sink; direct
+			// (non-loop) executors such as the Cursor bridge install their own.
+			addAdditionalContext: toolCall?.addAdditionalContext,
 		};
 	}
 

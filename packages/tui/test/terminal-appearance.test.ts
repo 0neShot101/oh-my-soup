@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { extractPrintableText } from "@oh-my-pi/pi-tui/keys";
-import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
+import { ProcessTerminal, type TerminalStartOptions } from "@oh-my-pi/pi-tui/terminal";
 import {
 	type CellDimensions,
 	getCellDimensions,
@@ -20,6 +20,7 @@ const originalWslInterop = Bun.env.WSL_INTEROP;
 const originalWtSession = Bun.env.WT_SESSION;
 const originalTermProgram = Bun.env.TERM_PROGRAM;
 const originalTmux = Bun.env.TMUX;
+const originalTerm = Bun.env.TERM;
 
 // These suites drive the real ProcessTerminal start()/probe pipeline, so they
 // opt out of the test-default headless suppression and restore it per case.
@@ -380,6 +381,32 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		terminal.stop();
 	});
 
+	// Herdr classifies before tmux, but the refresh follows whichever session
+	// caches OSC 11; a multiplexer without a cache keeps the refresh direct.
+	it.each([
+		["tmux nested inside a Herdr pane", "/tmp/tmux-1000/default,1234,0", true],
+		["a Herdr pane without tmux", undefined, false],
+	] as const)("routes an explicit refresh inside %s by the caching session", (_label, tmux, passthrough) => {
+		const originalHerdrPane = Bun.env.HERDR_PANE_ID;
+		Bun.env.HERDR_PANE_ID = "w1:p1";
+		if (tmux !== undefined) Bun.env.TMUX = tmux;
+		try {
+			const { terminal, writes, queryCount } = setupTerminal();
+			process.stdin.emit("data", "\x1b]11;rgb:ffff/ffff/ffff\x07");
+			for (let i = 0; i < 8; i++) process.stdin.emit("data", "\x1b[?1;2c");
+			const before = queryCount();
+			terminal.refreshAppearance?.();
+			terminal.stop();
+
+			expect(writes.includes("\x1bPtmux;\x1b\x1b]11;?\x07\x1b\\")).toBe(passthrough);
+			// A cache refresh defers its direct read; a direct refresh queries now.
+			expect(queryCount()).toBe(passthrough ? before : before + 1);
+		} finally {
+			if (originalHerdrPane === undefined) delete Bun.env.HERDR_PANE_ID;
+			else Bun.env.HERDR_PANE_ID = originalHerdrPane;
+		}
+	});
+
 	it("reads tmux's refreshed cache without passing a DA1 reply through tmux", () => {
 		vi.useFakeTimers();
 		Bun.env.TMUX = "/tmp/tmux-1000/default,1234,0";
@@ -716,6 +743,8 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		Object.defineProperty(process.stdin, "setRawMode", { value: vi.fn(), configurable: true });
 		originalCellDims = { ...getCellDimensions() };
 		previousHeadless = setTerminalHeadless(false);
+		delete Bun.env.TMUX;
+		delete Bun.env.TERM;
 	});
 
 	afterEach(() => {
@@ -729,9 +758,11 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		restoreProperty(process.stdout, "columns", stdoutColumnsDescriptor);
 		restoreProperty(process.stdout, "rows", stdoutRowsDescriptor);
 		setCellDimensions(originalCellDims);
+		restoreEnv("TMUX", originalTmux);
+		restoreEnv("TERM", originalTerm);
 	});
 
-	function setup() {
+	function setup(startOptions?: TerminalStartOptions) {
 		const writes: string[] = [];
 		const received: string[] = [];
 		let resizeCount = 0;
@@ -752,6 +783,8 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 			() => {
 				resizeCount++;
 			},
+			undefined,
+			startOptions,
 		);
 		return { terminal, writes, received, reports, resizeCount: () => resizeCount };
 	}
@@ -767,20 +800,102 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		terminal.stop();
 	});
 
-	it("disables raw-paste coalescing once DECRQM confirms bracketed-paste (mode 2004) support (#12540)", () => {
-		const { terminal, received } = setup();
-
-		// Confirm bracketed-paste support: a genuine paste now always arrives
-		// wrapped, so a multiline keystroke burst an event-loop stall batched into
-		// one read must submit per Enter instead of coalescing onto the paste path.
+	it("decides each unbracketed multiline burst by the stall probe once DECRQM confirms 2004 (#13344, #12540)", () => {
+		let stalled = false;
+		const { terminal, received } = setup({ isLoopStalled: () => stalled });
 		process.stdin.emit("data", "\x1b[?2004;1$y");
 		received.length = 0;
-		process.stdin.emit("data", "aaa\rbbb\rccc");
 
+		// IME/dictation commits are typed input, never bracketed: on a responsive
+		// loop the block lands as one paste instead of one submit per line.
+		process.stdin.emit("data", "1. do xxx\r2. do yyy\r3. do zzz");
+		expect(received).toEqual(["\x1b[200~1. do xxx\r2. do yyy\r3. do zzz\x1b[201~"]);
+
+		// The same shape drained after an event-loop stall is batched typing:
+		// every Enter must still submit.
+		stalled = true;
+		received.length = 0;
+		process.stdin.emit("data", "aaa\rbbb\rccc");
 		expect(received).toEqual(["a", "a", "a", "\r", "b", "b", "b", "\r", "c", "c", "c"]);
-		expect(received.some(seq => seq.includes("\x1b[200~"))).toBe(false);
 		terminal.stop();
 	});
+
+	it("emits no output while idle after confirming bracketed paste", () => {
+		vi.useFakeTimers();
+		const { terminal, writes } = setup();
+		process.stdin.emit("data", "\x1b[?2004;1$y");
+		// Let the one-shot keyboard fallback finish before measuring idle output.
+		vi.advanceTimersByTime(1000);
+		writes.length = 0;
+		vi.advanceTimersByTime(15000);
+		expect(writes).toEqual([]);
+		terminal.stop();
+		const stopped = writes.length;
+		vi.advanceTimersByTime(1000);
+		expect(writes).toHaveLength(stopped);
+	});
+
+	it("rearms bracketed paste on input so a subsequent multiline paste stays one input", () => {
+		const { terminal, writes, received } = setup();
+		process.stdin.emit("data", "\x1b[?2004;1$y");
+		writes.length = 0;
+		process.stdin.emit("data", "x");
+		expect(writes).toEqual(["\x1b[?2004h"]);
+		process.stdin.emit("data", "\x1b[200~first\nsecond\x1b[201~");
+		expect(received).toEqual(["x", "\x1b[200~first\nsecond\x1b[201~"]);
+		terminal.stop();
+	});
+
+	it("rearms once per paste, not once per read, when a paste spans many reads (#15757)", () => {
+		const { terminal, writes, received } = setup();
+		process.stdin.emit("data", "\x1b[?2004;1$y");
+		writes.length = 0;
+		const body = "log line\n".repeat(200);
+		process.stdin.emit("data", "\x1b[200~");
+		for (const char of body) process.stdin.emit("data", char);
+		process.stdin.emit("data", "\x1b[201~");
+		expect(writes).toEqual(["\x1b[?2004h"]);
+		expect(received).toEqual([`\x1b[200~${body}\x1b[201~`]);
+		// The next read after the paste reasserts the mode again.
+		process.stdin.emit("data", "x");
+		expect(writes).toEqual(["\x1b[?2004h", "\x1b[?2004h"]);
+		terminal.stop();
+	});
+
+	it("rearms confirmed bracketed paste in the same write as a render, only while active", () => {
+		const { terminal, writes } = setup();
+		terminal.write("before confirmation");
+		expect(writes.at(-1)).toBe("before confirmation");
+		process.stdin.emit("data", "\x1b[?2004;1$y");
+		writes.length = 0;
+		terminal.write("frame");
+		expect(writes).toEqual(["\x1b[?2004hframe"]);
+		terminal.stop();
+		terminal.write("after stop");
+		expect(writes.at(-1)).toBe("after stop");
+	});
+
+	for (const { name, session } of [
+		{ name: "TMUX session", session: true },
+		{ name: "TERM fallback", session: false },
+	]) {
+		it(`rearms bracketed paste inside tmux via ${name} without DECRQM 2004 (#15596)`, () => {
+			// tmux <= 3.5a answers the DA1 sentinel but not `CSI ? 2004 $ p`, and it
+			// drops paste markers whenever the pane's own 2004 flag was cleared.
+			if (session) Bun.env.TMUX = "/tmp/tmux-1000/default,1234,0";
+			else Bun.env.TERM = "tmux-256color";
+			const { terminal, writes, reports } = setup();
+			// Answer exactly the DA1 sentinels startup sent; DECRQM 2004 stays unanswered.
+			const sentinels = writes.join("").split("\x1b[c").length - 1;
+			for (let i = 0; i < sentinels; i++) process.stdin.emit("data", "\x1b[?1;2c");
+			expect(reports).toContainEqual({ mode: 2004, supported: false });
+			writes.length = 0;
+			terminal.write("frame");
+			process.stdin.emit("data", "x");
+			expect(writes).toEqual(["\x1b[?2004hframe", "\x1b[?2004h"]);
+			terminal.stop();
+		});
+	}
 
 	it("coalesces an unbracketed multiline burst when bracketed paste is unconfirmed (#12540)", () => {
 		const { terminal, received } = setup();

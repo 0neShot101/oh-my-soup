@@ -13,6 +13,7 @@ import {
 	finalizeSubprocessOutput,
 	runSubagentFollowUpTurn,
 	runSubprocess,
+	SUBAGENT_WARNING_EMPTY_MESSAGE,
 	SUBAGENT_WARNING_MISSING_YIELD,
 } from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
@@ -79,8 +80,10 @@ function createMockSession(
 		prompt: async (text: string, options?: PromptOptions) => {
 			promptIndex += 1;
 			await onPrompt({ text, options, promptIndex, emit, state });
+			return true;
 		},
 		getLastAssistantMessage: () => state.messages[state.messages.length - 1],
+		hasPendingAsyncWork: () => false,
 	};
 
 	return session as unknown as AgentSession;
@@ -204,7 +207,7 @@ describe("runSubprocess yield reminders", () => {
 		expect(createAgentSessionSpy).toHaveBeenCalledTimes(1);
 	});
 
-	it("splices the subagent role prompt before the trailing system section", async () => {
+	it("appends the per-spawn subagent prompt after the default blocks so the static prefix stays shared", async () => {
 		let userPrompt = "";
 		const session = createMockSession(({ text, emit }) => {
 			userPrompt = text;
@@ -230,16 +233,15 @@ describe("runSubprocess yield reminders", () => {
 		const systemPromptBuilder = createAgentSessionSpy.mock.calls[0]?.[0]?.systemPrompt;
 		expect(systemPromptBuilder).toBeFunction();
 		if (typeof systemPromptBuilder !== "function") throw new Error("Expected system prompt builder");
-		const systemPrompt = systemPromptBuilder(["system", "project", "now"]);
+		const systemPrompt = systemPromptBuilder(["system", "<project-context>\ncwd\n</project-context>"]);
 
-		expect(systemPrompt).toHaveLength(4);
+		expect(systemPrompt).toHaveLength(3);
 		expect(systemPrompt?.[0]).toBe("system");
-		expect(systemPrompt?.[1]).toBe("project");
+		expect(systemPrompt?.[1]).toBe("<project-context>\ncwd\n</project-context>");
 		expect(systemPrompt?.[2]).toContain(baseAgent.systemPrompt);
 		// The parent-conversation CONTEXT section is gone: subagents get their
 		// background inside the assignment (or a local:// file), never a dump.
 		expect(systemPrompt?.[2]).not.toMatch(/CONTEXT\n=+/);
-		expect(systemPrompt?.[3]).toBe("now");
 		expect(userPrompt).not.toMatch(/CONTEXT\n=+/);
 	});
 	it("resets yield state after an intervening wake wins the follow-up prompt race", async () => {
@@ -558,6 +560,62 @@ describe("runSubprocess yield reminders", () => {
 		expect(promptOptions[1]?.attribution).toBe("agent");
 		expect(result.output).toContain('"done": true');
 		expect(result.output.includes("SYSTEM WARNING")).toBe(false);
+	});
+
+	it("returns the final message verbatim, with no yield tool or reminders, when unstructured", async () => {
+		const report = "## Summary\nAuth lives in `src/auth.ts:10-40`.";
+		const prompts: string[] = [];
+		const session = createMockSession(({ text, emit, state }) => {
+			prompts.push(text);
+			const working: AssistantMessage = {
+				...createAssistantStopMessage(""),
+				content: [
+					{ type: "text", text: "Looking at auth first." },
+					{ type: "toolCall", id: "tool-read", name: "read", arguments: { path: "src/auth.ts" } },
+				],
+				stopReason: "toolUse",
+			};
+			const final = createAssistantStopMessage(report);
+			state.messages.push(working, final);
+			emit({ type: "message_end", message: working });
+			emit({ type: "message_end", message: final });
+			emit({ type: "agent_end", messages: [working, final] });
+		});
+		const createAgentSessionSpy = mockCreateAgentSession(session);
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-prose",
+			agent: { ...baseAgent, tools: ["read", "yield"] },
+			structured: false,
+		});
+
+		const sessionOptions = createAgentSessionSpy.mock.calls[0]?.[0];
+		expect(sessionOptions?.requireYieldTool).toBe(false);
+		expect(sessionOptions?.toolNames).toEqual(["read"]);
+		const systemPromptBuilder = sessionOptions?.systemPrompt;
+		if (typeof systemPromptBuilder !== "function") throw new Error("Expected system prompt builder");
+		expect(systemPromptBuilder(["system"])?.at(-1)).toContain("your final message is your result");
+		expect(prompts).toHaveLength(1);
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe(report);
+	});
+
+	it("fails an unstructured run that ends without a final message", async () => {
+		const prompts: string[] = [];
+		const session = createMockSession(({ text, emit, state }) => {
+			prompts.push(text);
+			const empty = createAssistantStopMessage("");
+			state.messages.push(empty);
+			emit({ type: "message_end", message: empty });
+		});
+		mockCreateAgentSession(session);
+
+		const result = await runSubprocess({ ...baseOptions, id: "subagent-prose-empty", structured: false });
+
+		expect(prompts).toHaveLength(1);
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toBe(SUBAGENT_WARNING_EMPTY_MESSAGE);
 	});
 
 	it("keeps null yield warning when subagent submits success without data", async () => {

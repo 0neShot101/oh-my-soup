@@ -6,6 +6,8 @@ import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+import type { ExtensionEvent } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
+import type { AgentEndEvent } from "@oh-my-pi/pi-coding-agent/extensibility/shared-events";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TodoTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -48,7 +50,7 @@ import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
  * decided whether to fire the stop-time passes. No wall-clock sleeps needed.
  */
 const sharedAuthStorage = createInMemoryAuthStorage();
-sharedAuthStorage.setRuntimeApiKey("anthropic", "test-key");
+sharedAuthStorage.keys.setRuntime("anthropic", "test-key");
 const sharedModelRegistry = new ModelRegistry(sharedAuthStorage);
 
 afterAll(() => {
@@ -61,9 +63,11 @@ describe("AgentSession todo reminder async-job deferral", () => {
 	let sessionManager: SessionManager;
 	let manager: AsyncJobManager;
 	let extensionRunner: ExtensionRunner;
+	let extensionEnds: AgentEndEvent[];
 	let gates: Array<PromiseWithResolvers<string>>;
 	let reminderAttempts: number[];
 	let agentEndTerminalStates: Array<boolean | undefined>;
+	let agentEndAwaitingAsyncWork: Array<boolean | undefined>;
 
 	function textOnlyAssistantMessage(): AssistantMessage {
 		return {
@@ -117,8 +121,11 @@ describe("AgentSession todo reminder async-job deferral", () => {
 		sessionManager = SessionManager.inMemory(tempDir.path());
 		manager = new AsyncJobManager({});
 		gates = [];
+		extensionEnds = [];
 		extensionRunner = {
-			emit: vi.fn().mockResolvedValue(undefined),
+			emit: vi.fn(async (event: ExtensionEvent) => {
+				if (event.type === "agent_end") extensionEnds.push(event);
+			}),
 			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
 			emitSessionStop: vi.fn().mockResolvedValue(undefined),
@@ -165,12 +172,12 @@ describe("AgentSession todo reminder async-job deferral", () => {
 
 		reminderAttempts = [];
 		agentEndTerminalStates = [];
+		agentEndAwaitingAsyncWork = [];
 		session.subscribe((event: AgentSessionEvent) => {
 			if (event.type === "todo_reminder") reminderAttempts.push(event.attempt);
 			if (event.type === "agent_end") {
-				agentEndTerminalStates.push(
-					(event as Extract<AgentSessionEvent, { type: "agent_end" }> & { isTerminal?: boolean }).isTerminal,
-				);
+				agentEndTerminalStates.push(event.isTerminal);
+				agentEndAwaitingAsyncWork.push(event.awaitingAsyncWork);
 			}
 		});
 	});
@@ -198,6 +205,9 @@ describe("AgentSession todo reminder async-job deferral", () => {
 		expect(reminderAttempts).toEqual([]);
 		expect(continueSpy).not.toHaveBeenCalled();
 		expect(agentEndTerminalStates).toEqual([false]);
+		// Only a background result can resume this pause, so the event says so.
+		expect(agentEndAwaitingAsyncWork).toEqual([true]);
+		expect(extensionEnds).toEqual([expect.objectContaining({ willContinue: true, awaitingAsyncWork: true })]);
 	});
 
 	it("does not defer for a running job owned by a different agent", async () => {
@@ -209,6 +219,11 @@ describe("AgentSession todo reminder async-job deferral", () => {
 		await session.waitForIdle();
 
 		expect(reminderAttempts).toEqual([1]);
+		// The reminder is the agent's own continuation, not an async wait.
+		expect(agentEndAwaitingAsyncWork).toEqual([undefined]);
+		expect(extensionEnds).toHaveLength(1);
+		expect(extensionEnds[0]?.willContinue).toBe(true);
+		expect(extensionEnds[0]).not.toHaveProperty("awaitingAsyncWork");
 	});
 
 	it("fires the reminder on the next stop once the owned job completes and its delivery drains", async () => {

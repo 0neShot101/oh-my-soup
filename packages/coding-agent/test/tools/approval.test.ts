@@ -1,10 +1,11 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { customToolToDefinition } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentTool, ToolApproval } from "@oh-my-pi/pi-agent-core";
 import {
 	type ApprovalMode,
 	denyError,
 	formatApprovalPrompt,
+	requestApproval,
 	requiresApproval,
 	resolveApproval,
 	resolveApprovalFromContext,
@@ -26,27 +27,21 @@ function tool(
 }
 
 function createBashTool(settingsOverrides: Record<string, unknown> = {}, resolvedShell = "/bin/bash"): BashTool {
-	const settings = {
-		get(key: string): unknown {
-			if (Object.hasOwn(settingsOverrides, key)) return settingsOverrides[key];
-			switch (key) {
-				case "async.enabled":
-				case "bash.autoBackground.enabled":
-				case "astGrep.enabled":
-				case "astEdit.enabled":
-				case "grep.enabled":
-				case "glob.enabled":
-					return false;
-				case "bash.autoBackground.thresholdMs":
-					return 60_000;
-				default:
-					return undefined;
-			}
-		},
-		getShellConfig() {
-			return { shell: resolvedShell, args: ["-c"], env: {}, prefix: undefined };
-		},
-	};
+	const settings = Settings.isolated({
+		"async.enabled": false,
+		"bash.autoBackground.enabled": false,
+		"astGrep.enabled": false,
+		"astEdit.enabled": false,
+		"grep.enabled": false,
+		"glob.enabled": false,
+		...settingsOverrides,
+	});
+	spyOn(settings, "getShellConfig").mockReturnValue({
+		shell: resolvedShell,
+		args: ["-c"],
+		env: {},
+		prefix: undefined,
+	});
 	return new BashTool({ settings } as unknown as ConstructorParameters<typeof BashTool>[0]);
 }
 
@@ -243,6 +238,39 @@ describe("MCP fallback and prompt formatting", () => {
 		]);
 	});
 
+	it("the dialog's compact prompt summarizes the details to one row, keeping origin, reason, and appendix", async () => {
+		const prompts: { full: string; compact: string }[] = [];
+		const ui = {
+			select: async () => undefined,
+			approve: async (prompt: { full: string; compact: string }) => {
+				prompts.push(prompt);
+				return true;
+			},
+		};
+		const write = tool("mcp__server__write", undefined, () => ["Path: /tmp/out", "Content:\nsecret\nbody"]);
+		expect(await requestApproval(ui, write, {}, "Critical pattern", ["Provider safety checks:", "- check"])).toBe(
+			true,
+		);
+		expect(prompts[0]!.compact.split("\n")).toEqual([
+			"Allow tool: mcp__server__write",
+			"Origin: MCP server tool",
+			"Reason: Critical pattern",
+			// A label alone takes its body's first line; `…` marks the lines left out.
+			"Path: /tmp/out · Content: secret …",
+			"Provider safety checks:",
+			"- check",
+		]);
+		// The full prompt, which the dialog's expand key shows, keeps every detail whole.
+		expect(prompts[0]!.full).toContain("Content:\nsecret\nbody");
+		// A detail that fits on its row is shown as is, without an ellipsis.
+		await requestApproval(
+			ui,
+			tool("bash", "exec", () => ["Command: git push"]),
+			{},
+		);
+		expect(prompts[1]!.compact).toBe("Allow tool: bash\nCommand: git push");
+	});
+
 	it("does not add MCP origin for annotated MCP tools", () => {
 		const subject = tool("mcp__server__safe", "read");
 		expect(formatApprovalPrompt(subject, {}, undefined)).toBe("Allow tool: mcp__server__safe");
@@ -265,7 +293,7 @@ describe("MCP fallback and prompt formatting", () => {
 	}
 
 	function sloppySection(path: string, find = "old", put = "new"): string {
-		return [`*** SM:EDIT ${path}`, "*** SM:FIND", find, "*** SM:PUT", put].join("\n");
+		return [`*** Edit File: ${path}`, "*** Find", find, "*** Replace", put].join("\n");
 	}
 
 	it("shows the file from a sloppy edit section header", () => {
@@ -923,10 +951,6 @@ describe("tool-owned dynamic approval declarations", () => {
 });
 
 describe("resolveApprovalFromContext fail-closed default", () => {
-	function settingsGet(values: Record<string, unknown>) {
-		return { get: (key: string) => values[key] };
-	}
-
 	it("fails closed to always-ask with no grant when context is missing", () => {
 		expect(resolveApprovalFromContext(undefined)).toEqual({ approvalMode: "always-ask", userPolicies: {} });
 		expect(resolveApprovalFromContext(null)).toEqual({ approvalMode: "always-ask", userPolicies: {} });
@@ -941,17 +965,17 @@ describe("resolveApprovalFromContext fail-closed default", () => {
 	it("honors configured mode and per-tool policies when settings are present", () => {
 		expect(
 			resolveApprovalFromContext({
-				settings: settingsGet({ "tools.approvalMode": "write", "tools.approval": { bash: "deny" } }),
+				settings: Settings.isolated({ "tools.approvalMode": "write", "tools.approval": { bash: "deny" } }),
 			}),
 		).toEqual({ approvalMode: "write", userPolicies: { bash: "deny" } });
-		expect(resolveApprovalFromContext({ settings: settingsGet({ "tools.approvalMode": "yolo" }) })).toEqual({
+		expect(resolveApprovalFromContext({ settings: Settings.isolated({ "tools.approvalMode": "yolo" }) })).toEqual({
 			approvalMode: "yolo",
 			userPolicies: {},
 		});
 	});
 
 	it("keeps the schema default yolo when settings exist but approvalMode is unset", () => {
-		expect(resolveApprovalFromContext({ settings: settingsGet({}) })).toEqual({
+		expect(resolveApprovalFromContext({ settings: Settings.isolated() })).toEqual({
 			approvalMode: "yolo",
 			userPolicies: {},
 		});
@@ -961,7 +985,7 @@ describe("resolveApprovalFromContext fail-closed default", () => {
 		expect(
 			resolveApprovalFromContext({
 				autoApprove: true,
-				settings: settingsGet({ "tools.approvalMode": "always-ask", "tools.approval": { bash: "deny" } }),
+				settings: Settings.isolated({ "tools.approvalMode": "always-ask", "tools.approval": { bash: "deny" } }),
 			}),
 		).toEqual({ approvalMode: "yolo", userPolicies: { bash: "deny" } });
 		expect(resolveApprovalFromContext({ autoApprove: true })).toEqual({ approvalMode: "yolo", userPolicies: {} });
