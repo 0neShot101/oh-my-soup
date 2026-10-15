@@ -7,10 +7,12 @@ import * as registry from "@oh-my-pi/pi-coding-agent/collab/registry";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as pluginHelpers from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { runRootCommand } from "@oh-my-pi/pi-coding-agent/main";
 import { Composer, type ComposerPreferences } from "@oh-my-pi/pi-tui/prompt/composer";
+import * as composerCache from "@oh-my-pi/pi-tui/prompt/composer-cache";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import {
 	applyStartupComposerPreferences,
@@ -25,6 +27,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 import { installInMemoryRelay, uninstallInMemoryRelay } from "./collab/helpers/in-memory-relay";
+import { cfgTierOpenai } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { createTestSession } from "./utilities";
 
 import {
@@ -297,6 +300,54 @@ describe("Composer prepaint", () => {
 		resetSettingsForTest();
 	});
 
+	it.each([
+		{ configured: "priority", sessionFast: false, cachedFast: true },
+		{ configured: "none", sessionFast: true, cachedFast: false },
+	] as const)(
+		"prepaints fast mode from tier.openai=$configured, not a session-only /fast toggle",
+		async ({ configured, sessionFast, cachedFast }) => {
+			const testSession = await createTestSession();
+			const cache = composerCache.ComposerCache.open(path.join(testSession.tempDir, "composer.db"));
+			vi.spyOn(composerCache, "sharedComposerCache").mockReturnValue(cache);
+			const anthropic = testSession.session.model;
+			const openai = getBundledModel("openai", "gpt-5.2");
+			if (!anthropic || !openai) throw new Error("Bundled test models missing");
+			testSession.session.settings.setModelRole("default", `${openai.provider}/${openai.id}`);
+			vi.spyOn(testSession.session.modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
+			vi.spyOn(testSession.session.modelRegistry, "getAvailable").mockReturnValue([openai, anthropic]);
+			cfgTierOpenai.set(testSession.session.settings, configured);
+			await testSession.session.setModel(openai);
+			testSession.session.setFastMode(sessionFast);
+			expect(testSession.session.isFastModeActive()).toBe(sessionFast);
+			const composer = new Composer({ terminal: new VirtualTerminal() });
+			composer.start();
+			const mode = new InteractiveMode(
+				testSession.session,
+				"test",
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				composer,
+			);
+			vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
+			try {
+				await mode.init({ suppressWelcomeIntro: true });
+				await testSession.session.setModel(anthropic);
+				mode.stop();
+				const status = cache.read(testSession.sessionManager.getCwd()).status?.statusLine;
+				expect(status?.model?.id).toBe(openai.id);
+				expect(status?.fastMode).toBe(cachedFast);
+			} finally {
+				mode.stop();
+				cache.close();
+				await testSession.cleanup();
+				vi.restoreAllMocks();
+			}
+		},
+	);
+
 	it("keeps one live editor and terminal across handoff", () => {
 		const terminal = new CountingTerminal();
 		const composer = new Composer({ preferences: config, terminal });
@@ -418,7 +469,6 @@ describe("Composer prepaint", () => {
 			await releaseInit.promise;
 		});
 		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
-		vi.spyOn(testSession.session, "maybeStartTitleGeneration").mockImplementation(() => {});
 		const prompt = vi.spyOn(testSession.session, "prompt").mockResolvedValue(true);
 
 		try {
@@ -468,7 +518,6 @@ describe("Composer prepaint", () => {
 		);
 		lease.adopt();
 		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
-		vi.spyOn(testSession.session, "maybeStartTitleGeneration").mockImplementation(() => {});
 		const turn = Promise.withResolvers<boolean>();
 		const prompt = vi.spyOn(testSession.session, "prompt").mockResolvedValue(true);
 
