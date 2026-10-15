@@ -8168,7 +8168,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Start or stop the Codex-backed realtime voice surface. */
 	async handleLiveCommand(): Promise<void> {
-		if (this.#sttController && this.#sttController.state !== "idle") {
+		if (this.#dictationStarting || (this.#sttController && this.#sttController.state !== "idle")) {
 			this.showWarning("Finish the current speech-to-text capture before starting live mode.");
 			return;
 		}

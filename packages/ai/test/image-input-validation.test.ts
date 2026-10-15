@@ -62,6 +62,8 @@ interface FetchCall {
 
 interface ImageClientCase {
 	name: string;
+	/** Whether the client sends input images as data URLs rather than raw MIME metadata. */
+	dataUrl: boolean;
 	invoke(input: ImageInput, fetch: FetchImpl): Promise<unknown>;
 	imageRequest(calls: FetchCall[]): FetchCall | undefined;
 	assertPayload(call: FetchCall, input: ImageInput): Promise<void> | void;
@@ -70,6 +72,7 @@ interface ImageClientCase {
 const clients: ImageClientCase[] = [
 	{
 		name: "hosted Responses",
+		dataUrl: true,
 		invoke: (input, fetch) =>
 			generateHostedImage(
 				hostedImageModel,
@@ -87,6 +90,7 @@ const clients: ImageClientCase[] = [
 	},
 	{
 		name: "OpenRouter JSON",
+		dataUrl: true,
 		invoke: (input, fetch) =>
 			generateOpenRouterImage(
 				openRouterModel,
@@ -106,6 +110,7 @@ const clients: ImageClientCase[] = [
 	},
 	{
 		name: "OpenAI-compatible JSON edits",
+		dataUrl: true,
 		invoke: (input, fetch) =>
 			generateOpenAIImage(
 				openAICompatibleModel,
@@ -120,6 +125,7 @@ const clients: ImageClientCase[] = [
 	},
 	{
 		name: "OpenAI multipart edit",
+		dataUrl: false,
 		invoke: (input, fetch) =>
 			generateOpenAIImage(
 				openAIMultipartModel,
@@ -127,17 +133,18 @@ const clients: ImageClientCase[] = [
 				{ apiKey: API_KEY, fetch },
 			),
 		imageRequest: calls => calls.find(call => call.url.endsWith("/images/edits")),
-		assertPayload: async call => {
+		assertPayload: async (call, input) => {
 			if (!(call.init?.body instanceof FormData)) throw new Error("Expected the first edit request to be multipart");
 			const image = call.init.body.get("image");
 			expect(image).toBeInstanceOf(File);
 			if (!(image instanceof File)) throw new Error("Expected multipart image file");
-			expect(image.type).toBe("image/png");
+			expect(image.type).toBe(input.mimeType);
 			expect(Array.from(new Uint8Array(await image.arrayBuffer()))).toEqual(Array.from(IMAGE_BYTES));
 		},
 	},
 	{
 		name: "Gemini inlineData",
+		dataUrl: false,
 		invoke: (input, fetch) =>
 			generateGoogleImage(
 				geminiModel,
@@ -154,6 +161,7 @@ const clients: ImageClientCase[] = [
 	},
 	{
 		name: "Antigravity inlineData",
+		dataUrl: false,
 		invoke: (input, fetch) =>
 			generateAntigravityImage(
 				antigravityModel,
@@ -203,10 +211,6 @@ const invalidInputs: Array<{ name: string; input: ImageInput }> = [
 	{ name: "unsupported MIME type", input: { data: PADDED_IMAGE_DATA, mimeType: "text/plain" } },
 	{ name: "malformed MIME syntax", input: { data: PADDED_IMAGE_DATA, mimeType: "image/x?test" } },
 	{
-		name: "MIME subtype containing a URL fragment marker",
-		input: { data: PADDED_IMAGE_DATA, mimeType: "image/x#test" },
-	},
-	{
 		name: "MIME subtype over 127 characters",
 		input: { data: PADDED_IMAGE_DATA, mimeType: `image/x${"a".repeat(127)}` },
 	},
@@ -232,6 +236,24 @@ for (const client of clients) {
 				expect(imageRequest).toBeDefined();
 				if (!imageRequest) throw new Error("Expected the provider image request");
 				await client.assertPayload(imageRequest, input);
+			});
+		}
+
+		const hashInput = { data: PADDED_IMAGE_DATA, mimeType: "image/x#test" };
+		if (client.dataUrl) {
+			it("rejects a MIME subtype containing a URL fragment marker before any fetch", async () => {
+				const calls: FetchCall[] = [];
+				const error = await client.invoke(hashInput, createFetch(calls)).catch(cause => cause);
+				expect(error).toBeInstanceOf(ValidationError);
+				expect(calls).toHaveLength(0);
+			});
+		} else {
+			it("delivers a MIME subtype containing '#' intact", async () => {
+				const calls: FetchCall[] = [];
+				await client.invoke(hashInput, createFetch(calls));
+				const imageRequest = client.imageRequest(calls);
+				if (!imageRequest) throw new Error("Expected the provider image request");
+				await client.assertPayload(imageRequest, hashInput);
 			});
 		}
 	});

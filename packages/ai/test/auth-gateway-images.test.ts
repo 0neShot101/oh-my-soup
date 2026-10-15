@@ -246,15 +246,17 @@ describe("auth gateway images", () => {
 				async (url, storage) => {
 					const credentialResolution = vi.spyOn(storage.keys, "getWithCredential");
 					try {
-						const response = await gatewayRequest(url, "/v1/images/generations", {
-							model: "gpt-image-test",
-							prompt: "paint",
-							input_references: [{ url: "data:image/png;base64,Y" }],
-						});
-						expect(response.status).toBe(400);
-						expect(await response.json()).toMatchObject({
-							error: { code: 400, type: "invalid_request_error" },
-						});
+						for (const reference of ["data:image/png;base64,Y", `data:image/x#test;base64,${IMAGE_DATA}`]) {
+							const response = await gatewayRequest(url, "/v1/images/generations", {
+								model: "gpt-image-test",
+								prompt: "paint",
+								input_references: [{ url: reference }],
+							});
+							expect(response.status).toBe(400);
+							expect(await response.json()).toMatchObject({
+								error: { code: 400, type: "invalid_request_error" },
+							});
+						}
 						expect(credentialResolution).not.toHaveBeenCalled();
 					} finally {
 						credentialResolution.mockRestore();
