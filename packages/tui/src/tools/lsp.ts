@@ -28,6 +28,7 @@ import {
 } from "../render/render-utils";
 import { renderStatusLine } from "../render";
 import { framedToolCard } from "../render/tool-card";
+import { wrapPrefixedLine } from "../render/hanging-wrap";
 import { ansi, code, col, compact, keyed, md, node, row, span, text } from "../native/describe";
 import type { NativeNode } from "../native/node";
 import { OwnerMemo } from "../native/memo";
@@ -245,7 +246,7 @@ export function renderResult(
 		return { label: "Response", state: "success", bodyLines: renderGeneric(text, lines, expanded, theme) };
 	};
 
-	return framedToolCard(theme, () => {
+	return framedToolCard(theme, ({ contentWidth }) => {
 		// Read mutable state at render time
 		const { expanded, isPartial, spinnerFrame } = options;
 		const slot = expanded ? 1 : 0;
@@ -263,12 +264,18 @@ export function renderResult(
 			: formatStatusIcon(isPartial ? "running" : "error", theme, spinnerFrame);
 		const header = `${icon} LSP ${actionLabel}`;
 
+		const rail = ` ${theme.fg("mdCodeBlockBorder", theme.boxRound.vertical)} `;
+		const contentLines = codeBlockMatch
+			? bodyLines.flatMap(line =>
+					line.startsWith(rail) ? wrapPrefixedLine(rail, rail, line.slice(rail.length), contentWidth) : [line],
+				)
+			: bodyLines;
 		return {
 			header,
 			phase: isPartial ? "partial" : state,
 			sections: [
 				...(requestLines.length > 0 ? [{ content: requestLines }] : []),
-				{ label: theme.fg("toolTitle", "Response"), content: bodyLines },
+				{ label: theme.fg("toolTitle", "Response"), content: contentLines },
 			],
 			applyBg: false,
 		};
@@ -571,7 +578,7 @@ function renderSymbols(symbolsMatch: RegExpMatchArray, lines: string[], expanded
 	// One linear pass each: `isLast[i]` — the next symbol at indent <= mine is
 	// not a sibling (monotonic stack, right to left); `prefixes[i]` — per
 	// ancestor level, the nearest earlier symbol at that indent decides the rail.
-	const isLast: boolean[] = new Array(symbols.length);
+	const isLast = Array.from({ length: symbols.length }, () => false);
 	const pending: number[] = [];
 	for (let i = symbols.length - 1; i >= 0; i--) {
 		const myIndent = symbols[i].indent;
@@ -581,7 +588,7 @@ function renderSymbols(symbolsMatch: RegExpMatchArray, lines: string[], expanded
 		pending.push(i);
 	}
 	const getPrefixes = (): string[] => {
-		const prefixes: string[] = new Array(symbols.length);
+		const prefixes: string[] = [];
 		const lastAtIndent = new Map<number, number>();
 		for (let i = 0; i < symbols.length; i++) {
 			const myIndent = symbols[i].indent;
@@ -590,7 +597,7 @@ function renderSymbols(symbolsMatch: RegExpMatchArray, lines: string[], expanded
 				const ancestorIdx = lastAtIndent.get(level - 2);
 				prefix += ancestorIdx !== undefined && isLast[ancestorIdx] ? "   " : `${theme.tree.vertical}  `;
 			}
-			prefixes[i] = prefix;
+			prefixes.push(prefix);
 			lastAtIndent.set(myIndent, i);
 		}
 		return prefixes;

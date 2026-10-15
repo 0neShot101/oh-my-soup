@@ -6,6 +6,7 @@ import * as url from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { LocalProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/local-protocol";
+import { getDocsDiskRoot } from "@oh-my-pi/pi-coding-agent/internal-urls/docs-index";
 import { resolveMarkdownLinkHrefs } from "@oh-my-pi/pi-coding-agent/internal-urls/hyperlink-targets";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -200,13 +201,42 @@ describe("resource links in chat markdown", () => {
 		expect(visible).not.toContain("file://");
 	});
 
+	it("links omp:// docs to the file the active corpus was read from", async () => {
+		// `omp://` docs are embedded in the shipped build, so a link only exists
+		// where the corpus is read from the repo `docs/` tree. Clicking that link
+		// must still show the URL the agent wrote, not the internal path.
+		const docPath = "tools/read.md";
+		const href = `omp://${docPath}`;
+		const root = getDocsDiskRoot();
+		const onDisk = root === null ? undefined : path.join(root, docPath);
+		const text = `[read docs](${href}) and [missing docs](omp://no-such-doc.md)`;
+		const targets = await resolveMarkdownLinkHrefs(terminalCaps.getMarkdownLinkUrls(text));
+		const output = new terminalCaps.Markdown(text, 0, 0, {
+			...getMarkdownTheme(),
+			resolveLink: link => targets.get(link),
+		})
+			.render(300)
+			.join("\n");
+		expect([...targets]).toEqual(onDisk === undefined ? [] : [[href, url.pathToFileURL(onDisk).href]]);
+		if (onDisk !== undefined) expect(output).toContain(`\x1b]8;;${url.pathToFileURL(onDisk).href}\x07`);
+		// The unknown doc keeps its plain URL instead of gaining a file link.
+		expect(output).toContain(`\x1b]8;;omp://no-such-doc.md\x07`);
+		const visible = stripVTControlCharacters(output);
+		expect(visible).toContain(`read docs (${href})`);
+		if (onDisk !== undefined) expect(visible).not.toContain(onDisk);
+	});
+
 	it("stops linking a file once it is deleted", async () => {
 		const file = path.join(tempDir, "gone.txt");
 		await Bun.write(file, "x");
 		const text = "[Gone](gone.txt)";
-		expect([...(await resolveMarkdownLinkHrefs(terminalCaps.getMarkdownLinkUrls(text), { cwd: tempDir })).keys()]).toEqual(["gone.txt"]);
+		expect([
+			...(await resolveMarkdownLinkHrefs(terminalCaps.getMarkdownLinkUrls(text), { cwd: tempDir })).keys(),
+		]).toEqual(["gone.txt"]);
 		await fs.rm(file);
-		expect([...(await resolveMarkdownLinkHrefs(terminalCaps.getMarkdownLinkUrls(text), { cwd: tempDir })).keys()]).toEqual([]);
+		expect([
+			...(await resolveMarkdownLinkHrefs(terminalCaps.getMarkdownLinkUrls(text), { cwd: tempDir })).keys(),
+		]).toEqual([]);
 	});
 
 	it("leaves missing, escaping, remote, and non-link destinations unexpanded", async () => {
