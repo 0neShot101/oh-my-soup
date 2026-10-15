@@ -43,7 +43,8 @@ export function isUnexpectedStopCandidate(message: AssistantMessage): boolean {
 	if (message.stopReason !== "stop") return false;
 	let hasContent = false;
 	for (const content of message.content) {
-		if (content.type === "toolCall") return false;
+		// A tool call or image is deliverable output; retrying would repeat it.
+		if (content.type === "toolCall" || content.type === "image") return false;
 		if (content.type === "text" && /\S/.test(content.text)) {
 			hasContent = true;
 		}

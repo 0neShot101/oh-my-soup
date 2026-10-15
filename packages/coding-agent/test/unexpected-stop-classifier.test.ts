@@ -103,6 +103,19 @@ describe("isUnexpectedStopCandidate", () => {
 		});
 		expect(isUnexpectedStopCandidate(message)).toBe(false);
 	});
+
+	it("returns false for a signed empty-thinking stop that delivered an image", () => {
+		// OpenAI Responses image generation: a signed reasoning item with empty
+		// text plus the generated image. Retrying would regenerate the image.
+		const message = makeAssistantMessage({
+			stopReason: "stop",
+			content: [
+				{ type: "thinking", thinking: "", thinkingSignature: "rs_123" },
+				{ type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+			],
+		});
+		expect(isUnexpectedStopCandidate(message)).toBe(false);
+	});
 });
 
 describe("classifyUnexpectedStop", () => {
