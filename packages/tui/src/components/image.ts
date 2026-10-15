@@ -10,8 +10,8 @@ import {
 	renderImage,
 	TERMINAL,
 } from "../terminal-capabilities";
-import { nativeImageNode } from "../native/blobs";
-import { linkedImageText, transcriptImageLink } from "../prompt/image-references";
+import { nativeImageNode, openableImageProps } from "../native/blobs";
+import { imageLinksEnabled, linkedImageText, transcriptImageLink } from "../prompt/image-references";
 import type { DescribeContext, NativeNode } from "../native/node";
 import type { Component } from "../tui";
 
@@ -656,11 +656,13 @@ export class Image implements Component {
 	#cachedCellWidthPx = 0;
 	#cachedCellHeightPx = 0;
 	#cachedKittyUnicodePlaceholders = false;
+	#cachedLinked = false;
 	// Tallest graphic placement this image has rendered. The text fallback
 	// pads itself to this height so a budget demotion never shrinks the block
 	// (its rows may already be committed to native scrollback).
 	#renderedGraphicRows = 0;
-	#native?: NativeNode;
+	/** Described node and the link policy it was built under (an `off` switch drops its `href`). */
+	#native?: { linked: boolean; node: NativeNode };
 	/** Newest SIXEL encode: its target size and, once settled, the sequence (`null` on failure). */
 	#sixel?: { widthPx: number; heightPx: number; sequence?: string | null };
 
@@ -739,11 +741,12 @@ export class Image implements Component {
 	 * graphics protocols do not apply.
 	 */
 	describe(_cx: DescribeContext): NativeNode {
-		if (this.#native) return this.#native;
+		const linked = imageLinksEnabled();
+		if (this.#native?.linked === linked) return this.#native.node;
 		const maxW = this.#options.maxWidthCells;
 		const maxH = this.#options.maxHeightCells;
 		const href = transcriptImageLink({ data: this.#base64Data, mimeType: this.#mimeType }, this.#options.sourcePath);
-		this.#native = nativeImageNode(Buffer.from(this.#base64Data, "base64"), this.#mimeType, {
+		const node = nativeImageNode(Buffer.from(this.#base64Data, "base64"), this.#mimeType, {
 			alt: imageFallback(this.#mimeType, this.#dimensions, this.#options.filename),
 			w: this.#dimensions.widthPx,
 			h: this.#dimensions.heightPx,
@@ -754,10 +757,10 @@ export class Image implements Component {
 							h: maxH && maxH > 0 ? `${maxH}lines` : undefined,
 						}
 					: undefined,
-			// A click zooms the image in the terminal; the file opens from its context menu.
-			...(href ? { href, actions: { menu: ["open"] } } : {}),
+			...openableImageProps(href),
 		});
-		return this.#native;
+		this.#native = { linked, node };
+		return node;
 	}
 
 	render(width: number): readonly string[] {
@@ -777,6 +780,7 @@ export class Image implements Component {
 		// re-encode the full image on every render pass.
 		const imageId = this.#imageId;
 		const transmitsSeparately = imageProtocol === ImageProtocol.Kitty && imageId != null;
+		const linked = imageLinksEnabled();
 
 		if (
 			this.#cachedLines &&
@@ -786,6 +790,8 @@ export class Image implements Component {
 			this.#cachedCellWidthPx === cellDimensions.widthPx &&
 			this.#cachedCellHeightPx === cellDimensions.heightPx &&
 			this.#cachedKittyUnicodePlaceholders === kittyUnicodePlaceholders &&
+			// The text fallback embeds a link only under an enabled hyperlink policy.
+			this.#cachedLinked === linked &&
 			(!transmitsSeparately || this.#budget?.shouldTransmit(imageId) !== true) &&
 			// Cached rows reserved for a pending SIXEL encode must not reach scrollback.
 			!(scrollbackRenderDepth > 0 && this.#sixel !== undefined && this.#sixel.sequence === undefined)
@@ -856,6 +862,7 @@ export class Image implements Component {
 		this.#cachedCellWidthPx = cellDimensions.widthPx;
 		this.#cachedCellHeightPx = cellDimensions.heightPx;
 		this.#cachedKittyUnicodePlaceholders = kittyUnicodePlaceholders;
+		this.#cachedLinked = linked;
 
 		return lines;
 	}

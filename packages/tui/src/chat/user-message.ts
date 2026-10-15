@@ -23,7 +23,7 @@ import { imageReferenceHyperlink } from "../prompt/image-references";
 import { highlightMagicKeywords } from "../prompt/magic-keywords";
 import type { ReactionTarget } from "./reaction";
 import { card, md, node, row, span, text } from "../native/describe";
-import { base64ImageNode } from "../native/blobs";
+import { base64ImageNode, openableImageProps } from "../native/blobs";
 import { hasTranscriptActions, runTranscriptAction } from "./transcript-actions";
 import {
 	type DescribeContext,
@@ -253,9 +253,7 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 			this.#images.forEach((image, i) => {
 				if (!image.mimeType.startsWith("image/")) return;
 				const label = `#${i + 1}`;
-				const link = this.#imageLinks?.[i];
-				// A click zooms the image in the terminal; the file opens from its context menu.
-				const open = link ? { href: link, actions: { menu: ["open"] } } : {};
+				const open = openableImageProps(this.#imageLinks?.[i]);
 				thumbs.push(base64ImageNode(image.data, image.mimeType, { alt: label, title: label, ...open }, label));
 			});
 		}

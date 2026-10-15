@@ -31,7 +31,7 @@ import {
 import { span, text } from "../native/describe";
 import { type DescribeContext, type NativeNode, type NativeUiEvent, rootToggleExpanded } from "../native/node";
 import { NativeImageCache } from "../native/blobs";
-import { linkedImageSpan, linkedImageText } from "../prompt/image-references";
+import { imageLinksEnabled, linkedImageSpan, linkedImageText } from "../prompt/image-references";
 import { Memo } from "../native/memo";
 
 const STREAMING_LINE_CAP = PREVIEW_LINES * 5;
@@ -173,6 +173,8 @@ export class BashExecutionComponent extends Container {
 			this.#expanded,
 			this.#showImages,
 			this.#images.length,
+			// Image nodes and placeholders carry links only under an enabled policy.
+			imageLinksEnabled(),
 		];
 		return this.#native.get(key, () => {
 			const images = this.#images.map((image, index) =>

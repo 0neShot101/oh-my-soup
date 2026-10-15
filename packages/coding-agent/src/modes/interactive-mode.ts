@@ -1452,6 +1452,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#pendingSubmittedInput: SubmittedUserInput | undefined;
 	#pendingSubmissionDispose: (() => void) | undefined;
 	#pendingSubmissionPreservesDraft = false;
+	/** Unregisters this mode's transcript-image blob writer (a later mode's registration survives). */
+	#disposeImageBlobWriter: (() => void) | undefined;
 	#optimisticUserMessageComponents: Component[] = [];
 	#optimisticSkillMessageComponents: Component[] = [];
 	/** True while an optimistically-rendered `/skill:` row awaits its canonical
@@ -1917,7 +1919,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editor.draftImageLinkMaterializer = images => materializeImageChipLinks(images, this.sessionManager);
 		// Transcript images without a file of their own (pasted, tool-produced, rendered figures)
 		// link to a blob copy of their bytes, the same store that backs composer chips.
-		setImageBlobWriter((data, options) => this.sessionManager.putBlobSync(data, options));
+		this.#disposeImageBlobWriter = setImageBlobWriter((data, options) =>
+			this.sessionManager.putBlobSync(data, options),
+		);
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor);
 		this.statusLine = new StatusLineComponent(session, statusLineHost);
@@ -7064,6 +7068,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		// InteractiveMode instance (e.g. test harnesses, headless re-init).
 		setAutoQaConsentHandler(null, null);
 		setCfgApprovalHost(null);
+		this.#disposeImageBlobWriter?.();
+		this.#disposeImageBlobWriter = undefined;
 		this.#hideSessionInfo();
 		if (this.#ownsStartedUi) {
 			this.ui.stop();

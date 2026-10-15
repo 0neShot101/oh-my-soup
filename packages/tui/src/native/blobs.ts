@@ -11,7 +11,7 @@ import type { TspProps } from "@oh-my-pi/pi-wire";
 import { resolveImageOptions } from "../render/render-utils";
 import { getImageDimensions } from "../terminal-capabilities";
 import { node } from "./describe";
-import { transcriptImageLink } from "../prompt/image-references";
+import { imageLinksEnabled, transcriptImageLink } from "../prompt/image-references";
 import type { NativeChild, NativeNode } from "./node";
 
 export interface NativeBlob {
@@ -94,20 +94,27 @@ export function base64ImageNode(
 }
 
 /**
+ * Props that make an `image` node open `href`: a click zooms the image in the terminal,
+ * and the file opens from its context menu. Empty without a target.
+ */
+export function openableImageProps(href: string | undefined): Pick<TspProps<"image">, "href" | "actions"> {
+	return href ? { href, actions: { menu: ["open"] } } : {};
+}
+
+/**
  * `image` nodes for base64 payloads, one per slot key, rebuilt only when the slot's payload
- * changes. Each opens its file (`sourcePath`, else a blob copy) from the context menu.
+ * or the link policy changes. Each opens its file (`sourcePath`, else a blob copy).
  */
 export class NativeImageCache {
-	#entries = new Map<string, { data: string; node: NativeNode }>();
+	#entries = new Map<string, { data: string; linked: boolean; node: NativeNode }>();
 
 	get(key: string, data: string, mimeType: string, sourcePath?: string): NativeNode {
+		const linked = imageLinksEnabled();
 		const cached = this.#entries.get(key);
-		if (cached?.data === data) return cached.node;
-		const href = transcriptImageLink({ data, mimeType }, sourcePath);
-		// A click zooms the image in the terminal; the file opens from its context menu.
-		const open = href ? { href, actions: { menu: ["open"] } } : {};
+		if (cached?.data === data && cached.linked === linked) return cached.node;
+		const open = openableImageProps(transcriptImageLink({ data, mimeType }, sourcePath));
 		const image = base64ImageNode(data, mimeType, { alt: mimeType, ...open }, key);
-		this.#entries.set(key, { data, node: image });
+		this.#entries.set(key, { data, linked, node: image });
 		return image;
 	}
 }
