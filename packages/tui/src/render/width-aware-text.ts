@@ -71,15 +71,17 @@ export class WidthAwareText implements Component {
 	 * (the only width a describer knows) and again on `reformat()`.
 	 */
 	describe(cx: DescribeContext): NativeNode {
-		if (this.#cachedText === undefined || cx.cols !== this.#nativeCols) {
+		const paddingX = this.#ignoreTight ? this.#paddingX : getPaddingX(this.#paddingX);
+		const contentWidth = Math.max(1, cx.cols - paddingX * 2);
+		if (this.#cachedText === undefined || contentWidth !== this.#cachedContentWidth) {
 			this.#nativeCols = cx.cols;
-			this.#cachedContentWidth = -1;
-			this.#cachedText = this.#format(Math.max(1, cx.cols));
+			this.#cachedContentWidth = contentWidth;
+			this.#cachedText = this.#format(contentWidth);
 			this.#inner.setText(this.#cachedText);
 		}
 		this.#native ??= col([this.#inner]);
 		return this.#native;
-	}
+}
 
 	render(width: number): readonly string[] {
 		const paddingX = this.#ignoreTight ? this.#paddingX : getPaddingX(this.#paddingX);
