@@ -24,6 +24,7 @@ import type {
 	ScoreQuestion,
 } from "@oh-my-pi/pi-ai";
 import { isRecord } from "@oh-my-pi/pi-utils";
+import { isEmbeddedImageContent } from "@oh-my-pi/pi-ai/images/shared";
 import type { LoadedImageInput } from "../utils/image-loading";
 import { loadImageAttachmentInput, loadImageInput, loadSvgImageInput } from "../utils/image-loading";
 import {
@@ -76,25 +77,12 @@ export async function loadEvalJudgmentImages(value: unknown, cwd: string): Promi
 			}
 			if (!loaded) throw invalidImage(`images[${index}] path ${JSON.stringify(source)} is not a supported image`);
 		} else {
-			if (
-				!isRecord(source) ||
-				source.type !== "image" ||
-				typeof source.data !== "string" ||
-				typeof source.mimeType !== "string"
-			) {
-				throw invalidImage(`images[${index}] must be a local path or { type: "image", data, mimeType }`);
+			if (!isEmbeddedImageContent(source)) {
+				throw invalidImage(
+					`images[${index}] must be a local path or { type: "image", data, mimeType, detail? } with valid base64 data, an image MIME type, and detail auto, low, high, or original`,
+				);
 			}
-			if (source.detail !== undefined) {
-				if (
-					source.detail !== "auto" &&
-					source.detail !== "low" &&
-					source.detail !== "high" &&
-					source.detail !== "original"
-				) {
-					throw invalidImage(`images[${index}] detail must be auto, low, high, or original`);
-				}
-				detail = source.detail;
-			}
+			detail = source.detail;
 			try {
 				loaded = await loadImageAttachmentInput({
 					image: { type: "image", data: source.data, mimeType: source.mimeType },
