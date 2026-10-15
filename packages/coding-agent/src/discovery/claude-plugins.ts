@@ -663,14 +663,13 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 			// `timeout: 600`; taking those verbatim would give the server a 600ms
 			// connect budget and its tools would never load (#12485). Drop them so
 			// the default timeout applies, and warn so the mismatch is visible.
-			const timeout =
-				raw.timeout !== undefined &&
-				(typeof raw.timeout !== "number" || !Number.isFinite(raw.timeout) || raw.timeout < 1000)
-					? (warnings.push(
-							`[claude-plugins] Ignoring invalid timeout ${JSON.stringify(raw.timeout)} for MCP server "${serverName}" in ${sourcePath}: expected a finite number >= 1000ms (Claude Code's minimum)`,
-						),
-						undefined)
-					: raw.timeout;
+			let timeout = raw.timeout;
+			if (timeout !== undefined && (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout < 1000)) {
+				warnings.push(
+					`[claude-plugins] Ignoring invalid timeout ${JSON.stringify(timeout)} for MCP server "${serverName}" in ${sourcePath}: expected a finite number >= 1000ms (Claude Code's minimum)`,
+				);
+				timeout = undefined;
+			}
 			const resolvedEnv = raw.env !== undefined ? await resolveMarketplaceEnv(raw.env, root.path) : undefined;
 			const server: MCPServer = {
 				name: namespacedName,
