@@ -165,9 +165,22 @@ export function chunkForConPTY(data: string, maxChunkBytes: number = MAX_CONPTY_
 	let pos = 0;
 	while (pos < len) {
 		let bytes = 0;
-		// Index just past the most recent `\n` we've consumed inside [pos, i):
-		// the natural cut point that leaves escape sequences intact.
+		// Index just past the most recent line terminator we have consumed
+		// inside [pos, i): the natural cut point that leaves escape sequences
+		// and rows intact.
+		//
+		// Both terminators must be tracked. A full paint separates rows with
+		// `\r\n` and a newline alone is enough. A *diff* paint does not: TUI's
+		// row diff (`TUI#renderProviderFrame`, the `diffable` branch) addresses
+		// every changed row with `CSI row;1H` and closes it with a bare `\r`,
+		// emitting no `\n` anywhere in the frame. A newline-only tracker
+		// therefore finds no boundary in a diff paint and falls through to the
+		// hard cut at `i`, slicing the buffer through the middle of a row's
+		// text. Every boundary between two `process.stdout.write` calls is a
+		// point a foreign writer can inject into, so a hard cut lets unrelated
+		// output land inside a row instead of between rows.
 		let lastNewlineEnd = -1;
+		let lastCarriageReturnEnd = -1;
 		let i = pos;
 		while (i < len) {
 			const cu = data.charCodeAt(i);
@@ -193,16 +206,25 @@ export function chunkForConPTY(data: string, maxChunkBytes: number = MAX_CONPTY_
 				cuBytes = 3;
 			}
 			if (bytes + cuBytes > maxChunkBytes && i > pos) {
-				// Would overflow the cap. Cut at the last newline if we found one,
-				// otherwise hard-cut at the current code-point boundary.
-				const cut = lastNewlineEnd > pos ? lastNewlineEnd : i;
-				chunks.push(data.slice(pos, cut));
-				pos = cut;
+				// Cut at the last line terminator. A `\r` that opens a `\r\n` pair is
+				// never tracked (see below), so the pair always stays in one
+				// `WriteFile` call. Falls back to the code-point boundary `i` only
+				// when the window holds no terminator at all (a single row longer
+				// than the cap), which still makes forward progress.
+				const cut = Math.max(lastNewlineEnd, lastCarriageReturnEnd);
+				let end = cut > pos ? cut : i;
+				// A hard cut landing between `\r` and `\n` moves back before the `\r`.
+				if (end === i && data.charCodeAt(i) === 0x0a && data.charCodeAt(i - 1) === 0x0d && i - 1 > pos) end = i - 1;
+				chunks.push(data.slice(pos, end));
+				pos = end;
 				break;
 			}
 			bytes += cuBytes;
 			i += cuLen;
+			// A `\r` directly followed by `\n` is half of a `\r\n` pair, even when the
+			// `\n` lies past the cap, so it is never a cut point on its own.
 			if (cu === 0x0a) lastNewlineEnd = i;
+			else if (cu === 0x0d && data.charCodeAt(i) !== 0x0a) lastCarriageReturnEnd = i;
 		}
 		if (i >= len) {
 			chunks.push(data.slice(pos));
