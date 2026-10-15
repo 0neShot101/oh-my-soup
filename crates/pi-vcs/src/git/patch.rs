@@ -564,8 +564,7 @@ fn parse_file_patch(raw: &str) -> std::result::Result<FilePatch, ApplyFailure> {
 	let lines: Vec<&str> = raw.split_inclusive('\n').collect();
 	let first = lines
 		.first()
-		.map(|line| line.trim_end_matches('\n'))
-		.unwrap_or_default();
+		.map_or_default(|line| line.trim_end_matches('\n'));
 	let paths = first
 		.strip_prefix("diff --git ")
 		.ok_or_else(|| ApplyFailure::Invalid("invalid diff header".into()))?;
@@ -818,6 +817,30 @@ fn apply_patches_to_map(
 				message: format!("mode does not match for {}", source_path.unwrap_or_default()),
 			});
 		}
+		if source
+			.as_ref()
+			.is_some_and(|entry| entry.mode == Mode::COMMIT)
+			|| target_mode == Some(Mode::COMMIT)
+		{
+			if let Some(entry) = &source
+				&& entry.id != gitlink_id(patch, if options.reverse { b'+' } else { b'-' })?
+			{
+				return Err(Error::PatchFailed {
+					message: format!("gitlink does not match for {}", source_path.unwrap_or_default()),
+				});
+			}
+			if let Some(path) = source_path
+				&& target_path != Some(path)
+			{
+				state.remove(path);
+			}
+			if let Some(path) = target_path {
+				validate_repo_path(path).map_err(ApplyFailure::into_error)?;
+				let id = gitlink_id(patch, if options.reverse { b'-' } else { b'+' })?;
+				state.insert(path.to_owned(), FileEntry::new(id, Mode::COMMIT));
+			}
+			continue;
+		}
 		let source_bytes = match source.as_ref() {
 			Some(entry) => blob_bytes(repo, entry.id)?,
 			None => Vec::new(),
@@ -851,6 +874,18 @@ fn apply_patches_to_map(
 	Ok(())
 }
 
+fn gitlink_id(patch: &FilePatch, kind: u8) -> Result<gix::ObjectId> {
+	let id = patch
+		.hunks
+		.iter()
+		.flat_map(|hunk| &hunk.lines)
+		.find(|line| line.kind == kind)
+		.and_then(|line| line.data.strip_prefix(b"Subproject commit "))
+		.ok_or_else(|| Error::PatchFailed { message: "gitlink patch lacks a commit id".into() })?;
+	gix::ObjectId::from_hex(id)
+		.map_err(|_| Error::PatchFailed { message: "gitlink patch has an invalid commit id".into() })
+}
+
 fn patch_sides(
 	patch: &FilePatch,
 	reverse: bool,
@@ -879,7 +914,13 @@ fn apply_file_bytes(
 	if patch.hunks.is_empty() {
 		return Ok(source.to_vec());
 	}
-	let mut lines = split_lines(source);
+	let source_lines = split_lines(source);
+	// The image each hunk applies to is always `head` (rewritten so far)
+	// followed by the untouched `source_lines[tail..]`. Ascending hunks land in
+	// the tail and copy forward; one reaching back into rewritten lines
+	// (overlapping hunks) materializes the image and splices into it.
+	let mut head: Vec<Line<'_>> = Vec::with_capacity(source_lines.len());
+	let mut tail = 0;
 	let mut offset: isize = 0;
 	for hunk in &patch.hunks {
 		let (start, count, replacement, expected) = hunk_sides(hunk, reverse);
@@ -892,27 +933,57 @@ fn apply_file_bytes(
 			return Err(ApplyFailure::Context("hunk position precedes file".into()));
 		}
 		let position = position as usize;
-		if position.saturating_add(expected.len()) > lines.len()
-			|| lines[position..position + expected.len()] != expected
-		{
+		let applies = if position >= head.len() {
+			let from = tail + (position - head.len());
+			let end = from.saturating_add(expected.len());
+			let applies = source_lines.get(from..end) == Some(&expected[..]);
+			if applies {
+				head.extend_from_slice(&source_lines[tail..from]);
+				head.extend_from_slice(&replacement);
+				tail = end;
+			}
+			applies
+		} else {
+			head.extend_from_slice(&source_lines[tail..]);
+			tail = source_lines.len();
+			let range = position..position + expected.len();
+			let applies = head.get(range.clone()) == Some(&expected[..]);
+			if applies {
+				head.splice(range, replacement.iter().copied());
+			}
+			applies
+		};
+		if !applies {
 			return Err(ApplyFailure::Context(format!("hunk at line {start} does not apply")));
 		}
-		lines.splice(position..position + expected.len(), replacement.clone());
 		offset += replacement.len() as isize - expected.len() as isize;
 	}
-	Ok(lines.concat())
+	head.extend_from_slice(&source_lines[tail..]);
+	let mut out = Vec::with_capacity(source.len());
+	for line in head {
+		out.extend_from_slice(line.data);
+		if line.newline {
+			out.push(b'\n');
+		}
+	}
+	Ok(out)
 }
 
-fn hunk_sides(hunk: &Hunk, reverse: bool) -> (usize, usize, Vec<Vec<u8>>, Vec<Vec<u8>>) {
+/// One source or hunk line, borrowed: its bytes without the terminator and
+/// whether a `\n` follows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Line<'a> {
+	data:    &'a [u8],
+	newline: bool,
+}
+
+fn hunk_sides(hunk: &Hunk, reverse: bool) -> (usize, usize, Vec<Line<'_>>, Vec<Line<'_>>) {
 	let mut old = Vec::new();
 	let mut new = Vec::new();
 	for line in &hunk.lines {
-		let mut content = line.data.clone();
-		if !line.no_newline {
-			content.push(b'\n');
-		}
+		let content = Line { data: &line.data, newline: !line.no_newline };
 		if line.kind != b'+' {
-			old.push(content.clone());
+			old.push(content);
 		}
 		if line.kind != b'-' {
 			new.push(content);
@@ -925,17 +996,17 @@ fn hunk_sides(hunk: &Hunk, reverse: bool) -> (usize, usize, Vec<Vec<u8>>, Vec<Ve
 	}
 }
 
-fn split_lines(bytes: &[u8]) -> Vec<Vec<u8>> {
+fn split_lines(bytes: &[u8]) -> Vec<Line<'_>> {
 	let mut lines = Vec::new();
-	let mut start = 0;
-	for (index, byte) in bytes.iter().enumerate() {
-		if *byte == b'\n' {
-			lines.push(bytes[start..=index].to_vec());
-			start = index + 1;
+	let mut rest = bytes;
+	while !rest.is_empty() {
+		if let Some(end) = rest.iter().position(|&byte| byte == b'\n') {
+			lines.push(Line { data: &rest[..end], newline: true });
+			rest = &rest[end + 1..];
+		} else {
+			lines.push(Line { data: rest, newline: false });
+			break;
 		}
-	}
-	if start < bytes.len() {
-		lines.push(bytes[start..].to_vec());
 	}
 	lines
 }
@@ -1262,9 +1333,7 @@ fn index_map_at(
 	repo: &gix::Repository,
 	index_path: Option<&Path>,
 ) -> Result<BTreeMap<String, FileEntry>> {
-	Ok(load_index_at(repo, index_path)?
-		.map(|index| index_state_map(&index))
-		.unwrap_or_default())
+	Ok(load_index_at(repo, index_path)?.map_or_default(|index| index_state_map(&index)))
 }
 
 /// The index at `index_path`, or the repository's when `None`; `None` when an
@@ -1736,7 +1805,9 @@ fn checkout_changed_paths(
 	unstaged: &BTreeSet<String>,
 ) -> Result<()> {
 	for path in changed {
+		// A gitlink changes the index, not the initialized submodule directory.
 		match worktree.get(path) {
+			Some(entry) if entry.mode == Mode::COMMIT => {},
 			Some(entry) => write_worktree_entry(repo, gix_repo, filter, path, entry)?,
 			None => remove_worktree_path(repo, path)?,
 		}
@@ -1747,7 +1818,7 @@ fn checkout_changed_paths(
 		let Some(entry) = merged.get(path) else {
 			continue;
 		};
-		let stat = if unstaged.contains(path) {
+		let stat = if entry.mode == Mode::COMMIT || unstaged.contains(path) {
 			Stat::default()
 		} else {
 			let metadata = gix::index::fs::Metadata::from_path_no_follow(&repo.root().join(path))?;
@@ -1834,7 +1905,8 @@ fn validate_repo_path(path: &str) -> std::result::Result<(), ApplyFailure> {
 	if candidate.is_absolute()
 		|| candidate.components().any(|component| {
 			matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
-		}) || path.is_empty()
+		})
+		|| path.is_empty()
 	{
 		return Err(ApplyFailure::Invalid(format!("unsafe patch path: {path}")));
 	}
@@ -2088,6 +2160,31 @@ mod tests {
 		]);
 		assert_eq!(errors.len(), 1);
 		assert_eq!(errors[0].path, "a.bin");
+	}
+
+	#[test]
+	fn patch_apply_second_hunk_rewrites_lines_of_the_first() {
+		// The second hunk targets `ONE`, a line only the first hunk produced, so
+		// it lands behind the forward cursor and takes the materialize-and-splice
+		// path instead of the ascending copy-forward one.
+		let temp = init(&[("a.txt", b"one\ntwo\nthree\nfour\n")]);
+		let patch = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,2 \
+		             @@\n-one\n+ONE\n two\n@@ -1 +1 @@\n-ONE\n+uno\n";
+		let options =
+			ApplyOptions { cached: false, index_path: None, reverse: false, three_way: false };
+		let repository = repo(temp.path());
+		assert!(
+			repository
+				.can_apply_patch(patch, &options)
+				.expect("check overlapping patch")
+		);
+		repository
+			.apply_patch(patch, &options)
+			.expect("apply overlapping patch");
+		assert_eq!(
+			fs::read(temp.path().join("a.txt")).expect("read patched"),
+			b"uno\ntwo\nthree\nfour\n"
+		);
 	}
 
 	#[test]
