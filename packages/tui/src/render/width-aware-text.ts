@@ -25,7 +25,6 @@ export class WidthAwareText implements Component {
 	#cachedContentWidth = -1;
 	#cachedText: string | undefined;
 	#ignoreTight = false;
-	#nativeCols = -1;
 	#native: NativeNode | undefined;
 
 	constructor(format: (contentWidth: number) => string, paddingX = 1, paddingY = 1) {
@@ -71,17 +70,17 @@ export class WidthAwareText implements Component {
 	 * (the only width a describer knows) and again on `reformat()`.
 	 */
 	describe(cx: DescribeContext): NativeNode {
-		const paddingX = this.#ignoreTight ? this.#paddingX : getPaddingX(this.#paddingX);
-		const contentWidth = Math.max(1, cx.cols - paddingX * 2);
+		// Native describe emits no padding, so the formatter gets the full
+		// column budget — the same width a native Text.describe() would use.
+		const contentWidth = Math.max(1, cx.cols);
 		if (this.#cachedText === undefined || contentWidth !== this.#cachedContentWidth) {
-			this.#nativeCols = cx.cols;
 			this.#cachedContentWidth = contentWidth;
 			this.#cachedText = this.#format(contentWidth);
 			this.#inner.setText(this.#cachedText);
 		}
 		this.#native ??= col([this.#inner]);
 		return this.#native;
-}
+	}
 
 	render(width: number): readonly string[] {
 		const paddingX = this.#ignoreTight ? this.#paddingX : getPaddingX(this.#paddingX);
