@@ -87,7 +87,6 @@ import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { resolveCatalogPolicy } from "@oh-my-pi/pi-catalog/compat/catalog-policy";
 import { supportsOutputTokenLimit } from "@oh-my-pi/pi-catalog/compat/output-limits";
 import { requiresNativeTools, requiresToolFreeHistoryForToolOptOut } from "@oh-my-pi/pi-catalog/compat/tools";
-import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { type EditStore, PowerAssertion, type PowerAssertionOptions } from "@oh-my-pi/pi-natives";
 import {
@@ -108,7 +107,7 @@ import {
 	withFileLock,
 } from "@oh-my-pi/pi-utils";
 import { writeArchive } from "@oh-my-pi/pi-utils/ar";
-import { frameDataBytesBudget } from "@oh-my-pi/snapcompact";
+import { frameDataBytesBudget, readerIncludesThinking } from "@oh-my-pi/snapcompact";
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display";
 import { loadAdvisorTranscriptCosts } from "../advisor";
@@ -1690,7 +1689,12 @@ export class AgentSession implements SettingsScope {
 		});
 		this.#evalToolSession = config.evalToolSession;
 		const initialEvalStateContext = this.#buildEvalStateContextMessage();
-		if (initialEvalStateContext) this.agent.appendMessage(initialEvalStateContext);
+		if (
+			initialEvalStateContext &&
+			this.#needsEvalStateContext(this.agent.state.messages, initialEvalStateContext.content)
+		) {
+			this.agent.appendMessage(initialEvalStateContext);
+		}
 		const ircHost: IrcBridgeHost = {
 			agent: this.agent,
 			sessionManager: this.sessionManager,
@@ -2347,8 +2351,12 @@ export class AgentSession implements SettingsScope {
 			reconnectToAgent: () => this.#reconnectToAgent(),
 			drainStrandedQueuedMessages: () => this.#drainStrandedQueuedMessages(),
 			buildDisplaySessionContext: () => this.buildDisplaySessionContext(),
+			persistEvalStateContext: () => {
+				const message = this.#buildEvalStateContextMessage();
+				if (message) this.sessionManager.appendMessage(message);
+			},
 			convertToLlmForSideRequest: messages => this.#convertToLlmForSideRequest(messages),
-			buildLiveProviderContext: async (summarized, retained, signal) => {
+			buildLiveProviderContext: async (summarized, retained, signal, model) => {
 				// compact() rebuilds the previous summary message; send the live
 				// agent's own one. Conversion caches and the shared date/cwd reminder
 				// key on message identity, so a copy would re-root the reminder state
@@ -2364,9 +2372,9 @@ export class AgentSession implements SettingsScope {
 				// Transform the whole history as the live turn does, then cut it:
 				// provider transforms (inline imaging, image budgets) decide per
 				// request, so a separately transformed prefix can differ.
-				const prefixLength = (await this.convertMessagesToLlm(history, signal)).length;
+				const prefixLength = (await this.convertMessagesToLlm(history, signal, model)).length;
 				const live = await this.agent.buildSideRequestContext(
-					await this.convertMessagesToLlm([...history, ...retained], signal),
+					await this.convertMessagesToLlm([...history, ...retained], signal, model),
 				);
 				// Date/cwd reminder controls are the only messages the transforms
 				// insert: count past them, and leave out any at the cut, so the kept
@@ -2413,6 +2421,11 @@ export class AgentSession implements SettingsScope {
 			abortHandoff: () => this.abortHandoff(),
 		};
 		this.#maintenance = new SessionMaintenance(maintenanceHost);
+		this.addDisposer(
+			this.agent.addBeforeModelCallHook((_signal, context) =>
+				this.#maintenance.renderArchiveForModel(context.messages),
+			),
+		);
 
 		const handoffHost: SessionHandoffHost = {
 			agent: this.agent,
@@ -2432,7 +2445,7 @@ export class AgentSession implements SettingsScope {
 			},
 			obfuscateTextForProvider: text => this.#obfuscateTextForProvider(text),
 			deobfuscateFromProvider: text => this.#deobfuscateFromProvider(text),
-			convertMessagesToLlm: (messages, signal) => this.convertMessagesToLlm(messages, signal),
+			convertMessagesToLlm: (messages, signal, model) => this.convertMessagesToLlm(messages, signal, model),
 			prepareSimpleStreamOptions: (options, provider) => this.prepareSimpleStreamOptions(options, provider),
 			effectiveServiceTier: model => this.#models.effectiveServiceTier(model),
 		};
@@ -3697,12 +3710,14 @@ export class AgentSession implements SettingsScope {
 	 * run into hidden continuity context for the next turn. Short fragments are
 	 * omitted; `convertToLlm` still strips their incomplete thinking from replay.
 	 *
-	 * Skipped for anthropic-dialect targets: the continuity quote replays the
+	 * Skipped for readers whose classifier refuses quoted reasoning (the
+	 * `classifier-cot-extraction` catalog axis): the continuity quote replays the
 	 * model's own reasoning as conversation text, which Anthropic's
 	 * `reasoning_extraction` classifier refuses (verified live against Fable 5 —
 	 * the quoted fragment trips it even inside a full agentic request on
 	 * OAuth/subscription auth). transform-messages already drops the unsigned
-	 * trailing run from replay, so nothing else is lost.
+	 * trailing run from replay, so nothing else is lost. With no model to resolve
+	 * the reader from, the quote is skipped too.
 	 *
 	 * The original thinking stays on the assistant message so live render, reload,
 	 * and display-reset rebuilds keep showing it.
@@ -3711,7 +3726,8 @@ export class AgentSession implements SettingsScope {
 		message: AssistantMessage,
 	): CustomMessage<InterruptedThinkingDetails> | undefined {
 		if (message.stopReason !== "aborted" || !isUserInterruptAbort(message)) return undefined;
-		if (preferredDialect(this.agent.state.model?.id ?? message.model) === "anthropic") return undefined;
+		const reader = this.agent.state.model ?? this.#modelRegistry.find(message.provider, message.model);
+		if (!reader || !readerIncludesThinking(reader)) return undefined;
 		const demoted = demoteInterruptedThinking(message);
 		if (!demoted || demoted.reasoning.length < INTERRUPTED_THINKING_MIN_CHARS) return undefined;
 		const interruptedAt = Date.now();
@@ -5055,11 +5071,12 @@ export class AgentSession implements SettingsScope {
 		});
 	}
 
-	async #emitAgentEndNotification(messages: AgentMessage[], options?: { willContinue?: boolean }): Promise<void> {
+	async #emitAgentEndNotification(messages: AgentMessage[], options?: AgentEndSettleOptions): Promise<void> {
 		await this.#extensionRunner?.emit({
 			type: "agent_end",
 			messages,
 			willContinue: options?.willContinue,
+			...(options?.willContinue === true && options.awaitingAsyncWork === true ? { awaitingAsyncWork: true } : {}),
 		});
 	}
 
@@ -6567,7 +6584,15 @@ export class AgentSession implements SettingsScope {
 	#withEvalStateContext(context: SessionContext): SessionContext {
 		const evalStateContext = this.#buildEvalStateContextMessage();
 		if (!evalStateContext) return context;
+		if (!this.#needsEvalStateContext(context.messages, evalStateContext.content)) return context;
 		return { ...context, messages: [...context.messages, evalStateContext] };
+	}
+
+	#needsEvalStateContext(messages: AgentMessage[], content: CustomMessage["content"]): boolean {
+		const latest = messages.findLast(
+			message => message.role === "custom" && message.customType === "eval-state-context",
+		);
+		return latest?.role !== "custom" || latest.content !== content;
 	}
 
 	#buildEvalStateContextMessage(): CustomMessage | undefined {
@@ -6628,9 +6653,14 @@ export class AgentSession implements SettingsScope {
 		return this.#providerBoundary.convertToLlmForSideRequest(messages);
 	}
 
-	/** Convert session messages using the same pre-LLM pipeline as the active session. */
-	async convertMessagesToLlm(messages: AgentMessage[], signal?: AbortSignal): Promise<Message[]> {
-		return await this.#providerBoundary.convertMessagesToLlm(messages, signal);
+	/**
+	 * Convert session messages using the same pre-LLM pipeline as the active
+	 * session, for a request to `model` (the active model by default): each
+	 * snapcompact archive is the view that model may read, swapped in a copy.
+	 */
+	async convertMessagesToLlm(messages: AgentMessage[], signal?: AbortSignal, model = this.model): Promise<Message[]> {
+		const readable = model ? await this.#maintenance.messagesForModel(messages, model) : messages;
+		return await this.#providerBoundary.convertMessagesToLlm(readable, signal);
 	}
 
 	/** Apply session-level stream hooks to a direct side request. */
@@ -8111,6 +8141,7 @@ export class AgentSession implements SettingsScope {
 			},
 			resolvePlanReview: () => false,
 			getPendingPlanReview: () => undefined,
+			openPlanReview: async () => false,
 			getContextUsage: () => this.getContextUsage(),
 			getAsyncJobSnapshot: () => this.getAsyncJobSnapshot(),
 			waitForIdle: () => this.waitForIdle(),
@@ -10744,6 +10775,12 @@ export class AgentSession implements SettingsScope {
 		this.#syncAppendOnlyContext(model);
 
 		try {
+			await this.#maintenance.renderArchiveForModel();
+		} catch (error) {
+			logger.warn("snapcompact archive view after model change failed", { error: String(error) });
+		}
+
+		try {
 			await this.#tools.reconcileThinkTool();
 		} catch (error) {
 			logger.warn("think tool reconcile after model change failed", { error: String(error) });
@@ -11088,7 +11125,8 @@ export class AgentSession implements SettingsScope {
 	 * to preserve the prompt cache unless `tools: false` is requested. The
 	 * model is reminded not to call tools and any tool calls are discarded. The side request
 	 * does not block on, or interfere with, any in-flight main turn. The
-	 * session's history and persisted state are NOT modified by this call.
+	 * session's history is NOT modified by this call (a snapcompact archive's
+	 * no-reasoning view may be stored on its compaction entry).
 	 *
 	 * Used by `BtwController` (`/btw`) and `OmfgController` (`/omfg`) to share
 	 * the snapshot + stream pipeline. The snapshot includes any in-flight

@@ -119,11 +119,24 @@ class IdentityFacts {
 	}
 }
 
+/**
+ * The id a spec resolves identity and rules under: its own, unless that names
+ * no model and the row sends a model that does on the wire. A Devin Fusion
+ * pairing runs only its lead, so the lead's reviewed rules (cache-write rate,
+ * long-context tier) apply to it at build time.
+ */
+function policyModelId<TApi extends Api>(spec: ModelSpec<TApi>): string {
+	const wireId = spec.requestModelId;
+	if (wireId === undefined || wireId === spec.id) return spec.id;
+	if (classifyModel(spec.provider, spec.id).class !== "unknown") return spec.id;
+	return classifyModel(spec.provider, wireId).class === "unknown" ? spec.id : wireId;
+}
+
 function resolveIdentity<TApi extends Api>(spec: ModelSpec<TApi>): ModelIdentity {
 	// Strict on purpose: ambiguous identity is a rule-authoring defect surfaced
 	// at build/CI time, never silently degraded to `unknown`. Discovery
 	// normalization opts into leniency through `classifyModel` directly.
-	return classifyModel(spec.provider, spec.id);
+	return classifyModel(spec.provider, policyModelId(spec));
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +276,7 @@ function hasLocalLoopbackBaseUrl(baseUrl: string | undefined): boolean {
 	let hostname: string;
 	try {
 		hostname = new URL(baseUrl).hostname.toLowerCase();
+		if (hostname.endsWith(".")) hostname = hostname.slice(0, -1);
 	} catch {
 		return false;
 	}
@@ -1305,7 +1319,7 @@ function buildResolveTarget<TApi extends Api>(
 		provider: providerType,
 		api: spec.api,
 		class: identity.class,
-		model: spec.id,
+		model: policyModelId(spec),
 		reasoning: Boolean(spec.reasoning),
 	};
 	if (identity.family !== undefined) target.family = identity.family;
