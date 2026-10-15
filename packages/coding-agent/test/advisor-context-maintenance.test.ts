@@ -312,6 +312,36 @@ describe("AgentSession advisor context maintenance", () => {
 		expect(JSON.stringify(advisor.state.messages)).not.toContain("small stored advisor message");
 	});
 
+	it("re-evaluates maintenance after promoting to a model that defers tool schemas", async () => {
+		const promotion = {
+			...createMockModel({
+				id: "deferred-schema-promotion",
+				provider: "anthropic",
+				contextWindow: CONTEXT_WINDOW + 1,
+			}),
+			toolSchemasInContext: false,
+		};
+		const { advisor, advisorMock, modelRegistry, settings } = createHarness(
+			`${promotion.provider}/${promotion.id}`,
+			true,
+		);
+		vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([advisor.state.model, promotion]);
+		vi.spyOn(modelRegistry, "getApiKey").mockResolvedValue("test-key");
+		const seed: AgentMessage = { role: "user", content: "stored advisor message", timestamp: 1 };
+		advisor.state.messages.push(seed);
+		const storedTokens = advisor.tokenizer.countMessage(seed, { excludeEncryptedReasoning: true });
+		const schemaTokens = estimateToolSchemaTokens(advisor.state.tools, advisor.tokenizer);
+		const threshold =
+			storedTokens + advisor.tokenizer.countTokens(advisor.state.systemPrompt) + Math.floor(schemaTokens / 2);
+		cfgCompactionThresholdTokens.set(settings, threshold);
+
+		await session.prompt("update after promotion");
+
+		expect(advisor.state.model.id).toBe(promotion.id);
+		expect(advisorMock.calls).toHaveLength(1);
+		expect(JSON.stringify(advisorMock.calls[0].context.messages)).toContain("stored advisor message");
+	});
+
 	it("ignores retained provider usage that predates the latest advisor compaction", async () => {
 		const { advisor, advisorMock } = createHarness();
 		const compactedAt = Date.now();
