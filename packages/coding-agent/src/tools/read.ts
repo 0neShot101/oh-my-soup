@@ -1437,7 +1437,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (!imageInput) {
 				throw new ToolError(
 					imageKind === "svg"
-						? "The ':img' selector only supports .svg and .svgz files."
+						? "The ':img' selector only rasterizes .svg and .svgz files. Read a raster image such as PNG or JPEG without ':img'."
 						: `Read image file [${mimeType}] failed: unsupported image format.`,
 				);
 			}
