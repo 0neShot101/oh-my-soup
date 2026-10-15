@@ -997,6 +997,7 @@ describe("local OpenAI-compat output clamp", () => {
 	it.each([
 		["LiteLLM loopback", "litellm", "http://127.0.0.1:4000/v1"],
 		["remote custom", "custom", "https://api.example.com/v1"],
+		["remote absolute host", "custom", "https://api.example.com./v1"],
 		["official OpenAI", "openai", "https://api.openai.com/v1"],
 	] as const)("leaves clampOutputToModelMax off for %s", (_label, provider, baseUrl) => {
 		expect(resolveModelPolicy(completionsSpec({ provider, baseUrl })).compat.clampOutputToModelMax).toBe(false);
