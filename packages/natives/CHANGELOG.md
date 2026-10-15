@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `grep()` and `search()` showing the start of a line wider than `maxColumns`, with no `column`, when the only match was an empty one at the end of the file (`$` or `\z` on a last line without a newline); they now show the end of the line and its column ([#15411](https://github.com/can1357/oh-my-pi/pull/15411) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed embedded-shell `xargs` failing with "Argument list too long" on large input lists instead of splitting them into executable batches ([#15708](https://github.com/can1357/oh-my-pi/pull/15708) by [@mg-mg-mg](https://github.com/mg-mg-mg))
+
 ## [18.11.0] - 2026-10-14
 
 ### Fixed
