@@ -10,10 +10,13 @@ import {
 } from "@oh-my-pi/pi-utils/marked";
 import {
 	type MathBlockOpener,
+	type MathOpener,
 	mathBlockCloserIndex,
 	mathBlockInContext,
 	mathBlockMayCloseAt,
 	mathBlockOpenerAt,
+	mathOpenerAt,
+	mathSpanAt,
 	mathSpanInContext,
 	mathStartIndex,
 } from "@oh-my-pi/pi-utils/math-delimiters";
@@ -139,6 +142,128 @@ function growingTableCell(raw: string): number {
 	if (UNESCAPED_PIPE_END.test(line)) return -1;
 	const pipes = line.match(UNESCAPED_PIPE)?.length ?? 0;
 	return matchesAt(TABLE_LINE_AT, line, 0) ? pipes - 1 : pipes;
+}
+
+const MATH_CLOSERS: Record<MathOpener, string> = { $: "$", $$: "$$", "\\(": "\\)", "\\[": "\\]" };
+// An inline link whose destination is still arriving: `[label](dest` at the end of the run.
+const OPEN_LINK_DESTINATION = /(?<!!)\[(?:\\.|[^\\[\]])*\]\([^()\s]*$/;
+// The end of a math body that is not yet valid LaTeX: a half-typed command, a lone `\`, or a dangling `^`/`_`.
+const PARTIAL_LATEX_TAIL = /(?:\\[A-Za-z]*|[\^_])$/;
+// A `$` body without one of these is a price, not math: it stays literal until it closes.
+const LATEX_HINT = /[\\^_{}]/;
+// Math openers tried from the end of the run; the one being written is almost always the last.
+const MATH_OPENER_TRIES = 3;
+
+/**
+ * `text`, one inline run whose end is still streaming, with a trailing open
+ * link or math span closed the way the finished text most likely closes it,
+ * or `undefined` when nothing at its end is open. A link gains its `)`, so it
+ * renders as the link it becomes instead of literal brackets and URL. A math
+ * body is cut back to its last valid form (a half-typed command or dangling
+ * `^`/`_` dropped, open braces closed) and closed, so the rendered math grows
+ * in place instead of raw LaTeX turning into symbols at the closer. A `$`
+ * body needs a LaTeX character, so a price (`$5 per`) is never speculated.
+ */
+export function speculativeInlineClose(text: string): string | undefined {
+	if (OPEN_LINK_DESTINATION.test(text)) return `${text})`;
+	let tries = 0;
+	for (let at = text.length - 1; at >= 0 && tries < MATH_OPENER_TRIES; at--) {
+		const opener = mathOpenerAt(text, at);
+		// The second `$` of a `$$` opener is not an opener of its own.
+		if (opener === undefined || (opener === "$" && text[at - 1] === "$")) continue;
+		tries++;
+		const bodyStart = at + opener.length;
+		const written = text.slice(bodyStart);
+		const body = written.replace(PARTIAL_LATEX_TAIL, "");
+		if (!body.trim() || (opener === "$" && !LATEX_HINT.test(written))) continue;
+		let depth = 0;
+		for (let i = 0; i < body.length; i++) {
+			if (body[i] === "\\") i++;
+			else if (body[i] === "{") depth++;
+			else if (body[i] === "}" && depth > 0) depth--;
+		}
+		const closed = `${text.slice(0, bodyStart)}${body}${"}".repeat(depth)}${MATH_CLOSERS[opener]}`;
+		// The grammar decides: escaped, currency-like, or space-padded openers stay literal.
+		if (mathSpanAt(closed, at)?.end === closed.length) return closed;
+	}
+	return undefined;
+}
+
+/**
+ * Streaming `md` source for a native terminal with the open link or math span
+ * at its end speculatively closed ({@link speculativeInlineClose}), as the TUI
+ * renders it. Only the last block is read (a span cannot cross a blank line),
+ * and source inside an open code fence is left as it is. Each frame rewrites
+ * only the guessed closers at the end, which the reconciler sends as a small
+ * `splice`.
+ */
+export function speculativeStreamingSource(text: string): string {
+	const blockBreak = text.lastIndexOf("\n\n");
+	const blockStart = blockBreak < 0 ? 0 : blockBreak + 2;
+	const closed = speculativeInlineClose(text.slice(blockStart));
+	if (closed === undefined || fenceOpenAt(text, text.length)) return text;
+	return text.slice(0, blockStart) + closed;
+}
+
+/** `raw` with its last `from` replaced by `to`, or `undefined` when `from` is not in it. */
+function replaceLast(raw: string, from: string, to: string): string | undefined {
+	const at = raw.lastIndexOf(from);
+	return at < 0 ? undefined : raw.slice(0, at) + to + raw.slice(at + from.length);
+}
+
+/**
+ * A copy of `token`, the last block of a streaming render, whose still-written
+ * inline run is speculatively closed ({@link speculativeInlineClose}), or
+ * `undefined` when nothing in it is open. Follows the run into the last list
+ * item, blockquote child, or the open cell of a table's last row. `raw` is
+ * rewritten to match, so row caches keyed on it never mistake the copy for
+ * the source as it stands.
+ */
+function speculateStreamingToken(token: Token): Token | undefined {
+	switch (token.type) {
+		case "paragraph":
+		case "heading":
+		case "text": {
+			const closed = speculativeInlineClose(token.text);
+			const raw = closed === undefined ? undefined : replaceLast(token.raw, token.text, closed);
+			if (closed === undefined || raw === undefined) return undefined;
+			return { ...token, raw, text: closed, tokens: lexInlineTokens(closed) };
+		}
+		case "blockquote": {
+			const children: Token[] = token.tokens ?? [];
+			const inner = children.at(-1);
+			const patched = inner && speculateStreamingToken(inner);
+			const raw = inner && patched && replaceLast(token.raw, inner.raw, patched.raw);
+			if (!patched || raw === undefined) return undefined;
+			return { ...token, raw, tokens: [...children.slice(0, -1), patched] };
+		}
+		case "list": {
+			const items: Tokens.ListItem[] = token.items;
+			const item = items.at(-1);
+			const inner = item?.tokens.at(-1);
+			if (!item || !inner) return undefined;
+			const patched = speculateStreamingToken(inner);
+			const itemRaw = patched && replaceLast(item.raw, inner.raw, patched.raw);
+			const raw = itemRaw === undefined ? undefined : replaceLast(token.raw, item.raw, itemRaw);
+			if (!patched || itemRaw === undefined || raw === undefined) return undefined;
+			const grown = { ...item, raw: itemRaw, tokens: [...item.tokens.slice(0, -1), patched] };
+			return { ...token, raw, items: [...items.slice(0, -1), grown] };
+		}
+		case "table": {
+			const rows: Tokens.TableCell[][] = token.rows;
+			const open = growingTableCell(token.raw);
+			const row = rows.at(-1);
+			const cell = open >= 0 ? row?.[open] : undefined;
+			if (!row || !cell) return undefined;
+			const closed = speculativeInlineClose(cell.text);
+			const raw = closed === undefined ? undefined : replaceLast(token.raw, cell.text, closed);
+			if (closed === undefined || raw === undefined) return undefined;
+			const cells = row.map((c, i) => (i === open ? { ...c, text: closed, tokens: lexInlineTokens(closed) } : c));
+			return { ...token, raw, rows: [...rows.slice(0, -1), cells] };
+		}
+		default:
+			return undefined;
+	}
 }
 
 /** The longest suffix of `text` a future append could still complete into a
@@ -2134,7 +2259,9 @@ export class Markdown implements Component {
 		if (cached?.text === this.#text && cached.stream === stream) return cached.node;
 		// Sources are model text; OSC 8 / SGR bytes a caller spliced in are the terminal's to style, not ours.
 		const plain = this.#text.includes("\x1b") ? plainText(this.#text) : this.#text;
-		const described = stream ? md(holdPartialTableRow(plain), { stream: true }) : md(plain);
+		const described = stream
+			? md(speculativeStreamingSource(holdPartialTableRow(plain)), { stream: true })
+			: md(plain);
 		this.#native = { text: this.#text, stream, node: described };
 		return described;
 	}
@@ -2609,7 +2736,9 @@ export class Markdown implements Component {
 					// into a table on a marker-free delta (`| --` + `--- | -`).
 					!FAST_TABLE_DELIM_ROW_RE.test(grownLastLine) &&
 					(!markerDelta || (!this.#lastTailCapture?.open && !pairSeamHazard && !inlineHasOpen(deltaTokens!))) &&
-					!FAST_URL_ANYWHERE_RE.test(seamWindow)
+					!FAST_URL_ANYWHERE_RE.test(seamWindow) &&
+					// A link or math span the grown row leaves open renders speculatively closed: re-lex.
+					speculativeInlineClose(grownLastLine) === undefined
 				) {
 					// Same text paths a full re-lex applies: real pipeline for marker
 					// deltas, plain swatch/entity render for inert deltas.
@@ -2713,8 +2842,12 @@ export class Markdown implements Component {
 			}
 		}
 
-		// Parse markdown to HTML-like tokens
-		const tokens = this.#lexTokens(normalizedText);
+		// Parse markdown to HTML-like tokens. While streaming, the block still
+		// being written renders its open link or math span as already closed.
+		const lexed = this.#lexTokens(normalizedText);
+		const tail = lexed.at(-1);
+		const speculated = this.transientRenderCache && tail ? speculateStreamingToken(tail) : undefined;
+		const tokens = speculated ? [...lexed.slice(0, -1), speculated] : lexed;
 		let contentLines: string[];
 		this.#activeRenderSignature = signature;
 		try {
@@ -2741,6 +2874,8 @@ export class Markdown implements Component {
 
 		const fastEligible =
 			this.transientRenderCache &&
+			// A speculated frame's rows come from source the stream does not hold yet.
+			speculated === undefined &&
 			contentLines.length > 0 &&
 			// B+ invariant: only the FINAL #renderContentLines call captures;
 			// the all-cache-hit prefix path clears #lastTailCapture at its top.
