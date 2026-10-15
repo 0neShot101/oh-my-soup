@@ -823,11 +823,12 @@ export class CommandController {
 	/**
 	 * `/jobs`: natively the live jobs sheet the jobs pill opens (inspect and
 	 * cancel included); `/jobs full`, and text mode, a report of the running
-	 * and recent jobs (see {@link showCommandReport}).
+	 * and recent jobs (see {@link showCommandReport}). Both list the viewed
+	 * session's jobs, so a focused subagent view shows the jobs that agent owns.
 	 */
 	async handleJobsCommand(options?: { full?: boolean }): Promise<void> {
 		const full = options?.full === true;
-		const snapshot = this.ctx.session.getAsyncJobSnapshot({ recentLimit: 5 });
+		const snapshot = this.ctx.viewSession.getAsyncJobSnapshot({ recentLimit: 5 });
 		if (!snapshot) {
 			this.ctx.showWarning("Async background jobs are unavailable in this session.");
 			return;
@@ -971,7 +972,12 @@ export class CommandController {
 		const backend = await resolveMemoryBackend(this.ctx.settings);
 
 		if (action === "view") {
-			const payload = await backend.buildDeveloperInstructions(agentDir, this.ctx.settings, this.ctx.session);
+			const payload = await backend.buildDeveloperInstructions(
+				agentDir,
+				this.ctx.sessionManager.getCwd(),
+				this.ctx.settings,
+				this.ctx.session,
+			);
 			if (!payload) {
 				this.ctx.showWarning("Memory payload is empty (memory backend off, disabled, or no memory available).");
 				return;
