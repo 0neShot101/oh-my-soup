@@ -111,10 +111,16 @@ fn key_for(code: &str, lang: SupportLang) -> Key {
 	Key { hash: xxhash_rust::xxh64::xxh64(code.as_bytes(), HASH_SEED), len: code.len(), lang }
 }
 
+/// Paths one entry can be bound to. Identical files share an entry; past this
+/// many, the binding that became current longest ago gives way.
+const MAX_PATHS_PER_ENTRY: usize = 8;
+
 /// One path's claim on an entry: its current content, or the one before it.
 struct Binding {
 	path:    Box<str>,
 	current: bool,
+	/// [`Cache::clock`] when this became the path's current version.
+	since:   u64,
 }
 
 struct Entry {
@@ -215,11 +221,43 @@ impl Cache {
 		Lookup::Miss(base)
 	}
 
-	fn insert(&mut self, key: Key, code: &str, tree: &Tree, path: Option<&str>, cost: usize) {
+	/// Whether `path` got a newer current version after the lookup that
+	/// issued `ticket`.
+	fn path_moved_since(&self, lang: SupportLang, path: &str, ticket: u64) -> bool {
+		self.entries.iter().any(|(key, entry)| {
+			key.lang == lang
+				&& entry
+					.binding(path)
+					.is_some_and(|binding| binding.current && binding.since > ticket)
+		})
+	}
+
+	/// Store a tree parsed after the lookup that issued `ticket`.
+	fn insert(
+		&mut self,
+		key: Key,
+		code: &str,
+		tree: &Tree,
+		path: Option<&str>,
+		cost: usize,
+		ticket: u64,
+	) {
+		self.clock += 1;
+		// A parse that started before its path moved on to newer content is
+		// cached, but must not move the path back.
+		let path = path.filter(|path| !self.path_moved_since(key.lang, path, ticket));
 		// The path now holds `code`; its version before last is dead whether
 		// or not this tree fits.
 		if let Some(path) = path {
 			self.advance_path(key, path);
+		}
+		if let Some(entry) = self.entries.get_mut(&key)
+			&& &*entry.source == code
+		{
+			// A concurrent parse of the same bytes landed first: keep its entry
+			// and the bindings it has collected (`advance_path` added ours).
+			entry.stamp = self.clock;
+			return;
 		}
 		if cost > self.max_retained_bytes {
 			return;
@@ -234,13 +272,12 @@ impl Cache {
 				break;
 			}
 		}
-		self.clock += 1;
 		self.retained_bytes += cost;
 		self.entries.insert(key, Entry {
 			source: Arc::from(code),
 			tree: tree.clone(),
 			bindings: path.map_or_else(Vec::new, |path| {
-				vec![Binding { path: Box::from(path), current: true }]
+				vec![Binding { path: Box::from(path), current: true, since: self.clock }]
 			}),
 			cost,
 			stamp: self.clock,
@@ -284,18 +321,28 @@ impl Cache {
 			self.retained_bytes -= dead.cost;
 			self.superseded += 1;
 		}
-		if let Some(entry) = self.entries.get_mut(&key) {
-			match entry
-				.bindings
-				.iter_mut()
-				.find(|binding| &*binding.path == path)
-			{
-				Some(binding) => binding.current = true,
-				None => entry
-					.bindings
-					.push(Binding { path: Box::from(path), current: true }),
-			}
+		let since = self.clock;
+		let Some(entry) = self.entries.get_mut(&key) else {
+			return;
+		};
+		if let Some(binding) = entry
+			.bindings
+			.iter_mut()
+			.find(|binding| &*binding.path == path)
+		{
+			binding.current = true;
+			binding.since = since;
+			return;
 		}
+		if entry.bindings.len() >= MAX_PATHS_PER_ENTRY
+			&& let Some(oldest) =
+				(0..entry.bindings.len()).min_by_key(|&index| entry.bindings[index].since)
+		{
+			entry.bindings.swap_remove(oldest);
+		}
+		entry
+			.bindings
+			.push(Binding { path: Box::from(path), current: true, since });
 	}
 
 	/// Drop one slot: a path's previous version if there is one, else the
@@ -432,9 +479,12 @@ fn parse_from(language: &Language, code: &str, base: Option<Base>) -> Result<Opt
 /// too.
 pub fn parse_cached(code: &str, lang: SupportLang, path: Option<&str>) -> Result<Option<Tree>> {
 	let key = key_for(code, lang);
-	// Bound the guard to a `let` so it drops at the end of this statement: a
-	// `match` scrutinee would hold the lock across the parse.
-	let lookup = lock().get(&key, code, path);
+	// Scope the guard to this block so the lock is released before the parse.
+	// The ticket orders this lookup against the path's later versions.
+	let (lookup, ticket) = {
+		let mut cache = lock();
+		(cache.get(&key, code, path), cache.clock)
+	};
 	let base = match lookup {
 		Lookup::Hit(tree) => return Ok(Some(tree)),
 		Lookup::Miss(base) => base,
@@ -450,7 +500,7 @@ pub fn parse_cached(code: &str, lang: SupportLang, path: Option<&str>) -> Result
 		return Ok(None);
 	};
 	let cost = tree_cost(code, &tree, lang);
-	lock().insert(key, code, &tree, path, cost);
+	lock().insert(key, code, &tree, path, cost, ticket);
 	Ok(Some(tree))
 }
 
@@ -508,7 +558,7 @@ mod tests {
 	fn put(cache: &mut Cache, code: &str, path: Option<&str>) -> usize {
 		let tree = tree_of(code, TS);
 		let cost = tree_cost(code, &tree, TS);
-		cache.insert(key_for(code, TS), code, &tree, path, cost);
+		cache.insert(key_for(code, TS), code, &tree, path, cost, cache.clock);
 		cost
 	}
 
@@ -537,7 +587,7 @@ mod tests {
 		let tree = tree_of(code, TS);
 
 		assert!(hit(&mut cache, code).is_none(), "cold lookup misses");
-		cache.insert(key, code, &tree, None, tree_cost(code, &tree, TS));
+		cache.insert(key, code, &tree, None, tree_cost(code, &tree, TS), cache.clock);
 		let warm = hit(&mut cache, code).expect("warm lookup hits");
 
 		assert_eq!(subtree_id(&warm, 0), subtree_id(&tree, 0), "hit must share the stored tree");
@@ -556,7 +606,14 @@ mod tests {
 
 		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
 		let tree = tree_of(code, SupportLang::Python);
-		cache.insert(py_key, code, &tree, None, tree_cost(code, &tree, SupportLang::Python));
+		cache.insert(
+			py_key,
+			code,
+			&tree,
+			None,
+			tree_cost(code, &tree, SupportLang::Python),
+			cache.clock,
+		);
 		assert!(
 			hit(&mut cache, code).is_none(),
 			"a Python tree must never satisfy a TypeScript request"
@@ -584,7 +641,7 @@ mod tests {
 		let forged = key_for(probe, TS);
 		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
 		let tree = tree_of(stored, TS);
-		cache.insert(forged, stored, &tree, None, tree_cost(stored, &tree, TS));
+		cache.insert(forged, stored, &tree, None, tree_cost(stored, &tree, TS), cache.clock);
 
 		assert!(
 			matches!(cache.get(&forged, probe, None), Lookup::Miss(None)),
@@ -680,7 +737,14 @@ mod tests {
 		let other_cost = put(&mut cache, other, Some("b.ts"));
 		let py_tree = tree_of(v1, SupportLang::Python);
 		let py_cost = tree_cost(v1, &py_tree, SupportLang::Python);
-		cache.insert(key_for(v1, SupportLang::Python), v1, &py_tree, Some("a.ts"), py_cost);
+		cache.insert(
+			key_for(v1, SupportLang::Python),
+			v1,
+			&py_tree,
+			Some("a.ts"),
+			py_cost,
+			cache.clock,
+		);
 		let v2_cost = put(&mut cache, v2, Some("a.ts"));
 
 		// Before and after an edit both stay resident, so a diff of the two hits.
@@ -738,6 +802,65 @@ mod tests {
 			panic!("a.ts keeps its reparse base after b.ts moves on");
 		};
 		assert_eq!(&*base.source, shared);
+	}
+
+	/// The content `path`'s next reparse would start from.
+	fn reparse_base(cache: &mut Cache, path: &str) -> Option<Arc<str>> {
+		let probe = "const never_cached = 0;\n";
+		match cache.get(&key_for(probe, TS), probe, Some(path)) {
+			Lookup::Miss(base) => base.map(|base| base.source),
+			Lookup::Hit(_) => unreachable!("the probe is never stored"),
+		}
+	}
+
+	#[test]
+	fn concurrent_parses_of_identical_files_keep_both_bindings() {
+		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
+		let shared = "const a = 1;\n";
+		let tree = tree_of(shared, TS);
+		let cost = tree_cost(shared, &tree, TS);
+		// Both lookups miss before either parse lands.
+		let ticket = cache.clock;
+		cache.insert(key_for(shared, TS), shared, &tree, Some("a.ts"), cost, ticket);
+		cache.insert(key_for(shared, TS), shared, &tree_of(shared, TS), Some("b.ts"), cost, ticket);
+
+		assert_eq!(reparse_base(&mut cache, "a.ts").as_deref(), Some(shared));
+		assert_eq!(reparse_base(&mut cache, "b.ts").as_deref(), Some(shared));
+		assert_eq!(cache.retained_bytes, cost, "one entry, charged once");
+	}
+
+	#[test]
+	fn a_stale_parse_is_cached_without_rolling_its_path_back() {
+		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
+		let (old, new) = ("const a = 1;\n", "const a = 2;\n");
+		// A background parse of `old` looks up, then a newer read of `new` lands
+		// before it finishes.
+		let stale_ticket = cache.clock;
+		put(&mut cache, new, Some("a.ts"));
+		let tree = tree_of(old, TS);
+		let cost = tree_cost(old, &tree, TS);
+		cache.insert(key_for(old, TS), old, &tree, Some("a.ts"), cost, stale_ticket);
+
+		assert_eq!(reparse_base(&mut cache, "a.ts").as_deref(), Some(new), "`new` stays current");
+		assert!(hit(&mut cache, old).is_some(), "the stale tree is still cached");
+		assert!(hit(&mut cache, new).is_some());
+	}
+
+	#[test]
+	fn bindings_per_entry_are_bounded() {
+		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
+		let shared = "const a = 1;\n";
+		put(&mut cache, shared, Some("p0.ts"));
+		for i in 1..=2 * MAX_PATHS_PER_ENTRY {
+			let path = format!("p{i}.ts");
+			assert!(matches!(cache.get(&key_for(shared, TS), shared, Some(&path)), Lookup::Hit(_)));
+		}
+
+		let entry = &cache.entries[&key_for(shared, TS)];
+		assert_eq!(entry.bindings.len(), MAX_PATHS_PER_ENTRY);
+		let newest = format!("p{}.ts", 2 * MAX_PATHS_PER_ENTRY);
+		assert!(entry.binding(&newest).is_some(), "the newest path is kept");
+		assert!(entry.binding("p0.ts").is_none(), "the oldest path gave way");
 	}
 
 	#[test]
