@@ -103,14 +103,6 @@ describe("isUnexpectedStopCandidate", () => {
 		});
 		expect(isUnexpectedStopCandidate(message)).toBe(false);
 	});
-
-	it("returns false when the thinking block is only whitespace", () => {
-		const message = makeAssistantMessage({
-			stopReason: "stop",
-			content: [{ type: "thinking", thinking: "   \n\t  ", thinkingSignature: "reasoning_content" }],
-		});
-		expect(isUnexpectedStopCandidate(message)).toBe(false);
-	});
 });
 
 describe("classifyUnexpectedStop", () => {
