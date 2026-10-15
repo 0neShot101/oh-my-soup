@@ -840,7 +840,7 @@ async fn create_session_for_run(
 	// implementations that run without spawning a process and resolve paths
 	// against the shell working directory. The whole set can be disabled
 	// (falling back to system binaries) via PI_DISABLE_UUTILS_BUILTINS; the
-	// destructive set (`rm`, `mv`, `cp`, `ln`) additionally honors
+	// destructive set (`rm`, `mv`, `cp`, `ln`, `dd`) additionally honors
 	// PI_DISABLE_UUTILS_DESTRUCTIVE, and `rm`/`mv` have their own switches.
 	if !env_flag(config, "PI_DISABLE_UUTILS_BUILTINS") {
 		let destructive_disabled = env_flag(config, "PI_DISABLE_UUTILS_DESTRUCTIVE");
@@ -850,9 +850,9 @@ async fn create_session_for_run(
 			let disabled = match name {
 				"rm" => rm_disabled,
 				"mv" => mv_disabled,
-				// cp overwrites existing files, ln can clobber them via -f; gate
-				// both with the destructive set.
-				"cp" | "ln" => destructive_disabled,
+				// cp and dd (`of=`) overwrite existing files, ln can clobber them
+				// via -f; gate them with the destructive set.
+				"cp" | "ln" | "dd" => destructive_disabled,
 				_ => false,
 			};
 			if !disabled {
@@ -4605,6 +4605,8 @@ mod tests {
 			"base64",
 			"basename",
 			"cat",
+			#[cfg(unix)]
+			"chmod",
 			"cksum",
 			"cmp",
 			"combine",
@@ -4612,15 +4614,22 @@ mod tests {
 			"cp",
 			"cut",
 			"date",
+			"dd",
+			"df",
 			"diff",
 			"dirname",
+			"du",
+			"env",
 			#[cfg(unix)]
 			"errno",
 			"fd",
 			"find",
+			"fold",
 			"grep",
 			"head",
 			"hostname",
+			#[cfg(unix)]
+			"id",
 			"ifne",
 			"isutf8",
 			"jq",
@@ -4630,13 +4639,16 @@ mod tests {
 			"mkdir",
 			"mktemp",
 			"mv",
+			"nl",
 			"nproc",
+			"od",
 			"paste",
 			"printenv",
 			"readlink",
 			"realpath",
 			"rg",
 			"rm",
+			"rmdir",
 			"sed",
 			"seq",
 			"sha1sum",
@@ -4656,6 +4668,7 @@ mod tests {
 			"ts",
 			"uname",
 			"uniq",
+			"uptime",
 			"wc",
 			"which",
 			"whoami",
@@ -6090,6 +6103,50 @@ mod tests {
 
 		assert_eq!(result.exit_code, Some(1));
 		assert!(output.contains("< a\n---\n> b\n"), "diff output missing changed lines: {output:?}");
+	}
+
+	/// Runs `command` on a dedicated single-worker runtime and fails after five
+	/// seconds. The deadline lives on the calling thread, so it still fires when
+	/// a builtin blocks the runtime's only worker.
+	#[cfg(unix)]
+	fn capture_on_single_worker(command: &'static str) -> (ShellExecuteResult, String) {
+		let (tx, rx) = std::sync::mpsc::channel();
+		std::thread::spawn(move || {
+			let runtime = tokio::runtime::Builder::new_multi_thread()
+				.worker_threads(1)
+				.enable_all()
+				.build()
+				.expect("single-worker runtime");
+			let _ = tx.send(runtime.block_on(run_command_capture(
+				command,
+				None,
+				None,
+				CancelToken::default(),
+			)));
+		});
+		rx.recv_timeout(Duration::from_secs(5))
+			.expect("read must not block its process-substitution producer")
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn read_process_substitution_assigns_line() {
+		let (result, output) =
+			capture_on_single_worker("read -r line < <(printf 'ok\\n'); printf '%s\\n' \"$line\"");
+
+		assert_eq!(result.exit_code, Some(0), "output: {output:?}");
+		assert_eq!(output, "ok\n");
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn read_process_substitution_delivers_lines_and_reaches_eof() {
+		let (result, output) = capture_on_single_worker(
+			"while IFS= read -r l; do export X=\"$l\"; done < <(printf 'v\\n'); printf '%s\\n' \"$X\"",
+		);
+
+		assert_eq!(result.exit_code, Some(0), "output: {output:?}");
+		assert_eq!(output, "v\n");
 	}
 
 	/// Builtins share the host process, so a descriptor path must reach the

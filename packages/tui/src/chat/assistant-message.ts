@@ -7,6 +7,7 @@ import {
 	Markdown,
 	type MarkdownTheme,
 	rewriteMarkdownLinkDestinations,
+	streamingMarkdownSource,
 } from "../components/markdown";
 import { Spacer } from "../components/spacer";
 import { Text } from "../components/text";
@@ -17,9 +18,9 @@ import type { AssistantThinkingRenderer } from "./extension-types";
 import { ensureThemeSync, getMarkdownTheme, getMarkdownThemeWithLinkTargets, getThemeEpoch, theme } from "../theme";
 import { card, col, elapsed, node, span, text } from "../native/describe";
 import { hasTranscriptActions, runTranscriptAction } from "./transcript-actions";
-import type { NativeChild, NativeNode, NativeUiEvent } from "../native/node";
+import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { isNativeRendering } from "../native/state";
-import { NativeImageCache } from "../native/blobs";
+import { NativeImageCache, nativeMediaNode } from "../native/blobs";
 import { Memo } from "../native/memo";
 import { EMPTY_LINK_TARGETS, resolveImageOptions } from "../render/render-utils";
 import { WidthAwareText } from "../render";
@@ -110,6 +111,14 @@ interface StableRenderInputs {
 	readonly markdown: MarkdownTheme;
 	readonly color: ((text: string) => string) | undefined;
 }
+
+/**
+ * A partial last thinking line the prose fold may still drop: the start of a
+ * fence marker (`` ` ``, `~`) or of an empty `<!-- -->` sentinel. Once it turns
+ * into either, the fold's ellipsis lands back on the line above it
+ * (`formatThinkingForDisplay`), so that line is not yet settled.
+ */
+const UNSETTLED_THINKING_TAIL = /(?:^|\n)[^\S\n]*(?:`{1,2}|~{1,2}|<(?:!(?:-(?:-[^\S\n]*-{0,2})?)?)?)[^\S\n]*$/;
 
 function isSnapshotExtension(previous: readonly StablePart[], current: readonly StablePart[]): boolean {
 	if (previous.length > current.length) return false;
@@ -250,6 +259,8 @@ export class AssistantMessageComponent extends Container {
 	#lastMessage?: AssistantMessage;
 	#emergencyText?: ProseBlock;
 	#toolImagesByCallId = new Map<string, ImageContent[]>();
+	/** File each grouped read showed that Tern's media viewer shows, for native `media` nodes. */
+	#toolMediaPathByCallId = new Map<string, string>();
 	/**
 	 * Payload keys ({@link imagePayloadKey}) whose Kitty PNG conversion this
 	 * component is awaiting, so a re-delivered image neither re-encodes nor
@@ -798,7 +809,8 @@ export class AssistantMessageComponent extends Container {
 	 * head's `title`. With `hideThinkingBlock` only the live head shows (collapsed)
 	 * and a finished thought emits nothing.
 	 */
-	override describe(): NativeNode {
+	override describe(cx?: DescribeContext): NativeNode {
+		const media = cx?.supports("media") === true;
 		const tail = this.#displayedMessage ? this.#thinkingTailIndex(this.#displayedMessage) : undefined;
 		const rate =
 			tail !== undefined && this.#lastUpdateTransient && this.#thinkingRateLive
@@ -813,9 +825,10 @@ export class AssistantMessageComponent extends Container {
 			this.#errorExpanded,
 			this.#nativeViewVersion,
 			rate,
+			media,
 			getThemeEpoch(),
 		];
-		return this.#native.get(key, () => this.#describeMessage(tail, rate));
+		return this.#native.get(key, () => this.#describeMessage(tail, rate, media));
 	}
 
 	/**
@@ -841,7 +854,7 @@ export class AssistantMessageComponent extends Container {
 		this.#nativeViewVersion++;
 	}
 
-	#describeMessage(thinkingTail: number | undefined, rate: number): NativeNode {
+	#describeMessage(thinkingTail: number | undefined, rate: number, media: boolean): NativeNode {
 		const message = this.#displayedMessage;
 		const previousParts = this.#nativeParts;
 		const parts = new Map<string, { text: string; stream: boolean; node: NativeNode }>();
@@ -962,7 +975,17 @@ export class AssistantMessageComponent extends Container {
 				}
 			}
 			if (this.#showImages && this.#showToolResultImages) {
+				// Reads of files Tern's media viewer shows: the host loads each file once by path, no bytes uploaded.
+				const shownPaths = new Set<string>();
+				if (media) {
+					for (const [toolCallId, mediaPath] of this.#toolMediaPathByCallId) {
+						if (shownPaths.has(mediaPath)) continue;
+						shownPaths.add(mediaPath);
+						children.push(nativeMediaNode(mediaPath, `r${toolCallId}`));
+					}
+				}
 				for (const [toolCallId, images] of this.#toolImagesByCallId) {
+					if (media && this.#toolMediaPathByCallId.has(toolCallId)) continue;
 					images.forEach((image, index) => {
 						children.push(this.#nativeImages.get(`r${toolCallId}:${index}`, image.data, image.mimeType));
 					});
@@ -1226,17 +1249,23 @@ export class AssistantMessageComponent extends Container {
 					// Streaming child: publish Markdown's frozen prefix, and only
 					// once non-blank content exists past it — the block's last
 					// non-blank line is still being written (thinking's prose fold
-					// may rewrite it) and must stay out of published bytes.
+					// may rewrite it) and must stay out of published bytes. A
+					// partial thinking line the fold may still drop does not count.
+					// The frozen prefix is in streamingMarkdownSource form, so
+					// offsets into the block use that form too.
 					const raw = md.getLastRenderStableText();
 					const frozen = raw.trim();
-					if (frozen.length > 0 && /\S/.test(item.lastText.slice(raw.length))) {
+					let past = streamingMarkdownSource(item.lastText).slice(raw.length);
+					if (item.blockType === "thinking") past = past.replace(UNSETTLED_THINKING_TAIL, "");
+					if (frozen.length > 0 && /\S/.test(past)) {
 						parts.push({ kind: item.blockType, text: frozen });
 					}
 					break;
 				}
 				// Closed child: only the streaming tail may mutate in place, so
-				// everything before it is final.
-				parts.push({ kind: item.blockType, text: item.lastText });
+				// everything before it is final. Same form as the frozen prefix it
+				// published while streaming, so the snapshot still extends.
+				parts.push({ kind: item.blockType, text: streamingMarkdownSource(item.lastText) });
 				itemIndex++;
 				continue;
 			}
@@ -1521,8 +1550,15 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
-	setToolResultImages(toolCallId: string, images: ImageContent[]): void {
+	/**
+	 * A grouped read's result images, and `mediaPath`: the file it read that Tern's media viewer
+	 * shows (read details), which a native host supporting `media` shows by path instead of the
+	 * images. A media-only result (a model, a PDF) passes no images.
+	 */
+	setToolResultImages(toolCallId: string, images: ImageContent[], mediaPath?: string): void {
 		if (!toolCallId) return;
+		if (mediaPath) this.#toolMediaPathByCallId.set(toolCallId, mediaPath);
+		else this.#toolMediaPathByCallId.delete(toolCallId);
 		const validImages = images.filter(img => img.type === "image" && img.data && img.mimeType);
 		if (validImages.length === 0) {
 			this.#toolImagesByCallId.delete(toolCallId);

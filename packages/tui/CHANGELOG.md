@@ -2,6 +2,83 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a tree layout to the background jobs sheet: subagents' jobs nest under the task job that runs them, busiest branches first, and Cancel appears only on the viewing agent's own jobs ([#15854](https://github.com/can1357/oh-my-pi/pull/15854) by [@H4vC](https://github.com/H4vC))
+
+### Fixed
+
+- Fixed malformed base64 padding being accepted for chat image attachments before native image decoding ([#15765](https://github.com/can1357/oh-my-pi/pull/15765) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+- Long lines in native (Tern) `read`, `write`, and code-cell source now wrap instead of scrolling each block sideways ([#15823](https://github.com/can1357/oh-my-pi/issues/15823)).
+- Fixed long text pastes taking seconds to land in terminals that deliver a paste one key at a time, such as JetBrains' terminal on Windows; omp no longer writes to the terminal for every pasted key ([#15757](https://github.com/can1357/oh-my-pi/issues/15757))
+- Fixed Shift+Enter submitting the prompt and Ctrl+Enter inserting a newline in WSL under Windows Terminal 1.24 and earlier, conhost, and other ConPTY hosts without kitty keyboard support; Shift+Enter now inserts a newline and Ctrl+Enter sends a follow-up, as on native Windows.
+
+## [18.11.0] - 2026-10-14
+
+### Added
+
+- Added native composer microphone controls with visible starting, recording and transcription states; a start still loading its model can be cancelled, and Enter and Send wait while dictation is recording or transcribing into the draft ([#15759](https://github.com/can1357/oh-my-pi/pull/15759) by [@daaximus](https://github.com/daaximus)).
+- `ApprovalDialogComponent` takes a `draft` option that routes typing to the composer beneath it, so a message can be written while a tool call waits ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+- `ApprovalDialogComponent` takes a `fullPrompt` option that the expand key (`app.tools.expand`) or a Details button swaps in for the summarized prompt; it replaces `wrapDetails` ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+
+### Fixed
+
+- SVG fences in CRLF or CR-only assistant Markdown now render as figures instead of source code ([#15663](https://github.com/can1357/oh-my-pi/issues/15663)).
+- Fixed clipboard-image and image-path pastes being dropped while the composer draft is edited beneath an ask or approval dialog ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+- Fixed inline images inside tmux assuming Kitty graphics from the pane's `TERM`; the attached client is identified from tmux's terminal-type reply or its `TERM` (e.g. `xterm-kitty`), and unrecognized clients go to the SIXEL probe ([#15524](https://github.com/can1357/oh-my-pi/issues/15524)).
+- Fixed ```svg fences rendering as their source code instead of a drawing when no theme was installed yet, e.g. in an extension rendering a message that opens with the fence ([#15660](https://github.com/can1357/oh-my-pi/issues/15660))
+- Fixed pastes inside tmux 3.5a and older submitting line by line after another program turned bracketed paste off on the pane; omp now re-enables it on the next render or keypress ([#15596](https://github.com/can1357/oh-my-pi/issues/15596))
+- Fixed assistant replies containing a table (on image-capable terminals with table charts on) publishing still-streaming rows to native scrollback, which froze the block's append-only retirement and could leave overwritten reply rows in scrollback ([#15693](https://github.com/can1357/oh-my-pi/issues/15693))
+- Fixed streamed thinking publishing a line to native scrollback just before a code fence or `<!-- -->` sentinel split across deltas rewrote it with the prose-fold ellipsis ([#15693](https://github.com/can1357/oh-my-pi/issues/15693))
+- Fixed streamed assistant text or thinking containing a tab stopping all later rows of the reply from retiring into native scrollback until the turn ended ([#15693](https://github.com/can1357/oh-my-pi/issues/15693))
+- Fixed wrapped lines in Write, Read, Edit, Todo, Ask and LSP tool cards losing their alignment under line numbers, tree connectors, and option or code rails ([#15677](https://github.com/can1357/oh-my-pi/issues/15677))
+- Fixed SIXEL images leaving their previous raster on screen, drawn again over itself, when the transcript moves them within the viewport ([#15657](https://github.com/can1357/oh-my-pi/issues/15657))
+
+## [18.10.4] - 2026-10-13
+
+### Added
+
+- Added `ApprovalDialogComponent` and the `app.approval.approve` keybinding (default `Ctrl+Enter`, `Ctrl+Q`) ([#15548](https://github.com/can1357/oh-my-pi/pull/15548) by [@H4vC](https://github.com/H4vC))
+- Plan review overlay can take a remote answer: it shows the remotely chosen execution tier and locks further input like a terminal approval ([#15552](https://github.com/can1357/oh-my-pi/pull/15552) by [@Shadorain](https://github.com/Shadorain))
+
+### Fixed
+
+- The model browser shows the price a model is billed at now, not the one current when its row was loaded: DeepSeek V4 Pro shows its $0.30 / $1.20 card in effect since 2026-09-14 instead of $1.32 / $3.96, and Gemini 4 Argon switches to $4 / $20 on 2026-12-01 ([#15620](https://github.com/can1357/oh-my-pi/pull/15620) by [@eggpeat](https://github.com/eggpeat))
+- Clicking Copy answer in the `/btw` history (and Copy raw in the raw SSE viewer) on native terminals copies the answer instead of the button's label ([#15547](https://github.com/can1357/oh-my-pi/pull/15547) by [@H4vC](https://github.com/H4vC))
+- Fixed image previews inside tmux showing as `SIXEL IMAGE (WxH)` placeholder text when the outer terminal lacks SIXEL; SIXEL is now enabled from tmux's DA1 reply only when tmux's terminal description for the attached client has `Sxl` ([#15513](https://github.com/can1357/oh-my-pi/issues/15513))
+
+### Removed
+
+- Removed `tools/eval-format/code-mode-declarations` (`generateCodeModeDeclarations`), which only served Codex Code Mode.
+
+## [18.10.3] - 2026-10-12
+
+### Changed
+
+- Updated model picker to offer manual effort selection for unverified models instead of automatic mode
+
+### Fixed
+
+- Fixed the `snapcompact.shape` settings preview labelling variants `5x8-sent` and repeating the first variant's sample when the frame edge differs from the variant table (Claude and GPT on Cursor; `auto` on high-resolution Claude) ([#15448](https://github.com/can1357/oh-my-pi/pull/15448) by [@will-bogusz](https://github.com/will-bogusz))
+
+## [18.10.2] - 2026-10-12
+
+### Added
+
+- Added opt-in `/tree` branch navigation across visible branches and nested fork depths; bind `app.tree.previousBranch` / `app.tree.nextBranch` (e.g. to `Shift+Left` / `Shift+Right`) in `keybindings.yml` ([#12623](https://github.com/can1357/oh-my-pi/pull/12623) by [@azain47](https://github.com/azain47)).
+
+### Changed
+
+- The `wait` tool's native job rows (`omp.wait.job`) are a single `row`: badge, id and label, progress and clock, without the output preview or capture notice beneath
+- The native bash run foot reads In background with a live clock (`omp.run.time` without `stopped`) while a parked job's frames stream (`details.async.state === "running"`, partial), instead of Running
+- Native model pickers (/model, the quick switch and the advisor's) mark providers with their logo (`mark.icon: "provider:<id>"`, initials where the terminal has none), and every model row leads with its provider's mark
+
+### Removed
+
+- Removed the unused `app.tree.foldOrUp` / `app.tree.unfoldOrDown` keybinding ids, which no longer did anything.
+- Added `parksAsBackground(toolName, details)`, `asyncJobState(details)`, `isSettledJobFrame(details)` and `settleWithJobFrame(component, frame, toolCallId)` (`chat/tool-execution`): whether a returned call's card stays live for its background job's frames (`task` always; `bash` and `eval` under native rendering), the job state a frame reports, and settling the card with the job's last frame (a cancelled job keeps its output and seals as cancelled)
+- `BashToolDetails.async.state` and `EvalToolDetails.async.state` gain `cancelled` for a job killed before it finished
+
 ## [18.10.1] - 2026-10-12
 
 ### Added
@@ -2613,194 +2690,4 @@
 
 - Fixed terminal scrolling when displaying overlays after rendering large content, preventing hundreds of blank lines from being output
 
-## [11.3.0] - 2026-02-06
-
-### Breaking Changes
-
-- Removed `getCursorPosition()` method from Component interface and implementations, eliminating hardware cursor positioning support
-
-### Added
-
-- Added sticky column behavior for vertical cursor movement, preserving target column when navigating through lines of varying lengths
-- Added `drainInput()` method to Terminal interface to prevent Kitty key release events from leaking to parent shell over slow SSH connections
-- Added `setClearOnShrink()` method to control whether full re-render occurs when content shrinks below working area
-- Added support for hidden paths (e.g., `.pi`, `.github`) in autocomplete while excluding `.git` directories
-
-### Changed
-
-- Changed default value of `PI_HARDWARE_CURSOR` environment variable from implicit true to explicit `"1"` for clarity
-- Changed default value of `PI_CLEAR_ON_SHRINK` environment variable from implicit false to explicit `"0"` for clarity
-- Changed TUI to clear screen on startup to prevent shell prompts and status messages from bleeding into the first rendered frame
-- Refactored full-render logic into reusable helper function to reduce code duplication across multiple render paths
-- Changed autocomplete to include hidden paths but filter out `.git` and its contents
-- Changed Input component to properly handle surrogate pairs in Unicode text, preventing cursor display corruption with emoji and multi-byte characters
-- Changed Editor to use `setCursorCol()` for all cursor column updates, enabling sticky column tracking
-- Changed Editor's vertical navigation to implement sticky column logic via `moveToVisualLine()` and `computeVerticalMoveColumn()`
-- Changed Editor's Enter key handling to extract submit logic into `submitValue()` method for better code organization
-- Changed SettingsList to truncate long lines to viewport width, preventing text overflow
-- Changed Terminal's `stop()` method to drain stdin before restoring raw mode, fixing race condition where Ctrl+D could close parent shell over SSH
-- Changed TUI rendering to add `clearOnShrink` option (controlled by `PI_CLEAR_ON_SHRINK` env var) for reducing redraws on slower terminals
-- Changed TUI rendering to detect when extra lines exceed viewport height and trigger full re-render instead of incremental updates
-
-### Fixed
-
-- Fixed rendering of extra blank lines when content shrinks by improving cursor positioning logic during line deletion
-- Fixed cursor display position in Input component when scrolling horizontally through long text
-- Fixed Kitty keyboard protocol disable sequence to use safe write method, preventing potential output buffering issues
-- Fixed unnecessary full-screen redraws when changes occur in out-of-view components (e.g., spinners), reducing terminal scroll events and improving performance on slower connections
-- Fixed scrollback clearing behavior to only clear screen instead of scrollback when resizing or shrinking content, preventing loss of terminal history
-- Fixed `.git` directory appearing in autocomplete suggestions when filtering by prefix
-- Fixed cursor position corruption in Input component when displaying text with emoji and combining characters
-- Fixed `.git` directory appearing in autocomplete suggestions
-- Fixed race condition where Kitty key release events could leak to parent shell after TUI exit over slow SSH connections
-- Fixed Editor's word movement (Ctrl+Left/Right) to properly reset sticky column for subsequent vertical navigation
-- Fixed Editor's undo operation to reset sticky column state when restoring cursor position
-- Fixed Editor's right arrow key at end of last line to set sticky column for subsequent up/down navigation
-- Fixed TUI rendering to correctly detect viewport changes and avoid false full-redraws after content shrinks
-- Fixed Kitty protocol key parsing to prefer codepoint over base layout for Latin letters and symbols, fixing keyboard layout issues (e.g., Dvorak)
-
-## [11.0.0] - 2026-02-05
-
-### Added
-
-- Introduced `terminal-capabilities.ts` module consolidating terminal detection and image protocol support
-- Added `TerminalInfo` class with methods for detecting image lines and formatting notifications
-- Added `NotifyProtocol` enum supporting Bell, OSC 99, and OSC 9 notification protocols
-- Added `isNotificationSuppressed()` function to check `OMP_NOTIFICATIONS` environment variable
-- Added `TERMINAL` constant providing detected terminal capabilities at runtime
-
-### Changed
-
-- Changed notification suppression environment variable from `OMP_NOTIFICATIONS` to `PI_NOTIFICATIONS`
-- Changed TUI write log environment variable from `OMP_TUI_WRITE_LOG` to `PI_TUI_WRITE_LOG`
-- Changed hardware cursor environment variable from `OMP_HARDWARE_CURSOR` to `PI_HARDWARE_CURSOR`
-- Updated environment variable access to use `getEnv()` utility function from `@oh-my-pi/pi-utils` for consistent handling
-- Renamed `TERMINAL_INFO` export to `TERMINAL` for clearer API semantics
-- Reorganized terminal image exports from `terminal-image` to `terminal-capabilities` module
-- Updated all internal references to use `TERMINAL` instead of `TERMINAL_INFO`
-
-### Removed
-
-- Removed `terminal-image` module exports from public API (functionality migrated to `terminal-capabilities`)
-
-## [10.5.0] - 2026-02-04
-
-### Fixed
-
-- Treated inline image lines with cursor-move prefixes as image sequences to prevent width overflow crashes
-
-## [9.8.0] - 2026-02-01
-
-### Changed
-
-- Moved `wrapTextWithAnsi` export to `@oh-my-pi/pi-natives` package
-
-### Fixed
-
-- Improved Kitty terminal key sequence parsing to correctly handle text field codepoints in CSI-u sequences
-- Fixed handling of private use Unicode codepoints (U+E000 to U+F8FF) in Kitty key decoding to prevent invalid character interpretation
-
-## [9.7.0] - 2026-02-01
-
-### Breaking Changes
-
-- Removed `Key` helper object from public API; use string literals like `"ctrl+c"` instead of `Key.ctrl("c")`
-- Removed `KeyEventType` export from public API
-
-### Changed
-
-- Migrated key parsing and matching logic to native implementation for improved performance
-- Simplified `isKeyRelease()` and `isKeyRepeat()` to use regex pattern matching instead of string inclusion checks
-
-## [9.6.2] - 2026-02-01
-
-### Changed
-
-- Renamed `EllipsisKind` enum to `Ellipsis` for clearer API naming
-- Changed hardcoded ellipsis character from theme-configurable to literal "…" in editor truncation
-- Refactored `visibleWidth` function to use caching wrapper around new `visibleWidthRaw` implementation for improved performance
-
-### Removed
-
-- Removed `truncateToWidth`, `sliceWithWidth`, and `extractSegments` functions from public API (now re-exported directly from @oh-my-pi/pi-natives)
-- Removed `ellipsis` property from `SymbolTheme` interface
-- Removed `extractAnsiCode` function from public API
-
-## [9.6.1] - 2026-02-01
-
-### Changed
-
-- Improved performance of key ID parsing with optimized cache lookup strategy
-- Simplified `visibleWidth` calculation to use consistent Bun.stringWidth approach for all string lengths
-
-### Removed
-
-- Removed `visibleWidth` benchmark file in favor of Kitty sequence benchmarking
-
-## [9.5.0] - 2026-02-01
-
-### Changed
-
-- Improved fuzzy file search performance by using native implementation instead of spawning external process
-- Replaced external `fd` binary with native fuzzy path search for `@`-prefixed autocomplete
-
-## [9.4.0] - 2026-01-31
-
-### Added
-
-- Exported `padding` utility function for creating space-padded strings efficiently
-
-### Changed
-
-- Optimized padding operations across all components to use pre-allocated space buffer for better performance
-
-## [9.2.2] - 2026-01-31
-
-### Added
-
-- Added setAutocompleteMaxVisible() configuration (3-20 items)
-- Added image detection to terminal capabilities (containsImage method)
-- Added stdin monitoring to detect stalled input events and log warnings
-
-### Changed
-
-- Improved blockquote rendering with text wrapping in Markdown component
-- Restructured terminal capabilities from interface-based to class-based model
-- Improved table column width calculation with word-aware wrapping
-- Refactored text utilities to use native WASM implementations for strings >256 chars with JS fast path
-
-### Fixed
-
-- Simplified terminal write error handling to mark terminal as dead on any write failure
-- Fixed multi-line strings in renderOutputBlock causing width overflow
-- Fixed slash command autocomplete applying stale completion when typing quickly
-
-### Removed
-
-- Removed TUI layout engine exports from public API (BoxNode, ColumnNode, LayoutNode, etc.)
-
-## [8.12.7] - 2026-01-29
-
-### Fixed
-
-- Fixed slash command autocomplete applying stale completion when typing quickly
-
-## [8.4.1] - 2026-01-25
-
-### Added
-
-- Added fuzzy match function for autocomplete suggestions
-
-## [8.4.0] - 2026-01-25
-
-### Changed
-
-- Added Ctrl+Backspace as a delete-word-backward keybinding and improved modified backspace matching
-
-### Fixed
-
-- Terminal gracefully handles write failures by marking dead instead of exiting the process
-- Reserved cursor space for zero padding and corrected end-of-line cursor rendering to prevent wrap glitches
-- Corrected editor end-of-line cursor rendering assertion to use includes() instead of endsWith()
-
-Older entries are archived in [packages/tui/CHANGELOG.md@89ad0a77d575](https://github.com/can1357/oh-my-pi/blob/89ad0a77d575f01398d3c0a57bc3a22111bef36a/packages/tui/CHANGELOG.md).
+Older entries are archived in [packages/tui/CHANGELOG.md@a66558815743](https://github.com/can1357/oh-my-pi/blob/a66558815743a61164ceebceb2bb528989fb09b3/packages/tui/CHANGELOG.md).

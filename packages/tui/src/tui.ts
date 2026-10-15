@@ -31,6 +31,7 @@ import type { DescribeContext, NativeNode, NativeScreen, NativeSurfaceProvider, 
 import { STDOUT_BACKLOG_CLEAR_BYTES, setAltScreenActive, type Terminal } from "./terminal";
 import { classifyTerminalMultiplexerModule, terminalMultiplexerSessions } from "./terminal-multiplexer";
 import {
+	directPlacementLift,
 	encodeKittyDeleteAllImages,
 	encodeKittyDeleteImage,
 	encodeKittyDeletePlacement,
@@ -46,6 +47,7 @@ import {
 	TERMINAL,
 } from "./terminal-capabilities";
 import { compositeLineAt } from "./render/composite";
+import { tmuxMultiplexer } from "./multiplexers/tmux";
 import {
 	Ellipsis,
 	getWidthConfigEpoch,
@@ -56,6 +58,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "./utils";
+import { tmuxClientRendersSixel } from "./tmux";
 
 /** Full-attribute reset terminating each rendered content row. */
 export const SEGMENT_RESET = "\x1b[0m";
@@ -1527,6 +1530,9 @@ export class TUI extends Container {
 		this.terminal.onSixelSupport?.(supported => {
 			if (!supported || this.#stopped || this.#nativeLive || this.terminal.tspExpected) return;
 			if (isImageProtocolForced()) return;
+			// tmux answers DA1 for its own emulator; only its record of the
+			// attached client says whether SIXEL reaches the outer terminal.
+			if (tmuxMultiplexer.isInside() && !tmuxClientRendersSixel()) return;
 			// Keep consuming an already-requested XTSMGRAPHICS reply until it
 			// arrives or times out, even though DA1 has established support.
 			this.#enableSixelProtocol();
@@ -3200,7 +3206,12 @@ export class TUI extends Container {
 		return output;
 	}
 
-	/** Clip a direct placement and record its live owner; history placements have no mutable owner. */
+	/**
+	 * Clip a Kitty direct placement and record its live owner; history
+	 * placements have no mutable owner. Other direct placements (SIXEL,
+	 * iTerm2) have no delete command and composite over whatever pixels they
+	 * land on, so the rows they paint above `screenRow` are erased first.
+	 */
 	#imageLineSequence(
 		line: string,
 		screenRow: number,
@@ -3209,7 +3220,10 @@ export class TUI extends Container {
 	): string {
 		if (screenRow < 0) return line;
 		const parsed = parseKittyDirectPlacementLine(line);
-		if (!parsed) return line;
+		if (!parsed) {
+			const lift = Math.min(directPlacementLift(line), screenRow);
+			return lift > 0 ? `\x1b[${lift}A${`${ERASE_LINE}\x1b[B`.repeat(lift)}${line}` : line;
+		}
 		const previous = placements?.get(placementRow);
 		const placementId = previous?.placementId ?? this.#nextImagePlacementId++;
 		const erase = previous ? encodeKittyDeletePlacement(previous.imageId, previous.placementId) : "";
