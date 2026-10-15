@@ -60,6 +60,30 @@ describe("read tool raw range exactness", () => {
 		expect(output.trimEnd()).toBe("L01\nL02");
 	});
 
+	it("returns only a closed raw range from a newline-terminated file and counts its lines", async () => {
+		const lines = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`);
+		await Bun.write(filePath, `${lines.join("\n")}\n`);
+
+		const result = await tool.execute("closed-raw-range", { path: `${filePath}:raw:5-8` });
+		expect(getTextOutput(result)).toBe(lines.slice(4, 8).join("\n"));
+		expect(result.details?.totalLines).toBe(40);
+
+		const last = await tool.execute("last-raw-line", { path: `${filePath}:raw:-1` });
+		expect(getTextOutput(last)).toBe("line 40");
+
+		const open = await tool.execute("open-raw-range", { path: `${filePath}:raw:40-` });
+		expect(getTextOutput(open)).toBe("line 40\n");
+		expect(open.details?.totalLines).toBe(40);
+	});
+
+	it("returns a closed raw range without a paging footer when the file is streamed", async () => {
+		const streamedFile = path.join(testDir, "large.txt");
+		await Bun.write(streamedFile, `${"x".repeat(4 * 1024 * 1024)}\nline 2\nline 3\nline 4\n`);
+
+		const result = await tool.execute("streamed-raw-range", { path: `${streamedFile}:raw:2-3` });
+		expect(getTextOutput(result)).toBe("line 2\nline 3");
+	});
+
 	it("records the source line count for an open-ended range that reaches EOF", async () => {
 		const result = await tool.execute("call-raw-tail", { path: `${filePath}:raw:31-` });
 

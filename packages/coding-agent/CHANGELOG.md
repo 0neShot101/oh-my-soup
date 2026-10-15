@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Closed `read :raw` line ranges now return only the requested content, and newline-terminated files report their actual line count ([#15810](https://github.com/can1357/oh-my-pi/issues/15810)).
+
 ## [18.11.0] - 2026-10-14
 
 ### Added
