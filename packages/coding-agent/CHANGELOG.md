@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Fixed native image judgments accepting malformed image encodings on cache hits ([#15471](https://github.com/can1357/oh-my-pi/pull/15471) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
 - Fixed image attachments with uppercase MIME types being dropped; supported image MIME types are now matched case-insensitively ([#15765](https://github.com/can1357/oh-my-pi/pull/15765) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy))
 
 ## [18.11.0] - 2026-10-14

@@ -151,6 +151,8 @@ Judgment requests can share image attachments with vision-chat requests. Native 
 
 OpenAI Decisions forwards embedded `ImageContent.detail` when supplied. Native image-judgment cache identities include the effective detail: different fidelity settings have separate cached answers, while omitted detail and explicit `auto` share the default setting.
 
+Native image judgments validate embedded images before cache lookup, even when all answers are cached. Valid padded and unpadded base64 representations still share a decoded-byte cache identity.
+
 After image-capability filtering, the same native-only tail policy used for text judgments applies: a failed native judge may fall through to another compatible native, never to a prompted chat model. When no compatible native remains, eligible prompted candidates and a vision-capable session-model fallback remain available.
 
 For example, configure the judge role and attach an image in JavaScript or Python:

@@ -20,6 +20,8 @@ import type { Database, Statement } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Answer, JudgmentRequest, JudgmentResult, Question, Questions } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
+import { isEmbeddedImageContent } from "@oh-my-pi/pi-ai/images/shared";
 import {
 	checkpointWal,
 	getJudgmentCacheDbPath,
@@ -96,11 +98,16 @@ function cacheStateIdentity(request: JudgmentRequest): string {
 	const state = stableStringifyJson(request.state);
 	if (!request.images?.length) return state;
 
-	const images = request.images.map(image => ({
-		mimeType: image.mimeType,
-		digest: new Bun.CryptoHasher("sha256").update(Buffer.from(image.data, "base64")).digest("hex"),
-		detail: image.detail ?? "auto",
-	}));
+	const images = request.images.map(image => {
+		if (!isEmbeddedImageContent(image)) {
+			throw new AIError.ValidationError("Judgment cache images must be valid embedded image content");
+		}
+		return {
+			mimeType: image.mimeType,
+			digest: new Bun.CryptoHasher("sha256").update(Buffer.from(image.data, "base64")).digest("hex"),
+			detail: image.detail ?? "auto",
+		};
+	});
 	return `multimodal-judgment-cache-v1:${stableStringifyJson({ state, images })}`;
 }
 
@@ -169,7 +176,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
 
 	/**
 	 * Answers already recorded for `request`'s questions under `model`. Best-effort:
-	 * a database failure is logged and reported as no cached answers.
+	 * a database failure is logged and reported as no cached answers. Invalid image
+	 * input is rejected before the best-effort database lookup.
 	 */
 	lookup(model: string, request: JudgmentRequest): CachedAnswers {
 		const state = cacheStateIdentity(request);

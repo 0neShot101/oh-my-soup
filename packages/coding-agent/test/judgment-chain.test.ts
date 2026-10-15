@@ -835,6 +835,49 @@ describe("ChainJudge", () => {
 		}
 	});
 
+	it("rejects malformed image aliases before serving native cached answers", async () => {
+		using tempDir = TempDir.createSync("@omp-judgment-image-cache-validation-");
+		const cache = JudgmentCache.open(path.join(tempDir.path(), "judgment-cache.db"));
+		try {
+			const settings = Settings.isolated({
+				modelRoles: { judge: `${OPENAI_DECISIONS.provider}/${OPENAI_DECISIONS.id}` },
+			});
+			const registry = makeRegistry([OPENAI_DECISIONS], { [OPENAI_DECISIONS.provider]: "openai-key" });
+			const questions = { visible: { type: "noul" as const, instructions: "Is an object visible?" } };
+			const request = { state: "same", questions, images: [IMAGE_TWO] };
+			let calls = 0;
+			vi.spyOn(globalThis, "fetch").mockImplementation(
+				asGlobalFetch(async () => {
+					calls++;
+					return Response.json({
+						model: "gpt-6-luna",
+						answers: [{ type: "predicate", name: "visible", probability: 0.75 }],
+						usage: { input_tokens: 8, output_tokens: 0 },
+					});
+				}),
+			);
+			const judge = new ChainJudge({ settings, registry, purpose: "test", cache });
+
+			const cached = await judge.judge(request);
+			expect(cached.answers.visible).toEqual({ type: "noul", noul: 0.75 });
+			expect(calls).toBe(1);
+
+			await expect(
+				judge.judge({ ...request, images: [{ ...IMAGE_TWO, data: `${IMAGE_TWO.data}=` }] }),
+			).rejects.toThrow();
+			expect(calls).toBe(1);
+
+			const unpadded = await judge.judge({
+				...request,
+				images: [{ ...IMAGE_TWO, data: IMAGE_TWO.data.replace(/=+$/, "") }],
+			});
+			expect(unpadded.answers.visible).toEqual(cached.answers.visible);
+			expect(calls).toBe(1);
+		} finally {
+			cache.close();
+		}
+	});
+
 	it("bills a chat-backed judgment once per completion attempt on the ledger and in telemetry", async () => {
 		const settings = Settings.isolated({ modelRoles: { judge: `${ONLINE.provider}/${ONLINE.id}` } });
 		const registry = makeRegistry([ONLINE], { [ONLINE.provider]: "online-key" });
