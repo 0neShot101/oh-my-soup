@@ -64,9 +64,6 @@ Argument handling:
 - `--` ends flag parsing; everything after it is literal message text, even if it
   looks like a flag.
 
-Embedded image attachments accept supported MIME types case-insensitively; for example, `IMAGE/PNG` is normalized to
-`image/png` before loading. Image-data validation and supported-format restrictions still apply.
-
 ### Launch flags
 
 #### Session and workspace

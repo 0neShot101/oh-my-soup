@@ -1,5 +1,5 @@
 import type { FetchImpl, Model, Usage } from "@oh-my-pi/pi-catalog/types";
-import { isRecord, parseImageMetadata, USER_AGENT } from "@oh-my-pi/pi-utils";
+import { base64ImageDataFailureReason, isRecord, parseImageMetadata, USER_AGENT } from "@oh-my-pi/pi-utils";
 import type { ApiKey } from "../auth-retry";
 import { withAuth } from "../auth-retry";
 import * as AIError from "../error";
@@ -187,7 +187,8 @@ export function sniffBase64ImageMimeType(base64: string): string | undefined {
 
 /**
  * Validate provider-bound image input without changing it. Accepts non-empty standard base64
- * with canonical trailing bits and optional padding, and case-insensitive image MIME syntax.
+ * with canonical trailing bits and optional padding, and case-insensitive image MIME syntax
+ * (RFC 6838 restricted names, except `#`, which data URLs cannot carry intact).
  * Does not sniff the MIME type, decode image pixels, or enforce provider-specific format support.
  *
  * @throws {AIError.ValidationError} If the base64 data or image MIME type is invalid.
@@ -203,53 +204,12 @@ export function validateImageInput(image: ImageInput): void {
 
 export function toDataUrl(image: ImageInput): string {
 	validateImageInput(image);
-	return `data:${image.mimeType.replace(/#/g, "%23")};base64,${image.data}`;
+	return `data:${image.mimeType};base64,${image.data}`;
 }
 
-/**
- * Non-empty decoded bytes on success, or a validation failure reason, never both.
- * Check `reason` before using `bytes`; successful base64 decoding does not establish
- * that the bytes represent a supported or decodable image.
- */
-export type Base64ImageDecodeResult =
-	| { bytes: Buffer; reason?: never }
-	| { bytes?: never; reason: "invalid base64 image data" | "empty image data" };
-
-const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-function base64ImageDataFailureReason(data: string): "invalid base64 image data" | "empty image data" | undefined {
-	if (data.length === 0) return "empty image data";
-
-	const match = /^([A-Za-z0-9+/]+)(={0,2})$/.exec(data);
-	if (!match) return "invalid base64 image data";
-	const encoded = match[1];
-	const paddingLength = match[2].length;
-	const remainder = encoded.length % 4;
-	if (
-		(remainder === 1 && paddingLength === 0) ||
-		(paddingLength === 1 && remainder !== 3) ||
-		(paddingLength === 2 && remainder !== 2)
-	) {
-		return "invalid base64 image data";
-	}
-
-	const lastSextet = BASE64_ALPHABET.indexOf(encoded[encoded.length - 1]);
-	if ((remainder === 2 && (lastSextet & 0b1111) !== 0) || (remainder === 3 && (lastSextet & 0b11) !== 0)) {
-		return "invalid base64 image data";
-	}
-	return undefined;
-}
-
-/** Decode standard base64 image data, accepting omitted padding but only canonical trailing bits. */
-export function decodeBase64ImageData(data: string): Base64ImageDecodeResult {
-	const reason = base64ImageDataFailureReason(data);
-	if (reason) return { reason };
-
-	const bytes = Buffer.from(data, "base64");
-	return bytes.length > 0 ? { bytes } : { reason: "empty image data" };
-}
-
-const IMAGE_MIME_TYPE = /^image\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$/i;
+// RFC 6838 restricted-name, minus `#`: a raw `#` starts a URL fragment and data-URL
+// consumers leave a `%23` escape undecoded, so no data-URL transport preserves it.
+const IMAGE_MIME_TYPE = /^image\/[A-Za-z0-9][A-Za-z0-9!$&^_.+-]{0,126}$/i;
 
 function isImageMimeType(value: unknown): value is string {
 	return typeof value === "string" && IMAGE_MIME_TYPE.test(value);
