@@ -15,7 +15,7 @@ import { renderDemotedThinking } from "../dialect/demotion";
 import * as AIError from "../error";
 import { parseToolCallArguments } from "../utils/tool-call-arguments";
 import { getKimiCommonHeaders } from "../registry/oauth/kimi";
-import { getEnvApiKey } from "../stream";
+import { getEnvApiKey } from "../env-api-key";
 import type {
 	AssistantMessage,
 	Context,
@@ -141,7 +141,7 @@ type OpenAICompletionsDeltaWithReasoningDetails = ChatCompletionChunk.Choice["de
 	reasoning_details?: unknown;
 };
 
-type GeminiMessageThoughtSignatureField = "thinking_signature" | "thought_signature";
+type GeminiMessageThoughtSignatureField = "thinking_signature" | "thought_signature" | "reasoning_signature";
 
 type GeminiMessageThoughtSignature = {
 	field: GeminiMessageThoughtSignatureField;
@@ -163,6 +163,7 @@ const GEMINI_THOUGHT_SIGNATURE_NAMESPACES: readonly GeminiThoughtSignatureNamesp
 const GEMINI_MESSAGE_THOUGHT_SIGNATURE_FIELDS: readonly GeminiMessageThoughtSignatureField[] = [
 	"thinking_signature",
 	"thought_signature",
+	"reasoning_signature",
 ];
 
 function getGeminiThoughtSignatureExtraContent(value: unknown): GeminiThoughtSignatureExtraContent | undefined {
@@ -199,9 +200,10 @@ function parseStoredThoughtSignature(thoughtSignature: string | undefined): unkn
 
 // A single tool-call turn on an OpenAI-compatible Gemini wire can carry two
 // independent signatures: a per-call one (`extra_content.google|vertex` or an
-// encrypted `reasoning_details` entry) and a message-level `thinking_signature`
-// / `thought_signature`. Both are stashed together on the originating tool
-// call's `thoughtSignature` so persistence and replay preserve each field.
+// encrypted `reasoning_details` entry) and a message-level signature
+// (`thinking_signature`, `thought_signature`, or `reasoning_signature`).
+// Both are stashed together on the originating tool call's `thoughtSignature`
+// so persistence and replay preserve each field.
 // `perCall` holds the raw extra_content object or reasoning detail; `message`
 // holds the message-level signature in its wire shape.
 type StoredGeminiSignature = {
@@ -230,6 +232,19 @@ function normalizeStoredGeminiSignature(value: unknown): StoredGeminiSignature |
 // Merges a new per-call or message-level signature into whatever is already
 // stored, so a later message-level signature never clobbers an earlier per-call
 // one (and vice versa).
+const DEMOTED_THINK_OPEN = "<think>\n";
+const DEMOTED_THINK_CLOSE = "\n</think>";
+
+/** Inner text of a block `transformMessages` marked with `kDemotedThinking`. */
+function unwrapDemotedThinking(text: string): string {
+	const wrapped =
+		text.startsWith(DEMOTED_THINK_OPEN) &&
+		text.endsWith(DEMOTED_THINK_CLOSE) &&
+		text.length > DEMOTED_THINK_OPEN.length + DEMOTED_THINK_CLOSE.length;
+	if (!wrapped) return text;
+	return text.slice(DEMOTED_THINK_OPEN.length, text.length - DEMOTED_THINK_CLOSE.length);
+}
+
 function mergeStoredGeminiSignature(existing: string | undefined, update: StoredGeminiSignature): string {
 	const merged = normalizeStoredGeminiSignature(parseStoredThoughtSignature(existing)) ?? {};
 	if (update.perCall !== undefined) merged.perCall = update.perCall;
@@ -1082,7 +1097,9 @@ const streamOpenAICompletionsOnce = (
 					typeof block.partialArgs === "string" ? parseToolCallArguments(block.partialArgs) : block.partialArgs;
 				delete block.partialArgs;
 				if (block.streamIndex !== undefined) {
-					toolCallBlockByIndex.delete(block.streamIndex);
+					if (toolCallBlockByIndex.get(block.streamIndex) === block) {
+						toolCallBlockByIndex.delete(block.streamIndex);
+					}
 					delete block.streamIndex;
 				}
 				const pendingIndex = pendingToolCallBlocks.indexOf(block);
@@ -1136,7 +1153,14 @@ const streamOpenAICompletionsOnce = (
 				// Same as appendText: leave toolCall blocks pending so index-only
 				// continuation deltas can still find them.
 				if (currentBlock?.type !== "toolCall") finishCurrentBlock(currentBlock);
-				const block: ThinkingContent = { type: "thinking", thinking: "", thinkingSignature: signature };
+				// The wire marks no summaries here; `portable-reasoning` vouches per
+				// family that this text is the full trace.
+				const block: ThinkingContent = {
+					type: "thinking",
+					thinking: "",
+					thinkingSignature: signature,
+					summary: false,
+				};
 				currentBlock = block;
 				pushContentBlock(block);
 				stream.push({ type: "thinking_start", contentIndex: blockIndex(block), partial: output });
@@ -1512,9 +1536,17 @@ const streamOpenAICompletionsOnce = (
 							// entries are argument-only. Either way, route by array offset so
 							// sibling calls stay isolated.
 							const unkeyedBatchedArrayEntry = toolCalls.length > 1 && streamIndex === undefined && !toolCall.id;
-							let block = streamIndex !== undefined ? toolCallBlockByIndex.get(streamIndex) : undefined;
-							if (!block && toolCall.id) {
-								block = pendingToolCallBlocks.find(candidate => candidate.id === toolCall.id);
+							// A known id always wins: interleaved continuations resume their own call.
+							// Otherwise reuse the block at this `index` unless the entry opens a new call —
+							// a different id *and* a `function.name`. Some gateways (Gemini) stream every
+							// parallel call at `index: 0` with distinct ids; others mint a fresh id per
+							// argument fragment of one call, but only the opening fragment carries a name.
+							let block = toolCall.id
+								? pendingToolCallBlocks.find(candidate => candidate.id === toolCall.id)
+								: undefined;
+							const indexedBlock = streamIndex !== undefined ? toolCallBlockByIndex.get(streamIndex) : undefined;
+							if (!block && indexedBlock && (!toolCall.id || !indexedBlock.id || !incomingName)) {
+								block = indexedBlock;
 							}
 							if (!block && unkeyedBatchedArrayEntry) {
 								const offsetBlock = unkeyedBatchBlocks[toolCallOffset];
@@ -1558,7 +1590,8 @@ const streamOpenAICompletionsOnce = (
 									finishCurrentBlock(currentBlock);
 								}
 								currentBlock = block;
-								if (streamIndex !== undefined && block.streamIndex === undefined) {
+								// Rebind the index so id-less continuations follow the call that last spoke on it.
+								if (streamIndex !== undefined && toolCallBlockByIndex.get(streamIndex) !== block) {
 									block.streamIndex = streamIndex;
 									toolCallBlockByIndex.set(streamIndex, block);
 								}
@@ -2440,6 +2473,10 @@ export function convertMessages(
 			const textBlocks = msg.content.filter(b => b.type === "text") as TextContent[];
 			// Filter out empty text blocks to avoid API validation errors
 			const nonEmptyTextBlocks = textBlocks.filter(b => b.text && b.text.trim().length > 0);
+			const replayExactReasoning =
+				compat.requiresReasoningContentForToolCalls && !compat.allowsSyntheticReasoningContentForToolCalls;
+			const demotedReasoningParts: string[] = [];
+			let contentWithoutDemoted: string | undefined;
 			if (nonEmptyTextBlocks.length > 0) {
 				// Always send assistant content as a plain string. Some OpenAI-compatible
 				// backends mirror array-of-text-block payloads back to the model literally,
@@ -2458,6 +2495,22 @@ export function convertMessages(
 						return isDemotedThinking(b) && i < nonEmptyTextBlocks.length - 1 ? `${text}\n` : text;
 					})
 					.join("");
+				if (replayExactReasoning) {
+					const visible: string[] = [];
+					let breakBeforeNext = false;
+					for (const block of nonEmptyTextBlocks) {
+						const text = block.text.toWellFormed();
+						if (isDemotedThinking(block)) {
+							const inner = unwrapDemotedThinking(text);
+							if (inner.trim().length > 0) demotedReasoningParts.push(inner);
+							breakBeforeNext = visible.length > 0;
+							continue;
+						}
+						visible.push(breakBeforeNext ? `\n${text}` : text);
+						breakBeforeNext = false;
+					}
+					contentWithoutDemoted = visible.join("");
+				}
 			}
 
 			// Handle thinking blocks
@@ -2674,6 +2727,22 @@ export function convertMessages(
 				if (reasoningDetails.length > 0) {
 					assistantMsg.reasoning_details = reasoningDetails;
 				}
+			}
+			// Cross-API history marks unsigned thinking with `kDemotedThinking` before
+			// this encoder flattens it into `content`, then the exact-replay fallback
+			// fills `reasoning_content` with "". DeepSeek thinking mode rejects that
+			// empty field. Move every marked block — not only a leading run, and not
+			// unmarked text that happens to look like `<think>` — into the structured
+			// field when that field is still empty.
+			if (
+				replayExactReasoning &&
+				demotedReasoningParts.length > 0 &&
+				(assistantMsg.reasoning_content === undefined || assistantMsg.reasoning_content === "")
+			) {
+				const reasoningField = compat.reasoningContentField ?? "reasoning_content";
+				assistantMsg[reasoningField] = demotedReasoningParts.join("\n");
+				assistantMsg.content = contentWithoutDemoted && contentWithoutDemoted.length > 0 ? contentWithoutDemoted : null;
+				hasReasoningField = true;
 			}
 			// Some OpenAI-compatible backends concatenate assistant content as a
 			// string even for tool-call replay. OpenAI accepts an empty string here;
@@ -2913,6 +2982,19 @@ function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | str
 			return {
 				stopReason: "error",
 				errorMessage: "Provider returned error finish_reason: insufficient_system_resource",
+			};
+		case "unknown":
+		case "other":
+		case "unspecified":
+		case "finish_reason_unspecified":
+			// The provider ended the stream without saying why (a dropped
+			// connection behind a gateway, a backend that lost the stop code).
+			// Pinning it as a terminal error strands a turn that a resample
+			// fixes. Word the message to match the transient-transport retry
+			// pattern; the retry budget bounds the replay.
+			return {
+				stopReason: "error",
+				errorMessage: `Provider returned error finish_reason: ${normalized}`,
 			};
 		default:
 			return {

@@ -2,7 +2,7 @@ import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { fetchWithRetry, parseStreamingJson, readJsonl } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { parseToolCallArguments } from "../utils/tool-call-arguments";
-import { getEnvApiKey } from "../stream";
+import { getEnvApiKey } from "../env-api-key";
 import type {
 	Api,
 	AssistantMessage,
@@ -252,7 +252,10 @@ function convertMessages(model: Model<"ollama-chat">, context: Context): OllamaM
 		timestamp: Date.now(),
 	}));
 	const messages: Message[] = [...systemMessages, ...context.messages];
-	const stripThinkingHistory = model.compat.stripThinkingHistory;
+	// Model rows cached or bundled before Ollama had a compat record carry none;
+	// stripping is the replay-safe answer for them until they are rebuilt.
+	const stripThinkingHistory =
+		(model.compat as Partial<typeof model.compat> | undefined)?.stripThinkingHistory ?? true;
 	const supportsImages = model.input.includes("image");
 	const converted = transformMessages(messages, model).map((msg, index) => {
 		// Real `systemPrompt` entries (always emitted first) stay on Ollama's
