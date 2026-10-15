@@ -161,25 +161,29 @@ enum Lookup {
 	Miss(Option<Base>),
 }
 
-/// Paths whose latest lookup ticket is remembered for fencing stale parses.
-/// A stale completion needs a parse still in flight, so only recently active
-/// paths matter; the least recently advanced path is forgotten first.
+/// Paths whose latest lookup ticket is remembered exactly for fencing stale
+/// parses. Past this, the least recently advanced path is forgotten and its
+/// ticket folds into [`Cache::forgotten_ticket_floor`].
 const MAX_TRACKED_PATHS: usize = 64;
 
 struct Cache {
-	entries:            HashMap<Key, Entry>,
+	entries:                HashMap<Key, Entry>,
 	/// Per path, the ticket of the lookup that last made it current in each
 	/// language. Kept apart from `entries` so the fence outlives evicted or
 	/// rejected trees.
-	path_tickets:       HashMap<Box<str>, Vec<(SupportLang, u64)>>,
-	retained_bytes:     usize,
-	clock:              u64,
-	hits:               u64,
-	misses:             u64,
-	evictions:          u64,
-	superseded:         u64,
-	max_entries:        usize,
-	max_retained_bytes: usize,
+	path_tickets:           HashMap<Box<str>, Vec<(SupportLang, u64)>>,
+	/// Newest ticket among forgotten paths. A completion for an untracked path
+	/// whose lookup is older than this may be stale, so it is cached without
+	/// moving the path: losing one reparse base beats rolling a path back.
+	forgotten_ticket_floor: u64,
+	retained_bytes:         usize,
+	clock:                  u64,
+	hits:                   u64,
+	misses:                 u64,
+	evictions:              u64,
+	superseded:             u64,
+	max_entries:            usize,
+	max_retained_bytes:     usize,
 }
 
 impl Cache {
@@ -187,6 +191,7 @@ impl Cache {
 		Self {
 			entries: HashMap::new(),
 			path_tickets: HashMap::new(),
+			forgotten_ticket_floor: 0,
 			retained_bytes: 0,
 			clock: 0,
 			hits: 0,
@@ -233,13 +238,14 @@ impl Cache {
 	}
 
 	/// Whether `path` got its current version from a lookup newer than the
-	/// one that issued `ticket`.
+	/// one that issued `ticket`, or might have and has since been forgotten.
 	fn path_moved_since(&self, lang: SupportLang, path: &str, ticket: u64) -> bool {
-		self.path_tickets.get(path).is_some_and(|tickets| {
-			tickets
+		match self.path_tickets.get(path) {
+			Some(tickets) => tickets
 				.iter()
-				.any(|&(other, latest)| other == lang && latest > ticket)
-		})
+				.any(|&(other, latest)| other == lang && latest > ticket),
+			None => ticket < self.forgotten_ticket_floor,
+		}
 	}
 
 	/// Record that lookup `ticket` made `path` current in `lang`.
@@ -253,13 +259,17 @@ impl Cache {
 			return;
 		}
 		if self.path_tickets.len() >= MAX_TRACKED_PATHS
-			&& let Some(oldest) = self
+			&& let Some((oldest, newest_ticket)) = self
 				.path_tickets
 				.iter()
-				.min_by_key(|(_, tickets)| tickets.iter().map(|&(_, latest)| latest).max())
-				.map(|(path, _)| path.clone())
+				.map(|(path, tickets)| {
+					(path, tickets.iter().map(|&(_, latest)| latest).max().unwrap_or(0))
+				})
+				.min_by_key(|&(_, newest_ticket)| newest_ticket)
+				.map(|(path, newest_ticket)| (path.clone(), newest_ticket))
 		{
 			self.path_tickets.remove(&oldest);
+			self.forgotten_ticket_floor = self.forgotten_ticket_floor.max(newest_ticket);
 		}
 		self
 			.path_tickets
@@ -413,6 +423,7 @@ impl Cache {
 		self.evictions = 0;
 		self.superseded = 0;
 		self.path_tickets.clear();
+		self.forgotten_ticket_floor = 0;
 	}
 }
 
@@ -889,6 +900,30 @@ mod tests {
 		assert_eq!(reparse_base(&mut cache, "a.ts").as_deref(), Some(new), "`new` stays current");
 		assert!(hit(&mut cache, old).is_some(), "the stale tree is still cached");
 		assert!(hit(&mut cache, new).is_some());
+	}
+
+	#[test]
+	fn the_stale_fence_survives_its_path_being_forgotten() {
+		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
+		let (old, new) = ("const a = 1;\n", "const a = 2;\n");
+		let stale_ticket = lookup_ticket(&mut cache);
+		put(&mut cache, new, Some("a.ts"));
+		// Enough other paths advance to push a.ts out of the exact ticket map.
+		for i in 0..MAX_TRACKED_PATHS {
+			put(&mut cache, &format!("const other = {i};\n"), Some(&format!("o{i}.ts")));
+		}
+		assert!(!cache.path_tickets.contains_key("a.ts"));
+
+		let tree = tree_of(old, TS);
+		let cost = tree_cost(old, &tree, TS);
+		cache.insert(key_for(old, TS), old, &tree, Some("a.ts"), cost, stale_ticket);
+
+		assert!(hit(&mut cache, old).is_some(), "the stale tree is still cached");
+		assert_eq!(
+			reparse_base(&mut cache, "a.ts"),
+			None,
+			"but it cannot become a.ts's current version"
+		);
 	}
 
 	#[test]
