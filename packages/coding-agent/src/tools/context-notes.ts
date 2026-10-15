@@ -6,21 +6,20 @@ import type {
 	AgentToolUpdateCallback,
 	ToolApprovalDecision,
 } from "@oh-my-pi/pi-agent-core";
-import {
-	CONTEXT_NOTES_ENTRY_TYPE,
-	getContextNotes,
-	MAX_CONTEXT_NOTES_BYTES,
-	type ContextNotesEntry,
-} from "../session/context-notes";
+import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { prompt } from "@oh-my-pi/pi-utils";
 import contextNotesDescription from "../prompts/tools/context-notes.md" with { type: "text" };
 import contextNotesTextDescription from "../prompts/tools/context-notes-text.md" with { type: "text" };
 import newContextDescription from "../prompts/tools/new-context.md" with { type: "text" };
+import {
+	CONTEXT_NOTES_ENTRY_TYPE,
+	type ContextNotesEntry,
+	getContextNotes,
+	MAX_CONTEXT_NOTES_BYTES,
+} from "../session/context-notes";
+import { cfgCompactionExperimentalContextManagement } from "../session/context-settings";
 import type { ToolSession } from ".";
 import { throwIfAborted } from "./tool-errors";
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-
-import { cfgCompactionExperimentalContextManagement } from "../session/context-settings";
 
 const contextNotesSchema = type({
 	"text?": type("string").describe(prompt.render(contextNotesTextDescription, { maxBytes: MAX_CONTEXT_NOTES_BYTES })),
