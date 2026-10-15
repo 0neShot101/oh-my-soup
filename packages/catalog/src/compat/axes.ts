@@ -340,6 +340,7 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 		values: ["freeform", "function"],
 	},
 	"requires-native-tools": { key: "requiresNativeTools", set: "catalog", shape: "scalar", values: [true, false] },
+	"tool-schemas-in-context": { key: "toolSchemasInContext", set: "catalog", shape: "scalar", values: [true, false] },
 	"requires-tool-free-history-for-tool-opt-out": {
 		key: "requiresToolFreeHistoryForToolOptOut",
 		set: "catalog",
@@ -370,6 +371,19 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 		shape: "scalar",
 		values: [true, false],
 	},
+	/**
+	 * The model's input classifier refuses requests that reproduce assistant
+	 * reasoning as quoted text (`reasoning_extraction`), so reasoning must not
+	 * be replayed as text into its input: compaction archives, summarizer
+	 * transcripts and demoted interrupted turns leave it out. Declared per class
+	 * in `classes/*.kdl`.
+	 */
+	"classifier-cot-extraction": {
+		key: "classifierCotExtraction",
+		set: "catalog",
+		shape: "scalar",
+		values: [true, false],
+	},
 	"clamp-context-override": { key: "clampContextOverride", set: "catalog", shape: "scalar" },
 	"context-promotion-target": { key: "contextPromotionTarget", set: "catalog", shape: "scalar" },
 	"context-window-floor": { key: "contextWindowFloor", set: "catalog", shape: "scalar" },
@@ -391,6 +405,14 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 		shape: "scalar",
 		values: [true, false],
 	},
+	/**
+	 * The host bills cache writes at this multiple of the row's live `input`
+	 * price, for hosts whose discovery reports cache-write tokens but no
+	 * cache-write rate. It replaces any `cacheWrite` the row carries, including
+	 * a `cost-patch`/`cost-fallback` value and an absolute long-context tier's
+	 * `cacheWrite` (rebased on the tier's `input`).
+	 */
+	"cache-write-rate": { key: "cacheWriteRate", set: "catalog", shape: "scalar" },
 	/**
 	 * How the model line bills a replayed signed thinking block as input:
 	 * `output` bills the reasoning its signature carries, at the size the turn
