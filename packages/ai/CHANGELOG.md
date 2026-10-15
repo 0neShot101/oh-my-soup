@@ -9,7 +9,7 @@
 ### Fixed
 
 - Fixed malformed image-generation inputs being forwarded to providers or reported as credential/upstream errors ([#15765](https://github.com/can1357/oh-my-pi/pull/15765) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
-- Fixed valid custom image MIME subtypes being rejected or corrupted in data URLs ([#15765](https://github.com/can1357/oh-my-pi/pull/15765) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+- Fixed valid custom image MIME subtypes, including those containing carets, being rejected or changed during data-URL transport ([#15765](https://github.com/can1357/oh-my-pi/pull/15765) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
 
 ## [18.11.0] - 2026-10-14
 

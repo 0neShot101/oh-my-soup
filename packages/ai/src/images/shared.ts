@@ -204,7 +204,7 @@ export function validateImageInput(image: ImageInput): void {
 
 export function toDataUrl(image: ImageInput): string {
 	validateImageInput(image);
-	return `data:${image.mimeType.replace(/[#^]/g, char => (char === "#" ? "%23" : "%5E"))};base64,${image.data}`;
+	return `data:${image.mimeType.replace(/#/g, "%23")};base64,${image.data}`;
 }
 
 /**
