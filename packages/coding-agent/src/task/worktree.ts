@@ -369,15 +369,6 @@ export interface DeltaPatchResult {
 	nestedPatches: NestedRepoPatch[];
 }
 
-/** Resolve a repo-relative path under `root`, rejecting absolute paths and `..` escapes. */
-function resolveContained(root: string, relativePath: string): string | null {
-	if (path.isAbsolute(relativePath)) return null;
-	const resolved = path.resolve(root, relativePath);
-	const rel = path.relative(root, resolved);
-	if (!rel || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
-	return resolved;
-}
-
 async function hasGitEntry(dir: string): Promise<boolean> {
 	try {
 		await fs.lstat(path.join(dir, ".git"));
@@ -401,9 +392,8 @@ export async function captureDeltaPatch(isolationDir: string, baseline: Worktree
 		...(await vcs.requireGit(isolationDir).submodulePaths()),
 	]);
 	for (const relativePath of relativePaths) {
-		const isolatedDir = resolveContained(isolationDir, relativePath);
-		const sourceDir = resolveContained(sourceRoot, relativePath);
-		if (!isolatedDir || !sourceDir) continue;
+		const isolatedDir = path.join(isolationDir, relativePath);
+		const sourceDir = path.join(sourceRoot, relativePath);
 		if (!(await hasGitEntry(isolatedDir))) continue;
 		await vcs.copyGitObjects(isolatedDir, (await hasGitEntry(sourceDir)) ? sourceDir : sourceRoot);
 	}
