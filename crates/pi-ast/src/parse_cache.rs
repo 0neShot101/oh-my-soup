@@ -48,6 +48,11 @@ const COST_PER_SOURCE_BYTE: usize = 16;
 /// Estimated retained bytes per visible syntax node.
 const COST_PER_NODE: usize = 64;
 
+/// [`COST_PER_NODE`] for Markdown, whose grammar keeps most of its nodes
+/// hidden: measured trees ran 200-430 bytes per visible node, against 50-220
+/// for the code grammars.
+const COST_PER_MARKDOWN_NODE: usize = 256;
+
 /// Budget for all retained slots, in [`tree_cost`] bytes.
 ///
 /// The smallest budget under which re-reading a working set of large
@@ -78,9 +83,13 @@ pub const MAX_ENTRIES: usize = 12;
 /// tree-sitter exposes no allocation size, and visible-node count misses hidden
 /// nodes, so this is a linear fit. Against measured allocations for 241 files
 /// of this repository it landed at 0.5-3x the real figure: TypeScript 1.2-2.7x,
-/// Python 0.9-1.5x, Rust 0.5-1.3x, Markdown 0.5-1x.
-fn tree_cost(code: &str, tree: &Tree) -> usize {
-	code.len() * COST_PER_SOURCE_BYTE + tree.root_node().descendant_count() * COST_PER_NODE
+/// Python 0.9-1.5x, Rust 0.5-1.3x, Markdown 0.9-1.9x.
+fn tree_cost(code: &str, tree: &Tree, lang: SupportLang) -> usize {
+	let per_node = match lang {
+		SupportLang::Markdown => COST_PER_MARKDOWN_NODE,
+		_ => COST_PER_NODE,
+	};
+	code.len() * COST_PER_SOURCE_BYTE + tree.root_node().descendant_count() * per_node
 }
 
 /// Cache key. The 64-bit hash is a *bucket selector only*: a hit additionally
@@ -385,13 +394,21 @@ fn input_edit(old: &str, new: &str) -> InputEdit {
 /// Incremental and fresh parses of error-free source produce the same tree,
 /// but error recovery can settle differently. A tree with errors is therefore
 /// always a fresh parse, so a result never depends on what was cached before.
+///
+/// An edit spanning more than half of `code` goes straight to the fresh parse:
+/// the incremental parse would reuse little, and if its result turned out
+/// broken it would be a whole wasted parse (auto-repair's first probe of a
+/// multi-hunk edit is exactly that).
 fn parse_from(language: &Language, code: &str, base: Option<Base>) -> Result<Option<Tree>> {
 	if let Some(Base { source, mut tree }) = base {
-		tree.edit(&input_edit(&source, code));
-		if let Some(tree) = grammar::parse(language, code, Some(&tree))?
-			&& !tree.root_node().has_error()
-		{
-			return Ok(Some(tree));
+		let edit = input_edit(&source, code);
+		if 2 * (edit.old_end_byte.max(edit.new_end_byte) - edit.start_byte) <= code.len() {
+			tree.edit(&edit);
+			if let Some(tree) = grammar::parse(language, code, Some(&tree))?
+				&& !tree.root_node().has_error()
+			{
+				return Ok(Some(tree));
+			}
 		}
 	}
 	grammar::parse(language, code, None)
@@ -432,7 +449,7 @@ pub fn parse_cached(code: &str, lang: SupportLang, path: Option<&str>) -> Result
 	else {
 		return Ok(None);
 	};
-	let cost = tree_cost(code, &tree);
+	let cost = tree_cost(code, &tree, lang);
 	lock().insert(key, code, &tree, path, cost);
 	Ok(Some(tree))
 }
@@ -490,7 +507,7 @@ mod tests {
 	/// Parse `code` as TypeScript and store it under `path`; returns its cost.
 	fn put(cache: &mut Cache, code: &str, path: Option<&str>) -> usize {
 		let tree = tree_of(code, TS);
-		let cost = tree_cost(code, &tree);
+		let cost = tree_cost(code, &tree, TS);
 		cache.insert(key_for(code, TS), code, &tree, path, cost);
 		cost
 	}
@@ -520,7 +537,7 @@ mod tests {
 		let tree = tree_of(code, TS);
 
 		assert!(hit(&mut cache, code).is_none(), "cold lookup misses");
-		cache.insert(key, code, &tree, None, tree_cost(code, &tree));
+		cache.insert(key, code, &tree, None, tree_cost(code, &tree, TS));
 		let warm = hit(&mut cache, code).expect("warm lookup hits");
 
 		assert_eq!(subtree_id(&warm, 0), subtree_id(&tree, 0), "hit must share the stored tree");
@@ -539,7 +556,7 @@ mod tests {
 
 		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
 		let tree = tree_of(code, SupportLang::Python);
-		cache.insert(py_key, code, &tree, None, tree_cost(code, &tree));
+		cache.insert(py_key, code, &tree, None, tree_cost(code, &tree, SupportLang::Python));
 		assert!(
 			hit(&mut cache, code).is_none(),
 			"a Python tree must never satisfy a TypeScript request"
@@ -567,7 +584,7 @@ mod tests {
 		let forged = key_for(probe, TS);
 		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
 		let tree = tree_of(stored, TS);
-		cache.insert(forged, stored, &tree, None, tree_cost(stored, &tree));
+		cache.insert(forged, stored, &tree, None, tree_cost(stored, &tree, TS));
 
 		assert!(
 			matches!(cache.get(&forged, probe, None), Lookup::Miss(None)),
@@ -597,7 +614,7 @@ mod tests {
 	#[test]
 	fn tree_cost_budget_evicts_and_reclaims_accounting() {
 		let sources = ["const a = 1;\n", "const b = 2;\n", "const c = 3;\n"];
-		let cost = tree_cost(sources[0], &tree_of(sources[0], TS));
+		let cost = tree_cost(sources[0], &tree_of(sources[0], TS), TS);
 		// Room for exactly two of these trees.
 		let mut cache = cache(64, cost * 2);
 
@@ -621,7 +638,8 @@ mod tests {
 		let dense = format!("const a = [{}];\n", "1,".repeat(32));
 		assert!(dense.len() <= sparse.len());
 		assert!(
-			tree_cost(&dense, &tree_of(&dense, TS)) > 2 * tree_cost(&sparse, &tree_of(&sparse, TS)),
+			tree_cost(&dense, &tree_of(&dense, TS), TS)
+				> 2 * tree_cost(&sparse, &tree_of(&sparse, TS), TS),
 			"a node-dense tree must cost more than a string literal of equal length"
 		);
 	}
@@ -629,7 +647,7 @@ mod tests {
 	#[test]
 	fn tree_over_the_budget_is_never_retained() {
 		let code = "function f() {\n  a();\n}\n";
-		let cost = tree_cost(code, &tree_of(code, TS));
+		let cost = tree_cost(code, &tree_of(code, TS), TS);
 		let mut cache = cache(MAX_ENTRIES, cost - 1);
 
 		put(&mut cache, code, None);
@@ -661,7 +679,7 @@ mod tests {
 		put(&mut cache, v1, Some("a.ts"));
 		let other_cost = put(&mut cache, other, Some("b.ts"));
 		let py_tree = tree_of(v1, SupportLang::Python);
-		let py_cost = tree_cost(v1, &py_tree);
+		let py_cost = tree_cost(v1, &py_tree, SupportLang::Python);
 		cache.insert(key_for(v1, SupportLang::Python), v1, &py_tree, Some("a.ts"), py_cost);
 		let v2_cost = put(&mut cache, v2, Some("a.ts"));
 
@@ -775,7 +793,7 @@ mod tests {
 	fn a_rejected_tree_still_retires_versions_behind_it() {
 		let (v1, v2) = ("const a = 1;\n", "const a = 2;\n");
 		let v3 = "function f() {\n  a();\n  b();\n}\n";
-		let small = tree_cost(v1, &tree_of(v1, TS));
+		let small = tree_cost(v1, &tree_of(v1, TS), TS);
 		let mut cache = cache(MAX_ENTRIES, 2 * small);
 		put(&mut cache, v1, Some("a.ts"));
 		put(&mut cache, v2, Some("a.ts"));
@@ -829,6 +847,28 @@ mod tests {
 				);
 			}
 		}
+	}
+
+	#[test]
+	fn an_edit_spanning_most_of_the_file_parses_fresh() {
+		let language = TS.grammar().load().expect("grammar loads");
+		let old = "function a() {}\nfunction b() {}\nfunction c() {}\nfunction d() {}\nfunction \
+		           t1() {}\nfunction t2() {}\n";
+		// Rewrites a..d and keeps t1, t2. The node right after an edit is always
+		// copied (its padding changes), but an incremental parse would reuse t2.
+		let new = "function w() { return 1; }\nfunction x() { return 2; }\nfunction y() { return 3; \
+		           }\nfunction z() { return 4; }\nfunction t1() {}\nfunction t2() {}\n";
+		let base = base_of(old);
+		// Keep the base alive so its subtree addresses cannot be recycled.
+		let kept = base.tree.clone();
+		let tail = subtree_id(&kept, 5);
+
+		let tree = parse_from(&language, new, Some(base))
+			.expect("parses")
+			.expect("tree");
+
+		assert_eq!(tree.root_node().to_sexp(), tree_of(new, TS).root_node().to_sexp());
+		assert_ne!(subtree_id(&tree, 5), tail, "a wide edit must not run the incremental parse");
 	}
 
 	#[test]
