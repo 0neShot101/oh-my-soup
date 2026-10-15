@@ -13,9 +13,10 @@
 //!
 //! Retention is an LRU budgeted by estimated tree memory ([`tree_cost`]), not
 //! by source length: a tree runs 8-72x its source. Entries also remember the
-//! caller's path. New content for a path supersedes that path's entry at once —
-//! no lookup can hit the old bytes again — and the superseded tree seeds an
-//! incremental reparse of the new content.
+//! caller's path. A path keeps its current and previous version, the previous
+//! one first in line for eviction; anything older is dropped at once, since no
+//! lookup can hit those bytes again. An error-free current version seeds an
+//! incremental reparse of new content.
 //!
 //! `Tree` is `Send` but not `Sync`, so entries live behind a [`Mutex`] and the
 //! lock is only ever held for map probes, a byte comparison, and
@@ -69,6 +70,11 @@ pub const MAX_ENTRY_SOURCE_BYTES: usize =
 /// for a coding agent (the handful of files being read and edited).
 pub const MAX_ENTRIES: usize = 12;
 
+/// Versions of one path kept at once: the current content and the one before
+/// it, which is what a diff or a repair compares against. The previous version
+/// is the first to go under pressure; older ones can never be hit again.
+const VERSIONS_PER_PATH: usize = 2;
+
 /// Estimated heap retained by a cached `tree` over `code`.
 ///
 /// tree-sitter exposes no allocation size, and visible-node count misses hidden
@@ -107,7 +113,8 @@ struct Entry {
 	path:   Option<Box<str>>,
 	/// [`tree_cost`] charged against the budget.
 	cost:   usize,
-	/// Value of [`Cache::clock`] at last use; smallest wins eviction.
+	/// Value of [`Cache::clock`] at last use; smallest wins eviction. Zero for
+	/// a path's previous version.
 	stamp:  u64,
 }
 
@@ -166,21 +173,27 @@ impl Cache {
 			return Lookup::Hit(tree);
 		}
 		self.misses += 1;
+		// The path's current version seeds the reparse unless it is broken:
+		// then its successor is usually broken too (auto-repair probes a file's
+		// broken variants back to back), and an incremental parse with errors
+		// is discarded anyway.
 		let base = path.and_then(|path| {
 			self
 				.entries
 				.iter()
-				.find(|(other, entry)| other.lang == key.lang && entry.path.as_deref() == Some(path))
+				.filter(|(other, entry)| other.lang == key.lang && entry.path.as_deref() == Some(path))
+				.max_by_key(|(_, entry)| entry.stamp)
+				.filter(|(_, entry)| !entry.tree.root_node().has_error())
 				.map(|(_, entry)| Base { source: entry.source.clone(), tree: entry.tree.clone() })
 		});
 		Lookup::Miss(base)
 	}
 
 	fn insert(&mut self, key: Key, code: &str, tree: &Tree, path: Option<&str>, cost: usize) {
-		// The path now holds `code`; its previous content is dead whether or
-		// not this tree fits.
+		// The path now holds `code`; versions older than the one before it are
+		// dead whether or not this tree fits.
 		if let Some(path) = path {
-			self.release_path(key, path);
+			self.trim_path(key, path);
 		}
 		if cost > self.max_retained_bytes {
 			return;
@@ -206,9 +219,9 @@ impl Cache {
 		});
 	}
 
-	/// Make `key` the only entry bound to `path` in its language.
+	/// Bind `key` to `path` as the path's current version.
 	fn bind_path(&mut self, key: Key, path: &str) {
-		self.release_path(key, path);
+		self.trim_path(key, path);
 		if let Some(entry) = self.entries.get_mut(&key)
 			&& entry.path.as_deref() != Some(path)
 		{
@@ -216,18 +229,40 @@ impl Cache {
 		}
 	}
 
-	/// Drop every entry other than `keep` bound to `path` in `keep`'s language.
-	fn release_path(&mut self, keep: Key, path: &str) {
-		let released: Vec<Entry> = self
+	/// Make room for `keep` as `path`'s current version: of the other entries
+	/// bound to `path` in `keep`'s language, only the most recently used
+	/// `VERSIONS_PER_PATH - 1` stay, demoted to the front of the eviction
+	/// order so they never cost another file its slot.
+	fn trim_path(&mut self, keep: Key, path: &str) {
+		let bound = |other: &Key, entry: &Entry| {
+			*other != keep && other.lang == keep.lang && entry.path.as_deref() == Some(path)
+		};
+		// Counting first keeps the common case (nothing to drop) allocation-free.
+		if self
 			.entries
-			.extract_if(|other, entry| {
-				*other != keep && other.lang == keep.lang && entry.path.as_deref() == Some(path)
-			})
-			.map(|(_, entry)| entry)
-			.collect();
-		for entry in released {
-			self.retained_bytes -= entry.cost;
-			self.superseded += 1;
+			.iter()
+			.filter(|(other, entry)| bound(other, entry))
+			.count()
+			>= VERSIONS_PER_PATH
+		{
+			let mut versions: Vec<(u64, Key)> = self
+				.entries
+				.iter()
+				.filter(|(other, entry)| bound(other, entry))
+				.map(|(other, entry)| (entry.stamp, *other))
+				.collect();
+			versions.sort_unstable_by_key(|&(stamp, _)| std::cmp::Reverse(stamp));
+			for (_, stale) in versions.drain(VERSIONS_PER_PATH - 1..) {
+				if let Some(entry) = self.entries.remove(&stale) {
+					self.retained_bytes -= entry.cost;
+					self.superseded += 1;
+				}
+			}
+		}
+		for (other, entry) in &mut self.entries {
+			if bound(other, entry) {
+				entry.stamp = 0;
+			}
 		}
 	}
 
@@ -326,13 +361,8 @@ fn input_edit(old: &str, new: &str) -> InputEdit {
 /// Incremental and fresh parses of error-free source produce the same tree,
 /// but error recovery can settle differently. A tree with errors is therefore
 /// always a fresh parse, so a result never depends on what was cached before.
-/// A broken base goes straight to the fresh parse: its successor is usually
-/// broken too (auto-repair probes a file's broken variants back to back), and
-/// the incremental attempt would only be thrown away.
 fn parse_from(language: &Language, code: &str, base: Option<Base>) -> Result<Option<Tree>> {
-	if let Some(Base { source, mut tree }) = base
-		&& !tree.root_node().has_error()
-	{
+	if let Some(Base { source, mut tree }) = base {
 		tree.edit(&input_edit(&source, code));
 		if let Some(tree) = grammar::parse(language, code, Some(&tree))?
 			&& !tree.root_node().has_error()
@@ -347,8 +377,8 @@ fn parse_from(language: &Language, code: &str, base: Option<Base>) -> Result<Opt
 /// were last parsed as the same language and have not been evicted.
 ///
 /// `path` identifies the file `code` came from. It never affects the result:
-/// it only lets new content for that path supersede the old entry and reuse
-/// its tree for an incremental reparse.
+/// it only lets new content for that path retire versions older than the
+/// previous one and reuse a recent tree for an incremental reparse.
 ///
 /// Semantics match a bare `Parser::new()` / `set_language` / `parse` sequence
 /// exactly: `Err` when the grammar fails to load, `Ok(None)` when `parse`
@@ -392,7 +422,7 @@ pub struct ParseCacheStats {
 	pub hits:           u64,
 	pub misses:         u64,
 	pub evictions:      u64,
-	/// Entries dropped because their path was parsed with new content.
+	/// Entries dropped because their path moved on by two newer versions.
 	pub superseded:     u64,
 }
 
@@ -600,59 +630,103 @@ mod tests {
 	}
 
 	#[test]
-	fn new_content_for_a_path_supersedes_only_that_path_and_language() {
+	fn a_path_keeps_its_current_and_previous_version_only() {
 		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
-		let (v1, v2) = ("const a = 1;\n", "const a = 2;\n");
+		let (v1, v2, v3) = ("const a = 1;\n", "const a = 2;\n", "const a = 3;\n");
 		let other = "const b = 1;\n";
 		put(&mut cache, v1, Some("a.ts"));
 		let other_cost = put(&mut cache, other, Some("b.ts"));
 		let py_tree = tree_of(v1, SupportLang::Python);
 		let py_cost = tree_cost(v1, &py_tree);
 		cache.insert(key_for(v1, SupportLang::Python), v1, &py_tree, Some("a.ts"), py_cost);
-
 		let v2_cost = put(&mut cache, v2, Some("a.ts"));
 
-		assert!(hit(&mut cache, v1).is_none(), "the path's old content is gone");
+		// Before and after an edit both stay resident, so a diff of the two hits.
+		assert!(hit(&mut cache, v1).is_some());
 		assert!(hit(&mut cache, v2).is_some());
+		assert_eq!(cache.superseded, 0);
+
+		let v3_cost = put(&mut cache, v3, Some("a.ts"));
+
+		assert!(hit(&mut cache, v1).is_none(), "two versions behind is gone");
+		assert!(hit(&mut cache, v2).is_some());
+		assert!(hit(&mut cache, v3).is_some());
 		assert!(hit(&mut cache, other).is_some(), "another path is untouched");
 		assert!(
 			matches!(cache.get(&key_for(v1, SupportLang::Python), v1, None), Lookup::Hit(_)),
 			"the same path in another language is a different binding"
 		);
 		assert_eq!((cache.superseded, cache.evictions), (1, 0));
-		assert_eq!(cache.retained_bytes, v2_cost + other_cost + py_cost);
+		assert_eq!(cache.retained_bytes, v2_cost + v3_cost + other_cost + py_cost);
 	}
 
 	#[test]
-	fn a_hit_rebinds_the_path_to_the_hit_content() {
+	fn a_hit_makes_its_content_the_paths_current_version() {
 		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
-		let (v1, v2) = ("const a = 1;\n", "const a = 2;\n");
+		let (v1, v2, v3) = ("const a = 1;\n", "const a = 2;\n", "const a = 3;\n");
 		put(&mut cache, v1, None);
 		put(&mut cache, v2, Some("a.ts"));
+		put(&mut cache, v3, Some("a.ts"));
 
 		assert!(matches!(cache.get(&key_for(v1, TS), v1, Some("a.ts")), Lookup::Hit(_)));
 
-		assert!(hit(&mut cache, v2).is_none(), "the path no longer holds v2");
-		assert_eq!(cache.superseded, 1);
-		let Lookup::Miss(Some(base)) =
-			cache.get(&key_for("const a = 3;\n", TS), "const a = 3;\n", Some("a.ts"))
-		else {
-			panic!("a miss on a bound path returns its content as the reparse base");
+		let next = "const a = 4;\n";
+		let Lookup::Miss(Some(base)) = cache.get(&key_for(next, TS), next, Some("a.ts")) else {
+			panic!("a miss on a bound path returns a version as the reparse base");
 		};
-		assert_eq!(&*base.source, v1);
+		assert_eq!(&*base.source, v1, "the hit content is the current version");
+		assert!(hit(&mut cache, v2).is_none(), "the least recent of the path's versions is dropped");
+		assert!(hit(&mut cache, v3).is_some());
+		assert_eq!(cache.superseded, 1);
 	}
 
 	#[test]
-	fn rejected_tree_still_releases_its_paths_old_content() {
-		let v1 = "const a = 1;\n";
-		let v2 = "function f() {\n  a();\n  b();\n}\n";
-		let mut cache = cache(MAX_ENTRIES, tree_cost(v1, &tree_of(v1, TS)));
-		put(&mut cache, v1, Some("a.ts"));
+	fn only_an_error_free_current_version_seeds_a_reparse() {
+		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
+		let next = "const a = 9;\n";
+		let reparse_base = |cache: &mut Cache| match cache.get(&key_for(next, TS), next, Some("a.ts"))
+		{
+			Lookup::Miss(base) => base.map(|base| base.source),
+			Lookup::Hit(_) => panic!("`next` is never stored"),
+		};
+		put(&mut cache, "const a = 1;\n", Some("a.ts"));
+		put(&mut cache, "const a = (1;\n", Some("a.ts"));
+		assert_eq!(reparse_base(&mut cache), None, "a broken current version seeds nothing");
 
+		put(&mut cache, "const a = 2;\n", Some("a.ts"));
+		assert_eq!(reparse_base(&mut cache).as_deref(), Some("const a = 2;\n"));
+	}
+
+	#[test]
+	fn a_paths_previous_version_is_evicted_before_other_files() {
+		let mut cache = cache(3, MAX_RETAINED_BYTES);
+		put(&mut cache, "const b = 1;\n", Some("b.ts"));
+		put(&mut cache, "const a = 1;\n", Some("a.ts"));
+		put(&mut cache, "const a = 2;\n", Some("a.ts"));
+
+		put(&mut cache, "const c = 1;\n", Some("c.ts"));
+
+		assert!(hit(&mut cache, "const a = 1;\n").is_none(), "the previous version goes first");
+		assert!(hit(&mut cache, "const b = 1;\n").is_some(), "an older but current file survives");
+		assert!(hit(&mut cache, "const a = 2;\n").is_some());
+		assert_eq!((cache.evictions, cache.superseded), (1, 0));
+	}
+
+	#[test]
+	fn a_rejected_tree_still_retires_versions_behind_it() {
+		let (v1, v2) = ("const a = 1;\n", "const a = 2;\n");
+		let v3 = "function f() {\n  a();\n  b();\n}\n";
+		let small = tree_cost(v1, &tree_of(v1, TS));
+		let mut cache = cache(MAX_ENTRIES, 2 * small);
+		put(&mut cache, v1, Some("a.ts"));
 		put(&mut cache, v2, Some("a.ts"));
 
-		assert_eq!(cache.entries.len(), 0, "v2 is over budget and v1 is dead");
-		assert_eq!(cache.retained_bytes, 0);
+		put(&mut cache, v3, Some("a.ts"));
+
+		assert!(hit(&mut cache, v3).is_none(), "v3 is over budget");
+		assert!(hit(&mut cache, v1).is_none(), "v1 is two versions behind");
+		assert!(hit(&mut cache, v2).is_some());
+		assert_eq!(cache.retained_bytes, small);
 	}
 
 	fn base_of(code: &str) -> Base {
@@ -728,7 +802,8 @@ mod tests {
 		let mut cache = cache(3, 1 << 20);
 		put(&mut cache, "const a = 1;\n", Some("a.ts"));
 		put(&mut cache, "const a = 2;\n", Some("a.ts"));
-		assert_eq!(cache.entries.len(), 1);
+		put(&mut cache, "const a = 3;\n", Some("a.ts"));
+		assert_eq!(cache.entries.len(), 2);
 
 		cache.clear();
 
