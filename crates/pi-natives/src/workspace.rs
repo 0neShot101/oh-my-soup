@@ -61,9 +61,11 @@ pub struct ListWorkspaceOptions<'env> {
 	/// gitignore would otherwise hide the file. Walks deeper than `maxDepth`
 	/// to find them. Default: false.
 	pub collect_agents_md:       Option<bool>,
-	/// Fail instead of skipping unreadable directories. Default: false for
-	/// startup discovery.
-	pub fail_on_directory_error: Option<bool>,
+	/// Report unreadable directories instead of silently skipping them: an
+	/// unreadable root fails the scan, and unreadable subdirectories are
+	/// returned in `unreadableDirectories` while the walk continues. Default:
+	/// false (startup discovery stays best-effort).
+	pub report_directory_errors: Option<bool>,
 	/// Timeout in milliseconds for the operation.
 	pub timeout_ms:              Option<u32>,
 	/// Abort signal for cancelling the operation.
@@ -74,12 +76,24 @@ pub struct ListWorkspaceOptions<'env> {
 #[napi(object)]
 pub struct ListWorkspaceResult {
 	/// Entries within `maxDepth`, with mtime and regular-file size metadata.
-	pub entries:         Vec<GlobMatch>,
+	pub entries:                Vec<GlobMatch>,
 	/// Directory-scoped AGENTS.md files within depth 1..=4 (capped at 200).
 	/// Always empty when `collectAgentsMd` is false.
-	pub agents_md_files: Vec<String>,
+	pub agents_md_files:        Vec<String>,
 	/// True when any output cap was hit.
-	pub truncated:       bool,
+	pub truncated:              bool,
+	/// Subdirectories whose contents could not be listed. Always empty unless
+	/// `reportDirectoryErrors` is set.
+	pub unreadable_directories: Vec<WorkspaceDirectoryError>,
+}
+
+/// A subdirectory the scan could not list.
+#[napi(object)]
+pub struct WorkspaceDirectoryError {
+	/// Forward-slash path relative to the scan root.
+	pub path:    String,
+	/// Platform error, e.g. `Permission denied (os error 13)`.
+	pub message: String,
 }
 
 struct WorkspaceConfig {
@@ -89,7 +103,7 @@ struct WorkspaceConfig {
 	include_hidden:          bool,
 	use_gitignore:           bool,
 	collect_agents_md:       bool,
-	fail_on_directory_error: bool,
+	report_directory_errors: bool,
 }
 
 #[derive(Default)]
@@ -133,7 +147,7 @@ fn build_workspace_walk_request(config: &WorkspaceConfig) -> pi_walker::WalkRequ
 		.order(pi_walker::WalkOrder::Path)
 		.emit_root(false)
 		.depth(1, config.walk_max_depth)
-		.directory_errors(if config.fail_on_directory_error {
+		.directory_errors(if config.report_directory_errors {
 			pi_walker::DirectoryErrorMode::Visit
 		} else {
 			pi_walker::DirectoryErrorMode::SkipSkippable
@@ -192,6 +206,7 @@ fn run_list_workspace(
 	ct: task::CancelToken,
 ) -> Result<ListWorkspaceResult> {
 	let mut results = WorkspaceResults::default();
+	let mut unreadable_directories = Vec::new();
 	build_workspace_walk_request(&config)
 		.for_each_entry_with_heartbeat(
 			|| ct.heartbeat(),
@@ -229,19 +244,28 @@ fn run_list_workspace(
 				Ok(pi_walker::WalkDecision::Include)
 			},
 			|error| {
-				Err(Error::from_reason(format!(
-					"Native directory scan failed for {}: {}",
-					error.path.display(),
-					error.error
-				)))
+				let relative = pi_walker::normalize_relative_path(&config.root, error.path);
+				if relative.is_empty() {
+					return Err(Error::from_reason(format!(
+						"Native directory scan failed for {}: {}",
+						error.path.display(),
+						error.error
+					)));
+				}
+				unreadable_directories.push(WorkspaceDirectoryError {
+					path:    relative.into_owned(),
+					message: error.error.to_string(),
+				});
+				Ok(pi_walker::WalkDecision::Skip)
 			},
 		)
 		.map_err(iofs::map_walker_error)?;
 
 	Ok(ListWorkspaceResult {
-		entries:         results.entries.into_values().collect(),
+		entries: results.entries.into_values().collect(),
 		agents_md_files: results.agents_md_files.into_iter().collect(),
-		truncated:       results.truncated,
+		truncated: results.truncated,
+		unreadable_directories,
 	})
 }
 
@@ -258,7 +282,7 @@ pub fn list_workspace(options: ListWorkspaceOptions<'_>) -> task::Promise<ListWo
 		hidden,
 		gitignore,
 		collect_agents_md,
-		fail_on_directory_error,
+		report_directory_errors,
 		timeout_ms,
 		signal,
 	} = options;
@@ -280,7 +304,7 @@ pub fn list_workspace(options: ListWorkspaceOptions<'_>) -> task::Promise<ListWo
 				include_hidden: hidden.unwrap_or(false),
 				use_gitignore: gitignore.unwrap_or(true),
 				collect_agents_md,
-				fail_on_directory_error: fail_on_directory_error.unwrap_or(false),
+				report_directory_errors: report_directory_errors.unwrap_or(false),
 			},
 			ct,
 		)

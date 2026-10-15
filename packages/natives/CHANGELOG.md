@@ -4,7 +4,8 @@
 
 ### Added
 
-- `listWorkspace` can now fail on unreadable directories with `failOnDirectoryError`, so callers can distinguish failed scans from complete listings ([#15769](https://github.com/can1357/oh-my-pi/issues/15769)).
+- Added `listWorkspace({ reportDirectoryErrors })`: an unreadable root fails the scan and unreadable subdirectories are returned in `unreadableDirectories` instead of being silently skipped ([#15769](https://github.com/can1357/oh-my-pi/issues/15769)).
+
 ### Fixed
 
 - Fixed unnecessary worker scheduling overhead in `read` loops over regular files ([#15504](https://github.com/can1357/oh-my-pi/pull/15504) by [@mg-mg-mg](https://github.com/mg-mg-mg))

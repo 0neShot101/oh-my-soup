@@ -122,16 +122,17 @@ describe("read tool directory listings honor line selectors (regression: was sil
 	);
 
 	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-		"reports an unreadable child instead of silently omitting its contents",
+		"marks an unreadable child and keeps listing its readable siblings",
 		async () => {
 			const child = path.join(testDir, "blocked");
 			fs.mkdirSync(child);
 			fs.writeFileSync(path.join(child, "nested.txt"), "present");
 			fs.chmodSync(child, 0o000);
 			try {
-				await expect(tool.execute("call-denied-child", { path: testDir })).rejects.toThrow(
-					/Cannot read directory:.*blocked.*(permission denied|os error 13)/i,
-				);
+				const output = getTextOutput(await tool.execute("call-denied-child", { path: testDir }));
+				expect(output).toMatch(/- blocked\/ \[unreadable: [^\]]*(permission denied|os error 13)[^\]]*\]/i);
+				expect(output).toContain("file-001.txt");
+				expect(output).toContain("file-060.txt");
 			} finally {
 				fs.chmodSync(child, 0o755);
 			}
