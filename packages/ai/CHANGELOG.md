@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed error results from non-first-party providers regaining partial output the provider had discarded; an error with empty content now stays empty ([#14516](https://github.com/can1357/oh-my-pi/issues/14516), [#14572](https://github.com/can1357/oh-my-pi/pull/14572) by [@oleg494](https://github.com/oleg494))
+- Fixed the auth gateway's `POST /v1/audio/speech` answering 502 for requests the speech adapter rejects (unsupported format, over-long input); they now get 400 `invalid_request_error` ([#14508](https://github.com/can1357/oh-my-pi/pull/14508) by [@F0Rextasy](https://github.com/F0Rextasy))
 
 ## [18.11.1] - 2026-10-15
 
@@ -289,10 +290,10 @@
 - Added `recordAffinity: false` to credential resolution options, selecting as the session would without pinning the choice to that session ([#14512](https://github.com/can1357/oh-my-pi/pull/14512) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Fixed
+
 - Codex native-lane steering rejections (`unsupported_native_inflight_message`) now classify as retryable from their error text alone, matching the provider's own classification, and `AIError.isCodexSteerRejection()` identifies them so the agent retry can stay on the same model ([#14242](https://github.com/can1357/oh-my-pi/pull/14242) by [@alphastorm](https://github.com/alphastorm))
 - Fixed replayed Responses and Codex history, including persisted Codex user/developer and assistant items, sending `detail: "original"` images to endpoints whose `supportsImageDetailOriginal` is off ([#13687](https://github.com/can1357/oh-my-pi/pull/13687) by [@alphastorm](https://github.com/alphastorm)).
 - Fixed thinking in turns kept after Anthropic native compaction being rejected or dropped on the next request ([#14251](https://github.com/can1357/oh-my-pi/pull/14251) by [@will-bogusz](https://github.com/will-bogusz))
-- `POST /v1/audio/speech` no longer answers 502 for request-input errors the speech adapter rejects; those are now 400 `invalid_request_error` ([#14508](https://github.com/can1357/oh-my-pi/pull/14508) by [@F0Rextasy](https://github.com/F0Rextasy)).
 - Fixed Claude usage being re-polled every 10 seconds while Anthropic rate-limits the account; a failed refresh now waits a minute before trying again ([#14515](https://github.com/can1357/oh-my-pi/pull/14515) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed Devin requests skipping the `onPayload` hook, so payload capture now sees each Devin chat request and a returned replacement is what gets sent ([#14506](https://github.com/can1357/oh-my-pi/pull/14506) by [@will-bogusz](https://github.com/will-bogusz))
 - An OpenAI Responses turn whose connection drops mid-stream can now recover the finished answer from the provider (on hosts that store results, such as Muse Code) instead of re-running the whole turn and discarding the reasoning already done. Storage is opt-in: pass `storeResponses: true`, set `PI_MUSE_STORE_RESPONSES=1`, or set a process-wide default with `configureProviderStoreResponses` ([#14293](https://github.com/can1357/oh-my-pi/pull/14293) and [#14534](https://github.com/can1357/oh-my-pi/pull/14534) by [@abilliontokens](https://github.com/abilliontokens)).
