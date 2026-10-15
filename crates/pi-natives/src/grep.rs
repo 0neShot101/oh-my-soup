@@ -3470,14 +3470,12 @@ mod tests {
 		assert_eq!(result.matches[0].match_count, Some(2));
 	}
 
-	/// roboomp: `single_file_params` also changed single-file Count mode.
+	/// A single-file Count search reports every match, as a directory search does.
 	///
-	/// Before this change the direct-file branch passed the caller's `max_count`
-	/// to `MatchCollector`, so `grep({ path: file, mode: Count, maxCount: 2 })`
-	/// on a file with 5 matches stopped at the third match and reported
-	/// `matchCount: 3`, the max+1 value from the early `Ok(false)`. With `Count
-	/// => None` the same call now reports 5, matching the directory path, where
-	/// aggregation pushes the full `result.match_count`.
+	/// The direct-file branch once passed the caller's `max_count` to
+	/// `MatchCollector`, so `grep({ path: file, mode: Count, maxCount: 2 })` on a
+	/// file with 5 matches stopped at the third match and reported
+	/// `matchCount: 3`, the max+1 value from the early `Ok(false)`.
 	///
 	/// Self-contained on purpose: the shared `write_file` and `base_grep_config`
 	/// helpers are `#[cfg(unix)]`, so this case builds its own file and config
