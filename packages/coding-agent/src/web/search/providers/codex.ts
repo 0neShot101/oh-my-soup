@@ -605,8 +605,7 @@ export async function searchCodex(params: SearchParams): Promise<SearchResponse>
 		// `type: "oauth"` rows. So an OPENAI_CODEX_OAUTH_TOKEN-only setup passed
 		// the availability check and then failed here with "No Codex OAuth
 		// credentials found". Take the registry resolver when the stored pool is
-		// empty but the origin is an env var, the same way xAI does
-		// (providers/xai.ts:421).
+		// empty but the origin is an env var, as the xAI search provider does.
 		const seed = await params.authStorage.oauth.access(params.model.provider, params.sessionId, {
 			signal: params.signal,
 		});
