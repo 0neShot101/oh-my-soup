@@ -64,6 +64,83 @@ export function streamingMarkdownSource(text: string): string {
 	return replaceTabs(normalizeOsc8Terminators(text));
 }
 
+// A pipe-table line: optional indent / blockquote markers, then a leading `|`.
+const TABLE_LINE_AT = /[ \t>]*\|/y;
+// An unterminated last line that may be a table row: a pipe line, or only indentation / `>` markers so far.
+const GROWING_ROW_AT = /[ \t>]*(?:\|[^\n]*)?$/y;
+// A whole GFM delimiter row (`| --- | :-: |`) with a leading pipe.
+const DELIMITER_ROW_AT = /[ \t>]*\|[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*\r?(?=\n|$)/y;
+const UNESCAPED_PIPE = /(?<!\\)\|/g;
+const UNESCAPED_PIPE_END = /(?<!\\)\|$/;
+// A fence line (opener or closer), possibly inside a list item or blockquote.
+const FENCE_LINE = /^[ \t>]*(`{3,}|~{3,})([^\n]*)$/gm;
+
+function matchesAt(pattern: RegExp, text: string, lineStart: number): boolean {
+	pattern.lastIndex = lineStart;
+	return pattern.test(text);
+}
+
+/** Whether a code fence is still open at `end` of `text`. */
+function fenceOpenAt(text: string, end: number): boolean {
+	let open: string | undefined;
+	FENCE_LINE.lastIndex = 0;
+	for (let match = FENCE_LINE.exec(text); match !== null && match.index < end; match = FENCE_LINE.exec(text)) {
+		const [, marker, rest] = match;
+		if (open === undefined) {
+			// A backtick fence's info string cannot hold a backtick (that line is inline code).
+			if (marker[0] !== "`" || !rest.includes("`")) open = marker;
+		} else if (marker[0] === open[0] && marker.length >= open.length && !rest.trim()) {
+			open = undefined;
+		}
+	}
+	return open !== undefined;
+}
+
+/**
+ * Streaming `md` source for a native terminal, minus a still-growing table row:
+ * the unterminated last line when it continues a pipe table (a run of `|` lines
+ * holding a header and its delimiter row) outside any open code fence. A last
+ * line of only indentation or `>` markers counts too, since a row may follow.
+ * The terminal sizes columns by every row it gets, so a half-streamed row (an
+ * unclosed link shows its whole URL) would rewrap the table each frame, and TSP
+ * cannot ask it to skip one. The result keeps the newline before the held line,
+ * so it is a prefix of `text` and of the result for every append to it:
+ * streaming stays append-only. Pass untrimmed source: trimming first drops the
+ * newline that marks the last row finished, so that row would be held too.
+ */
+export function holdPartialTableRow(text: string): string {
+	const lastBreak = text.lastIndexOf("\n");
+	if (lastBreak <= 0 || !matchesAt(GROWING_ROW_AT, text, lastBreak + 1)) return text;
+	// Walk up the run of pipe lines above the growing row to a delimiter row with a header above it.
+	let lineStart = text.lastIndexOf("\n", lastBreak - 1) + 1;
+	let table = false;
+	while (matchesAt(TABLE_LINE_AT, text, lineStart)) {
+		const above = lineStart > 0 ? text.lastIndexOf("\n", lineStart - 2) + 1 : -1;
+		if (matchesAt(DELIMITER_ROW_AT, text, lineStart)) {
+			table = above >= 0 && matchesAt(TABLE_LINE_AT, text, above);
+			lineStart = above;
+			break;
+		}
+		if (above < 0) break;
+		lineStart = above;
+	}
+	if (!table || fenceOpenAt(text, lineStart)) return text;
+	return text.slice(0, lastBreak + 1);
+}
+
+/**
+ * Index of the cell a streaming table's last row is still writing: the cell
+ * after its last `|`, or -1 when a newline or trailing `|` closed the row.
+ * `raw` is the table token's source; GFM splits cells on every unescaped pipe.
+ */
+function growingTableCell(raw: string): number {
+	if (raw.endsWith("\n")) return -1;
+	const line = raw.slice(raw.lastIndexOf("\n") + 1).trimEnd();
+	if (UNESCAPED_PIPE_END.test(line)) return -1;
+	const pipes = line.match(UNESCAPED_PIPE)?.length ?? 0;
+	return matchesAt(TABLE_LINE_AT, line, 0) ? pipes - 1 : pipes;
+}
+
 /** The longest suffix of `text` a future append could still complete into a
  *  full `\x1b]8;[^\x07\x1b]*\x1b\\` match: the last `\x1b]8;` plus clean
  *  body (or that plus the pending ST-ESC `\x1b`), or a strict prefix of the
@@ -2056,8 +2133,8 @@ export class Markdown implements Component {
 		const cached = this.#native;
 		if (cached?.text === this.#text && cached.stream === stream) return cached.node;
 		// Sources are model text; OSC 8 / SGR bytes a caller spliced in are the terminal's to style, not ours.
-		const source = this.#text.includes("\x1b") ? plainText(this.#text) : this.#text;
-		const described = md(source, stream ? { stream: true } : undefined);
+		const plain = this.#text.includes("\x1b") ? plainText(this.#text) : this.#text;
+		const described = stream ? md(holdPartialTableRow(plain), { stream: true }) : md(plain);
 		this.#native = { text: this.#text, stream, node: described };
 		return described;
 	}
@@ -4054,8 +4131,21 @@ export class Markdown implements Component {
 			naturalWidths[i] = Math.max(...headerLineWidths, 0);
 			minWordWidths[i] = Math.max(1, this.#getLongestWordWidth(headerText, maxUnbrokenWordWidth));
 		}
-		for (const row of token.rows) {
+		// While streaming, the last row's open cell is still growing (an unclosed
+		// link even shows its whole URL): sizing columns by it would rewrap every
+		// row above it on each frame. Lay that cell out in the measured widths
+		// instead; it counts once a `|` or newline closes it. The row's closed
+		// cells are final and count already. The first data row has no finished
+		// rows to borrow from, so it counts whole.
+		const openCell =
+			this.#transientRenderCache && !this.#renderingStablePrefix && token.rows.length > 1
+				? growingTableCell(token.raw)
+				: -1;
+		const lastRow = token.rows.length - 1;
+		for (let rowIndex = 0; rowIndex <= lastRow; rowIndex++) {
+			const row = token.rows[rowIndex];
 			for (let i = 0; i < row.length; i++) {
+				if (rowIndex === lastRow && i === openCell) continue;
 				const cellText = this.#renderInlineTokens(row[i].tokens || [], styleContext);
 				const cellLineWidths = this.#terminalLineWidths(cellText);
 				naturalWidths[i] = Math.max(naturalWidths[i] || 0, ...cellLineWidths);

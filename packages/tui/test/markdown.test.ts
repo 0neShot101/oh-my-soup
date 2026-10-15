@@ -3,6 +3,7 @@ import { stripVTControlCharacters } from "node:util";
 import {
 	clearRenderCache,
 	extractMarkdownLinks,
+	holdPartialTableRow,
 	Markdown,
 	renderInlineMarkdown,
 } from "@oh-my-pi/pi-tui/components/markdown";
@@ -376,6 +377,74 @@ Average Latency: 1,240 ms
 			const dividerLines = plainLines.filter(line => line.includes("+"));
 
 			expect(dividerLines.length >= 2, "Expected header + row divider").toBeTruthy();
+		});
+
+		it("shows a streaming table's growing row without re-laying out the rows above it", () => {
+			const table = "| PR | Title |\n| --- | --- |\n| [#1](https://example.com/pull/1) | short title |\n";
+			const plain = (md: Markdown) => md.render(60).map(line => stripVTControlCharacters(line).trimEnd());
+			const markdown = new Markdown(table, 0, 0, defaultMarkdownTheme);
+			markdown.transientRenderCache = true;
+			const settled = plain(markdown);
+			// Until its `)` arrives a link is literal text, wider than the rendered link it becomes.
+			for (const [partial, shown] of [
+				["| [#2](https://example.com/pull/2", "[#2]"],
+				["| [#2](https://example.com/pull/2) | a much longer title than the others", "a much"],
+			]) {
+				clearRenderCache();
+				markdown.setText(table + partial);
+				const rendered = plain(markdown);
+				expect(rendered.slice(0, settled.length - 1)).toEqual(settled.slice(0, -1));
+				expect(rendered.slice(settled.length - 1).some(line => line.includes(shown))).toBe(true);
+			}
+		});
+
+		it("measures a streaming table's finished last row even without its trailing newline", () => {
+			// Assistant text reaches Markdown trimmed, so a finished row is told apart by its closing `|`.
+			const text =
+				"| PR | Title |\n| --- | --- |\n| #1 | short |\n| #2 | a considerably longer finished title here |";
+			const streaming = new Markdown(text, 0, 0, defaultMarkdownTheme);
+			streaming.transientRenderCache = true;
+			clearRenderCache();
+			const rendered = streaming.render(80);
+			clearRenderCache();
+			expect(rendered).toEqual(new Markdown(text, 0, 0, defaultMarkdownTheme).render(80));
+		});
+
+		describe("holdPartialTableRow", () => {
+			const table = "Intro.\n\n| PR | Title |\n| --- | :-: |\n| #1 | one |";
+
+			it("drops only the growing row of a table, keeping the newline before it", () => {
+				expect(holdPartialTableRow(`${table}\n| [#2](https://exa`)).toBe(`${table}\n`);
+				expect(holdPartialTableRow(`${table}\n`)).toBe(`${table}\n`);
+			});
+
+			it("only grows while a blockquote table streams, whatever the chunk boundaries", () => {
+				const stream = "> | h |\n> | - |\n> | a |\n> | b |\n> after";
+				let sent = "";
+				for (let length = 1; length <= stream.length; length++) {
+					const next = holdPartialTableRow(stream.slice(0, length));
+					expect(next.startsWith(sent)).toBe(true);
+					sent = next;
+				}
+				expect(sent).toBe(stream);
+			});
+
+			it("keeps pipe lines that are not a table: no delimiter row yet, or inside an open code fence", () => {
+				for (const text of [
+					"| a |\n| b",
+					"| a |\n| --- | -",
+					`\`\`\`md\n${table}\n| #2`,
+					`~~~~\n\`\`\`\n~~~\n${table}\n| #2`,
+				]) {
+					expect(holdPartialTableRow(text)).toBe(text);
+				}
+			});
+
+			it("holds a table row again once the fence before it closes", () => {
+				expect(holdPartialTableRow(`\`\`\`ts\nx\n\`\`\`\n\n${table}\n| #2`)).toBe(
+					`\`\`\`ts\nx\n\`\`\`\n\n${table}\n`,
+				);
+			});
 		});
 
 		it("should keep column width at least the longest word", () => {
