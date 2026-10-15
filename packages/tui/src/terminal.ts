@@ -1684,8 +1684,11 @@ export class ProcessTerminal implements Terminal {
 
 		// Handler that pipes stdin data through the buffer
 		this.#stdinDataHandler = (data: string) => {
-			// Recover modes reset by the host before the user's next paste.
-			if (data && this.#active && this.#rearmBracketedPaste) this.#safeWrite("\x1b[?2004h");
+			// Recover modes reset by the host before the user's next paste. Not
+			// mid-paste: the host is plainly in 2004 then, and per-key reads would
+			// turn one paste into thousands of writes (#15757).
+			if (data && this.#active && this.#rearmBracketedPaste && !this.#stdinBuffer!.pasting)
+				this.#safeWrite("\x1b[?2004h");
 			if (this.#win32PasteNormalizer) this.#win32PasteNormalizer.process(data);
 			else this.#stdinBuffer!.process(data);
 		};

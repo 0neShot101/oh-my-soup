@@ -459,7 +459,7 @@ fn collect_candidates(
 		pi_walker::WalkFilter::files_only().node_modules_unless_mentioned(mentions_node_modules);
 	if let Some(glob) = glob.map(str::trim).filter(|value| !value.is_empty()) {
 		let pattern = glob_util::build_glob_pattern(glob, false);
-		let compiled = pi_walker::CompiledWalkGlob::new([pattern])
+		let compiled = pi_walker::CompiledWalkGlob::new(glob_util::search_scope_patterns(pattern))
 			.map_err(|err| Error::from_reason(format!("Invalid glob pattern: {err}")))?;
 		filter = filter.glob(compiled);
 	}
