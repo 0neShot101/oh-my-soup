@@ -1548,6 +1548,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			// mode keeps CR bytes, so it slices the original segments instead.
 			let collectedLines: string[];
 			let totalFileLines: number;
+			let endsAtTerminalNewline = false;
 			const maxBytesForRead = Math.max(DEFAULT_MAX_BYTES, maxLines * 512);
 			if (fullLines) {
 				totalFileLines = fullLines.length;
@@ -1560,6 +1561,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						});
 				totalFileLines = window.totalFileLines;
 				collectedLines = window.lines;
+				// An open raw range that reaches EOF keeps the file's terminal newline, as single-range reads do.
+				endsAtTerminalNewline =
+					range.endLine === undefined &&
+					window.reachedEof &&
+					window.hasTrailingNewline &&
+					rangeStart + collectedLines.length === totalFileLines;
 			}
 
 			if (rangeStart >= totalFileLines) {
@@ -1591,7 +1598,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					displayLineByNumber.set(range.startLine + i, displayLines[i] ?? "");
 				}
 				if (!fullLines || rawSelector) {
-					const blockText = displayLines.join("\n");
+					const blockText = displayLines.join("\n") + (rawSelector && endsAtTerminalNewline ? "\n" : "");
 					blocks.push(formatTextWithMode(blockText, range.startLine, shouldAddHashLines, shouldAddLineNumbers));
 				}
 			}

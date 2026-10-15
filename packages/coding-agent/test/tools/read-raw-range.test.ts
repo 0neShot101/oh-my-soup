@@ -96,6 +96,17 @@ describe("read tool raw range exactness", () => {
 		expect(archive.details?.totalLines).toBe(disk.details?.totalLines);
 	});
 
+	it("keeps the terminal newline when the last raw multi-range is open-ended", async () => {
+		await Bun.write(filePath, "one\ntwo\nthree\n");
+		const streamedFile = path.join(testDir, "large-multi.txt");
+		await Bun.write(streamedFile, `${"x".repeat(4 * 1024 * 1024)}\ntwo\nthree\nfour\n`);
+
+		const buffered = await tool.execute("buffered-open-multi", { path: `${filePath}:raw:1,3-` });
+		const streamed = await tool.execute("streamed-open-multi", { path: `${streamedFile}:raw:2,4-` });
+		expect(getTextOutput(buffered)).toBe("one\n\n…\n\nthree\n");
+		expect(getTextOutput(streamed)).toBe("two\n\n…\n\nfour\n");
+	});
+
 	it("records the source line count for an open-ended range that reaches EOF", async () => {
 		const result = await tool.execute("call-raw-tail", { path: `${filePath}:raw:31-` });
 
