@@ -3234,14 +3234,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					} else if (retryFallback.originalThinkingLevel !== undefined) {
 						restoredSessionThinkingLevel = retryFallback.originalThinkingLevel;
 					}
-					thinkingLevel = pickInitialThinkingLevel(resolved.model);
-					autoThinking = thinkingLevel === AUTO_THINKING;
-					effectiveThinkingLevel = concreteThinkingLevel(thinkingLevel);
-					effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
-						autoThinking
-							? resolveProvisionalAutoLevel(resolved.model)
-							: resolveThinkingLevelForModel(resolved.model, effectiveThinkingLevel),
-					);
+					adoptThinkingForModel(resolved.model);
 					preconnectModelHost(resolved.model.baseUrl);
 					return true;
 				}
