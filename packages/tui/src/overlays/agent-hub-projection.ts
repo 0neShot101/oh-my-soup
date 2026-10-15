@@ -207,7 +207,17 @@ export function hubFallbackStatsSession<TRecord extends AgentRecordLike>(
 	return session && typeof session.getSessionStats === "function" ? session : undefined;
 }
 
-function withDirectCost(metrics: AgentMetrics | undefined, cost: number | undefined): AgentMetrics | undefined {
+function projectRowMetrics<TMetrics extends AgentCostSnapshot>(
+	ref: AgentRecordLike,
+	observed: ObservableSession | undefined,
+	live: TMetrics | undefined,
+	retained: TMetrics | undefined,
+	hasLiveSession: boolean,
+): TMetrics | AgentMetrics | undefined {
+	const cost = live?.cost ?? ref.history?.directCost ?? retained?.cost;
+	const metrics = observed?.progress
+		? progressMetrics(observed)
+		: (ref.history?.metrics ?? (!hasLiveSession ? retained : undefined) ?? live);
 	return metrics && cost !== undefined ? { ...metrics, cost } : metrics;
 }
 
@@ -224,12 +234,7 @@ export function hubRowMetrics<TRecord extends AgentRecordLike>(
 	const session = hubFallbackStatsSession(ref, observed);
 	const liveEntry = session ? sessionMetrics.get(session) : undefined;
 	const retainedEntry = sessionMetrics.get(ref);
-	const historyMetrics = ref.history?.metrics;
-	const cost = liveEntry?.metrics?.cost ?? ref.history?.directCost ?? retainedEntry?.metrics?.cost;
-	if (observed?.progress) return withDirectCost(progressMetrics(observed), cost);
-	if (historyMetrics) return withDirectCost(historyMetrics, cost);
-	if (!session && retainedEntry?.metrics) return withDirectCost(retainedEntry.metrics, cost);
-	return withDirectCost(liveEntry?.metrics, cost);
+	return projectRowMetrics(ref, observed, liveEntry?.metrics, retainedEntry?.metrics, session !== undefined);
 }
 
 /** Cost-only projection for frequent status updates; full roster metrics keep their own cache. */
@@ -257,17 +262,13 @@ export function aggregateCost<TRecord extends AgentRecordLike>(args: {
 			}
 			if (cached?.cost !== undefined) args.sessionCosts.set(ref, cached);
 		}
-		const retainedCost = args.sessionCosts.get(ref)?.cost;
-		const directCost = cached?.cost ?? ref.history?.directCost ?? retainedCost;
-		let cost: number | undefined;
-		if (observed?.progress) {
-			const progress = progressMetrics(observed);
-			if (progress) cost = directCost ?? progress.cost;
-		} else if (ref.history?.metrics) {
-			cost = directCost ?? ref.history.metrics.cost;
-		} else {
-			cost = session ? cached?.cost : retainedCost;
-		}
+		const cost = projectRowMetrics(
+			ref,
+			observed,
+			cached?.cost !== undefined ? cached : undefined,
+			args.sessionCosts.get(ref),
+			session !== undefined,
+		)?.cost;
 		if (cost === undefined || (session && countedSessions.has(session))) continue;
 		if (session) countedSessions.add(session);
 		total += finiteMetric(cost);

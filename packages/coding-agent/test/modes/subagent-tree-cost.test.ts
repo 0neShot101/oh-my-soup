@@ -231,7 +231,6 @@ describe("sumSubagentTreeCost", () => {
 				session,
 				sessionFile: path.join(artifacts, "Worker.jsonl"),
 				status: "idle",
-				history: { metrics: { tokens: 15, requests: 1, tools: 0, cost: 0.6, durationMs: 100 } },
 			});
 			lifecycle.adopt(
 				worker.id,
@@ -256,6 +255,8 @@ describe("sumSubagentTreeCost", () => {
 			manager.appendMessage(assistant(model, 0.4, 2));
 			await lifecycle.park(worker.id);
 			expect(worker.session).toBeNull();
+			expect(worker.history?.metrics).toBeUndefined();
+			expect(worker.history?.directCost).toBe(1);
 			expect(sumSubagentTreeCost(args)).toBeCloseTo(1);
 
 			await lifecycle.ensureLive(worker.id);

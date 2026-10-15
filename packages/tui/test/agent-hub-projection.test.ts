@@ -199,10 +199,20 @@ describe("aggregateCost", () => {
 		const observed = liveObserver(0.2);
 		args.observedById.set(ref.id, observed);
 		expect(aggregateCost(args)).toBeCloseTo(1.1);
+		args.observedById.clear();
+		expect(aggregateCost(args)).toBe(0);
 		ref.session = null;
 		expect(aggregateCost(args)).toBeCloseTo(1.1);
 		ref.history = { directCost: 1.2 };
 		expect(aggregateCost(args)).toBeCloseTo(1.2);
+	});
+
+	it("does not invent a parked row from direct-cost history without a retained snapshot", () => {
+		const ref = { id: "worker", session: null, history: { directCost: 2 } } as unknown as AgentRecordLike;
+		const args = { rows: [ref], observedById: new Map(), sessionCosts: new WeakMap() };
+		expect(aggregateCost(args)).toBe(0);
+		ref.history!.metrics = { tokens: 1, requests: 1, tools: 0, durationMs: 0, cost: 0.4 };
+		expect(aggregateCost(args)).toBe(2);
 	});
 
 	it("preserves observer validity and history precedence without counting shared sessions twice", () => {
