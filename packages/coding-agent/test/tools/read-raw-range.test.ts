@@ -6,6 +6,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { formatTruncationMetaNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
+import { writeArchive } from "@oh-my-pi/pi-utils/ar";
 
 function getTextOutput(result: { content: Array<{ type: string; text?: string }> }): string {
 	return result.content
@@ -82,6 +83,17 @@ describe("read tool raw range exactness", () => {
 
 		const result = await tool.execute("streamed-raw-range", { path: `${streamedFile}:raw:2-3` });
 		expect(getTextOutput(result)).toBe("line 2\nline 3");
+	});
+
+	it("reads an empty archive member verbatim in raw mode, matching an empty disk file", async () => {
+		await writeArchive(path.join(testDir, "empty.zip"), "zip", [["empty.txt", ""]]);
+		await Bun.write(filePath, "");
+
+		const archive = await tool.execute("empty-archive-raw", { path: "empty.zip:empty.txt:raw" });
+		const disk = await tool.execute("empty-disk-raw", { path: `${filePath}:raw` });
+		expect(getTextOutput(archive)).toBe("");
+		expect(getTextOutput(disk)).toBe("");
+		expect(archive.details?.totalLines).toBe(disk.details?.totalLines);
 	});
 
 	it("records the source line count for an open-ended range that reaches EOF", async () => {

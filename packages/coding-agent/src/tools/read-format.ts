@@ -154,6 +154,11 @@ function countSplitLines(text: string): number {
 	return countNewlines(text) + (text.endsWith("\n") ? 0 : 1);
 }
 
+/** Raw reads retain the addressable empty line of an empty source, as disk reads do. */
+function countRawLines(text: string): number {
+	return text.length === 0 ? 1 : countSplitLines(text);
+}
+
 /** `lines.slice(start, end).join("\n")` as a substring of the `text` that `lines` was split from. */
 function sliceLineRange(text: string, lines: readonly string[], start: number, end: number): string {
 	let from = 0;
@@ -297,7 +302,7 @@ export async function buildInMemorySelectorResult(
 	options: Omit<InMemoryTextOptions, "raw">,
 ): Promise<AgentToolResult<ReadToolDetails>> {
 	const raw = isRawSelector(parsed);
-	const totalLines = countSplitLines(text);
+	const totalLines = raw ? countRawLines(text) : countSplitLines(text);
 	const sel = resolveTailSelector(parsed, totalLines);
 	if (sel.kind === "lines" && sel.ranges.length > 1) {
 		return buildInMemoryMultiRangeResult(session, text, sel.ranges, { ...options, raw });
@@ -319,7 +324,7 @@ export async function buildInMemoryTextResult(
 	// Raw mode addresses verbatim `\n` segments and shows no block context, so it
 	// slices the window straight out of `text`; only addressable reads need every line.
 	const allLines = rawDisplay ? undefined : splitAddressableFileLines(text);
-	const totalLines = allLines ? allLines.length : countSplitLines(text);
+	const totalLines = allLines ? allLines.length : countRawLines(text);
 	details.totalLines = totalLines;
 	// User-requested 0-indexed range start. Lines BEFORE this are leading
 	// context (added below if offset is explicit).
@@ -530,7 +535,7 @@ export async function buildInMemoryMultiRangeResult(
 	const details = options.details ?? {};
 	// Raw mode only emits the requested windows, so it never splits the whole text.
 	const allLines = options.raw === true ? undefined : splitAddressableFileLines(text);
-	const totalLines = allLines ? allLines.length : countSplitLines(text);
+	const totalLines = allLines ? allLines.length : countRawLines(text);
 	details.totalLines = totalLines;
 	const shouldAddHashLines = displayMode.hashLines;
 	const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
