@@ -247,6 +247,12 @@ function toPositiveNumberOrUndefined(value: unknown): number | undefined {
 	return undefined;
 }
 
+/** Positive safe-integer token count from a discovery payload field, else undefined. */
+function toTokenLimitOrUndefined(value: unknown): number | undefined {
+	const parsed = toPositiveNumberOrUndefined(value);
+	return parsed !== undefined && Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
 function isLlamaCppUnlimitedSentinel(value: unknown): boolean {
 	if (typeof value === "number") {
 		return value === -1;
@@ -902,8 +908,11 @@ export async function discoverOpenAIModelsList(
 						id?: string;
 						max_model_len?: unknown;
 						context_length?: unknown;
+						max_output_tokens?: unknown;
+						max_completion_tokens?: unknown;
 						max_tokens?: unknown;
 						limits?: unknown;
+						top_provider?: unknown;
 						input?: unknown;
 						input_modalities?: unknown;
 						output?: unknown;
@@ -923,7 +932,7 @@ export async function discoverOpenAIModelsList(
 		: await attempt(baseHeaders);
 	const models = payload.data ?? [];
 	const references = getBundledModelReferenceIndex();
-	const discovered: Model<Api>[] = [];
+	const specs: ModelSpec<Api>[] = [];
 	for (const item of models) {
 		const id = item.id;
 		if (!id) continue;
@@ -944,36 +953,29 @@ export async function discoverOpenAIModelsList(
 			extractOpenAIModelsListInputCapabilities(item) ??
 			reference?.input ?? ["text"];
 		const limits = isRecord(item.limits) ? item.limits : undefined;
-		const maxInputTokens = toPositiveNumberOrUndefined(limits?.max_input_tokens);
-		const maxOutputTokens = toPositiveNumberOrUndefined(limits?.max_output_tokens);
+		const maxInputTokens = toTokenLimitOrUndefined(limits?.max_input_tokens);
+		const maxOutputTokens = toTokenLimitOrUndefined(limits?.max_output_tokens);
 		const reportedLimitsContextWindow =
 			maxInputTokens !== undefined &&
 			maxOutputTokens !== undefined &&
-			Number.isSafeInteger(maxInputTokens) &&
-			Number.isSafeInteger(maxOutputTokens) &&
 			Number.isSafeInteger(maxInputTokens + maxOutputTokens)
 				? maxInputTokens + maxOutputTokens
 				: undefined;
-		// Gateways advertise the per-request output cap under several names, and
-		// none of them is trustworthy in isolation: `limits.max_output_tokens` is
-		// the explicit spelling and the flat `max_tokens` is the generic one. An
-		// OpenAI-compatible `/v1/models` row is a catalog entry declaring what the
-		// endpoint will accept, so a usable flat value is worth honoring
-		// (#13062). Note this is deliberately NOT the llama.cpp rule: that
-		// protocol reads a positive `max_tokens` as a per-request default the
-		// client may raise and honors only the `-1` unlimited sentinel, whereas
-		// here the value is a cap. Reduce each field to a usable output limit on
-		// its own, then let the explicit nested field outrank the flat one among
-		// the fields that survive. A field that is present but unusable (`"nope"`,
-		// `0`, `-1`, `1.5`, `1e30`) is ignored rather than allowed to swallow a
-		// sibling field that is fine, because falling through to the 32K default
-		// there would be worse than reading the field the provider got right.
-		const asOutputLimit = (value: unknown): number | undefined => {
-			const parsed = toPositiveNumberOrUndefined(value);
-			return parsed !== undefined && Number.isSafeInteger(parsed) ? parsed : undefined;
-		};
-		const advertisedMaxTokens = asOutputLimit(item.max_tokens);
-		const reportedMaxTokens = asOutputLimit(limits?.max_output_tokens) ?? advertisedMaxTokens;
+		// Gateways spell the output cap nested (`limits.max_output_tokens`),
+		// flat (`max_output_tokens`, OpenRouter-style `max_completion_tokens`,
+		// generic `max_tokens` (#13062)), or under OpenRouter's
+		// `top_provider.max_completion_tokens` (ModelRelay and other
+		// OpenRouter-shaped catalogs). Each spelling is validated on its own so a
+		// malformed one never masks a usable sibling. A `/v1/models` row declares
+		// what the endpoint accepts, so `max_tokens` here is a cap — unlike
+		// llama.cpp, whose positive `max_tokens` is only a per-request default.
+		const topProvider = isRecord(item.top_provider) ? item.top_provider : undefined;
+		const reportedMaxTokens =
+			maxOutputTokens ??
+			toTokenLimitOrUndefined(item.max_output_tokens) ??
+			toTokenLimitOrUndefined(item.max_completion_tokens) ??
+			toTokenLimitOrUndefined(topProvider?.max_completion_tokens) ??
+			toTokenLimitOrUndefined(item.max_tokens);
 		const reportedContextWindow =
 			toPositiveNumberOrUndefined(item.max_model_len) ??
 			toPositiveNumberOrUndefined(item.context_length) ??
@@ -987,25 +989,23 @@ export async function discoverOpenAIModelsList(
 		// cannot serve (issue #13021).
 		const task = extractOpenAIModelsListOutputTask(item);
 		if (task) {
-			discovered.push(
-				buildModel({
-					id,
-					name: reference?.name ?? id,
-					api: task.api,
-					kind: task.kind,
-					provider: providerConfig.provider,
-					baseUrl,
-					reasoning: false,
-					input,
-					supportsTools: false,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					// Embeddings cap their input by context; image jobs carry no
-					// token window. Neither produces output tokens.
-					contextWindow: task.kind === "embedding" ? reportedContextWindow : null,
-					maxTokens: null,
-					headers,
-				} as ModelSpec<Api>),
-			);
+			specs.push({
+				id,
+				name: reference?.name ?? id,
+				api: task.api,
+				kind: task.kind,
+				provider: providerConfig.provider,
+				baseUrl,
+				reasoning: false,
+				input,
+				supportsTools: false,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				// Embeddings cap their input by context; image jobs carry no
+				// token window. Neither produces output tokens.
+				contextWindow: task.kind === "embedding" ? reportedContextWindow : null,
+				maxTokens: null,
+				headers,
+			} as ModelSpec<Api>);
 			continue;
 		}
 		const api =
@@ -1013,45 +1013,44 @@ export async function discoverOpenAIModelsList(
 				? resolveLiteLLMApi(undefined, id, providerConfig.api)
 				: providerConfig.api;
 		const contextWindow = reportedContextWindow ?? DISCOVERY_DEFAULT_CONTEXT_WINDOW;
-		discovered.push(
-			buildModel({
-				id,
-				name: reference?.name ?? id,
-				api,
-				provider: providerConfig.provider,
-				baseUrl,
-				reasoning: reference?.reasoning ?? false,
-				thinking: inheritReferenceThinking(undefined, reference, providerConfig.provider),
-				input,
-				...(providerConfig.discovery.type === "lm-studio" ? { imageInputDecoder: "stb" as const } : {}),
-				// Proxy/gateway pricing is provider-specific and rarely matches
-				// upstream bundled catalogs, so keep costs local-unknown even
-				// when we successfully recover the upstream model identity.
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		specs.push({
+			id,
+			name: reference?.name ?? id,
+			api,
+			provider: providerConfig.provider,
+			baseUrl,
+			reasoning: reference?.reasoning ?? false,
+			thinking: inheritReferenceThinking(undefined, reference, providerConfig.provider),
+			input,
+			...(providerConfig.discovery.type === "lm-studio" ? { imageInputDecoder: "stb" as const } : {}),
+			// Proxy/gateway pricing is provider-specific and rarely matches
+			// upstream bundled catalogs, so keep costs local-unknown even
+			// when we successfully recover the upstream model identity.
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow,
+			// Cap a provider-advertised output limit or the reference's output limit at
+			// the discovered context window so a larger limit can never request more
+			// tokens than the local runtime advertises.
+			maxTokens: Math.min(
+				reportedMaxTokens ?? reference?.maxTokens ?? discoveryDefaultMaxTokens(api),
 				contextWindow,
-				// Cap a provider-advertised output limit or the reference's output limit at
-				// the discovered context window so a larger limit can never request more
-				// tokens than the local runtime advertises.
-				maxTokens: Math.min(
-					reportedMaxTokens ?? reference?.maxTokens ?? discoveryDefaultMaxTokens(api),
-					contextWindow,
-				),
-				headers,
-				compat: {
-					supportsStore: false,
-					supportsDeveloperRole: false,
-					supportsReasoningEffort: referenceCompat?.supportsReasoningEffort ?? false,
-					...(referenceCompat?.reasoningEffortMap
-						? { reasoningEffortMap: referenceCompat.reasoningEffortMap }
-						: {}),
-					...(referenceCompat?.omitReasoningEffort !== undefined
-						? { omitReasoningEffort: referenceCompat.omitReasoningEffort }
-						: {}),
-				},
-			} as ModelSpec<Api>),
-		);
+			),
+			headers,
+			compat: {
+				supportsStore: false,
+				supportsDeveloperRole: false,
+				supportsReasoningEffort: referenceCompat?.supportsReasoningEffort ?? false,
+				...(referenceCompat?.reasoningEffortMap ? { reasoningEffortMap: referenceCompat.reasoningEffortMap } : {}),
+				...(referenceCompat?.omitReasoningEffort !== undefined
+					? { omitReasoningEffort: referenceCompat.omitReasoningEffort }
+					: {}),
+			},
+		} as ModelSpec<Api>);
 	}
-	return discovered;
+	// `discovery.type: "litellm"` keeps LiteLLM provider policy under any alias.
+	return providerConfig.discovery.type === "litellm"
+		? specs.map(spec => buildDiscoveredModel(spec, "litellm"))
+		: specs.map(spec => buildModel(spec));
 }
 
 export async function discoverLiteLLMModels(
@@ -1108,7 +1107,7 @@ export async function discoverLiteLLMModels(
 	if (richModels === null) {
 		return discoverOpenAIModelsList({ ...providerConfig, baseUrl }, ctx);
 	}
-	return richModels.map(spec => buildModel({ ...spec, headers }));
+	return richModels.map(spec => buildDiscoveredModel({ ...spec, headers }, "litellm"));
 }
 
 /**
