@@ -5,6 +5,7 @@ import {
 	extractMarkdownLinks,
 	holdPartialTableRow,
 	Markdown,
+	speculativeStreamingSource,
 	renderInlineMarkdown,
 } from "@oh-my-pi/pi-tui/components/markdown";
 import { setTerminalTextSizing, TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
@@ -385,9 +386,9 @@ Average Latency: 1,240 ms
 			const markdown = new Markdown(table, 0, 0, defaultMarkdownTheme);
 			markdown.transientRenderCache = true;
 			const settled = plain(markdown);
-			// Until its `)` arrives a link is literal text, wider than the rendered link it becomes.
+			// Until its `)` arrives the link renders speculatively closed, with the URL so far.
 			for (const [partial, shown] of [
-				["| [#2](https://example.com/pull/2", "[#2]"],
+				["| [#2](https://example.com/pull/2", "#2 (https://example.com/pull/2)"],
 				["| [#2](https://example.com/pull/2) | a much longer title than the others", "a much"],
 			]) {
 				clearRenderCache();
@@ -418,8 +419,14 @@ Average Latency: 1,240 ms
 				expect(holdPartialTableRow(`${table}\n`)).toBe(`${table}\n`);
 			});
 
+			it("holds the growing row of a table without outer pipes", () => {
+				const bare = "PR | Title\n--- | ---\n#1 | one";
+				expect(holdPartialTableRow(`${bare}\n#2 | tw`)).toBe(`${bare}\n`);
+			});
+
 			it("only grows while a blockquote table streams, whatever the chunk boundaries", () => {
-				const stream = "> | h |\n> | - |\n> | a |\n> | b |\n> after";
+				// GFM keeps any non-blank line in the table, so the quote's prose follows a blank quoted line.
+				const stream = "> | h |\n> | - |\n> | a |\n> | b |\n>\n> after";
 				let sent = "";
 				for (let length = 1; length <= stream.length; length++) {
 					const next = holdPartialTableRow(stream.slice(0, length));
@@ -443,6 +450,66 @@ Average Latency: 1,240 ms
 			it("holds a table row again once the fence before it closes", () => {
 				expect(holdPartialTableRow(`\`\`\`ts\nx\n\`\`\`\n\n${table}\n| #2`)).toBe(
 					`\`\`\`ts\nx\n\`\`\`\n\n${table}\n`,
+				);
+				// Four columns in, outside a list item, is indented code, not a fence.
+				expect(holdPartialTableRow(`    \`\`\`\n    code\n\n${table}\n| #2`)).toBe(
+					`    \`\`\`\n    code\n\n${table}\n`,
+				);
+			});
+		});
+
+		describe("speculatively closed spans while streaming", () => {
+			const transient = (text: string) => {
+				clearRenderCache();
+				const markdown = new Markdown(text, 0, 0, defaultMarkdownTheme);
+				markdown.transientRenderCache = true;
+				return markdown.render(60);
+			};
+			const final = (text: string) => {
+				clearRenderCache();
+				return new Markdown(text, 0, 0, defaultMarkdownTheme).render(60);
+			};
+			const prose = "Opening prose long enough to wrap across a couple of terminal rows here.";
+
+			it("renders an open link, math span, or table-cell link as the closed form it streams toward", () => {
+				for (const [open, closed] of [
+					[`${prose} See [the docs](https://example.com/a/b`, `${prose} See [the docs](https://example.com/a/b)`],
+					[`${prose} Value $\\frac{a+b}{c`, `${prose} Value $\\frac{a+b}{c}$`],
+					[`${prose} Value \\(x^2 + \\sqr`, `${prose} Value \\(x^2 + \\)`],
+					[`- item\n- see [docs](https://ex`, `- item\n- see [docs](https://ex)`],
+					[`${prose} See [wiki](https://e.org/F_(m`, `${prose} See [wiki](https://e.org/F_(m))`],
+					[`${prose} Value $$x^2$`, `${prose} Value $$x^2$$`],
+				]) {
+					expect(transient(open)).toEqual(final(closed));
+				}
+			});
+
+			it("leaves currency, escapes, images, and code spans literal", () => {
+				for (const text of [
+					`${prose} It costs $5 per mo`,
+					`${prose} Escaped \\$x^2`,
+					`${prose} Escaped \\[docs](https://ex`,
+					`${prose} ![alt](https://ex`,
+					`${prose} Code \`[docs](https://ex`,
+					`${prose} Code \`$x^2`,
+					`${prose} Code \`$x^2\` and`,
+				]) {
+					expect(transient(text)).toEqual(final(text));
+				}
+			});
+
+			it("closes only the last block's span in a native terminal's source, and nothing inside an open fence", () => {
+				expect(speculativeStreamingSource("Paid $5 and $\n\nValue $x^")).toBe("Paid $5 and $\n\nValue $x$");
+				expect(speculativeStreamingSource("Value $x^\n\nNext")).toBe("Value $x^\n\nNext");
+				expect(speculativeStreamingSource("Done.\n\n```md\nSee [docs](https://ex")).toBe(
+					"Done.\n\n```md\nSee [docs](https://ex",
+				);
+				// A fence nested in a list item may sit four columns in; indented code elsewhere is no fence.
+				expect(speculativeStreamingSource("- item\n\n    ```md\n    See [docs](https://ex")).toBe(
+					"- item\n\n    ```md\n    See [docs](https://ex",
+				);
+				expect(speculativeStreamingSource("    ```\n    code\n\nSee [docs](https://ex")).toBe(
+					"    ```\n    code\n\nSee [docs](https://ex)",
 				);
 			});
 		});

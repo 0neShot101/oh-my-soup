@@ -8,6 +8,7 @@ import {
 	Markdown,
 	type MarkdownTheme,
 	rewriteMarkdownLinkDestinations,
+	speculativeStreamingSource,
 	streamingMarkdownSource,
 } from "../components/markdown";
 import { Spacer } from "../components/spacer";
@@ -868,7 +869,13 @@ export class AssistantMessageComponent extends Container {
 					: {
 							text: source,
 							stream,
-							node: node("md", stream ? { text: source, stream: true } : { text: source }, undefined, key),
+							// A streaming node renders its open link or math span as already closed, as the TUI does.
+							node: node(
+								"md",
+								stream ? { text: speculativeStreamingSource(source), stream: true } : { text: source },
+								undefined,
+								key,
+							),
 						};
 			parts.set(slot, entry);
 			return entry.node;
