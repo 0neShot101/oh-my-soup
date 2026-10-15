@@ -450,6 +450,63 @@ describe("WorkerCore", () => {
 		}
 	});
 
+	it("keeps a suspended run on its own artifact root while an overlapping run uses another", async () => {
+		const dirA = await fs.mkdtemp(path.join(os.tmpdir(), "omp-artifacts-a-"));
+		const dirB = await fs.mkdtemp(path.join(os.tmpdir(), "omp-artifacts-b-"));
+		await Bun.write(path.join(dirA, "5.eval.log"), "from A");
+		await Bun.write(path.join(dirB, "5.eval.log"), "from B");
+		const harness = createWorkerHarness();
+		const gate = Promise.withResolvers<void>();
+		const entered = Promise.withResolvers<void>();
+		const probe = globalThis as {
+			__omp_roots_gate?: { entered(): void; wait: Promise<void> };
+			__omp_roots_probe?: Record<string, unknown>;
+		};
+		probe.__omp_roots_gate = { entered: () => entered.resolve(), wait: gate.promise };
+		probe.__omp_roots_probe = {};
+		const snapshot = (artifacts: string): SessionSnapshot => ({
+			cwd: process.cwd(),
+			sessionId: "artifact-roots-overlap",
+			localRoots: { artifact: artifacts },
+		});
+		try {
+			await initializeWorker(harness, snapshot(dirA));
+			const holdResult = waitForMessage(harness, message => message.type === "result" && message.runId === "hold");
+			harness.send({
+				type: "run",
+				runId: "hold",
+				code: `globalThis.__omp_roots_gate.entered(); await globalThis.__omp_roots_gate.wait; globalThis.__omp_roots_probe.hold = await read("artifact://5");`,
+				filename: "[roots-hold].js",
+				snapshot: snapshot(dirA),
+			});
+			await entered.promise;
+
+			const overlapResult = waitForMessage(
+				harness,
+				message => message.type === "result" && message.runId === "overlap",
+			);
+			harness.send({
+				type: "run",
+				runId: "overlap",
+				code: `globalThis.__omp_roots_probe.overlap = await read("artifact://5");`,
+				filename: "[roots-overlap].js",
+				snapshot: snapshot(dirB),
+			});
+			expect(await overlapResult).toMatchObject({ type: "result", runId: "overlap", ok: true });
+
+			gate.resolve();
+			expect(await holdResult).toMatchObject({ type: "result", runId: "hold", ok: true });
+			expect(probe.__omp_roots_probe).toEqual({ overlap: "from B", hold: "from A" });
+		} finally {
+			gate.resolve();
+			delete probe.__omp_roots_gate;
+			delete probe.__omp_roots_probe;
+			harness.send({ type: "close" });
+			await fs.rm(dirA, { recursive: true, force: true });
+			await fs.rm(dirB, { recursive: true, force: true });
+		}
+	});
+
 	it("survives concurrent same-realm setCwd in a child process with postmortem loaded", async () => {
 		// Process-level oracle: the production crash was postmortem killing the process
 		// after an unhandled rejection from concurrent inline setCwd. This must stay green

@@ -28,7 +28,7 @@ async function renderFullJobs(running: AsyncJobSnapshotItem[]): Promise<string[]
 		keybindings: { getKeys: () => ["escape"] },
 		reportContainer,
 		commandReportRows: () => 200,
-		session: {
+		viewSession: {
 			getAsyncJobSnapshot: () => ({
 				running,
 				recent: [],
@@ -201,5 +201,43 @@ describe("/jobs in the native terminal", () => {
 		expect(manager.getJob(foreignId)?.status).toBe("running");
 		expect(showStatus).toHaveBeenCalledWith(`No running background job with id "${foreignId}".`);
 		foreignGate.resolve("done");
+	});
+
+	// #14814: a subagent's jobs are owned by it, so main's owner-scoped snapshot never lists them.
+	it("a focused subagent view lists that agent's jobs, not main's, and offers no way to cancel them", async () => {
+		const worker = new AgentSession({
+			agent: new Agent({ initialState: { model: session.model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+			settings: Settings.isolated(),
+			modelRegistry: session.modelRegistry,
+			asyncJobManager: manager,
+			agentId: "Worker",
+		});
+		const gates = [Promise.withResolvers<string>(), Promise.withResolvers<string>()];
+		manager.register("bash", "main-only build", () => gates[0].promise, { ownerId: "main" });
+		const workerJob = manager.register("bash", "worker cargo test", () => gates[1].promise, { ownerId: "Worker" });
+		Object.defineProperty(mode, "viewSession", { get: () => worker, configurable: true });
+		Object.defineProperty(mode, "focusedAgentId", { get: () => "Worker", configurable: true });
+		try {
+			await mode.handleJobsCommand();
+			const sheet = mode.ui.overlayStack.at(-1)?.component;
+			expect(sheet).toBeInstanceOf(JobsSheet);
+			const listed = Bun.stripANSI(sheet?.render(100).join("\n") ?? "");
+			expect(listed).toContain("worker cargo test");
+			expect(listed).not.toContain("main-only build");
+			sheet?.handleInput?.("x");
+			sheet?.handleNativeEvent?.({ type: "action", key: "cancel", act: "cancel", mods: [] });
+			expect(manager.getJob(workerJob)?.status).toBe("running");
+			sheet?.handleInput?.("\x1b");
+
+			setNativeRendering(false);
+			await mode.handleJobsCommand({ full: true });
+			const report = Bun.stripANSI(mode.reportContainer.render(100).join("\n"));
+			expect(report).toContain("worker cargo test");
+			expect(report).not.toContain("main-only build");
+		} finally {
+			for (const gate of gates) gate.resolve("done");
+			await worker.dispose();
+		}
 	});
 });
