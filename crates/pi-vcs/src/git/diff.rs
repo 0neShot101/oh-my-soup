@@ -1597,6 +1597,7 @@ mod tests {
 		assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
 		String::from_utf8(output.stdout).expect("git output is UTF-8")
 	}
+	#[cfg(unix)]
 	fn git_diff(dir: &Path, args: &[&str]) -> String {
 		let output = Command::new("git")
 			.args(args)

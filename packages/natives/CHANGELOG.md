@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [18.11.1] - 2026-10-15
+
+### Added
+
+- Added `listWorkspace({ reportDirectoryErrors })`: an unreadable root fails the scan and unreadable subdirectories are returned in `unreadableDirectories` instead of being silently skipped ([#15769](https://github.com/can1357/oh-my-pi/issues/15769)).
+
 ### Fixed
 
 - Fixed unnecessary worker scheduling overhead in `read` loops over regular files ([#15504](https://github.com/can1357/oh-my-pi/pull/15504) by [@mg-mg-mg](https://github.com/mg-mg-mg))
@@ -11,6 +17,10 @@
 - Fixed embedded-shell `xargs` failing with "Argument list too long" on large input lists instead of splitting them into executable batches ([#15708](https://github.com/can1357/oh-my-pi/pull/15708) by [@mg-mg-mg](https://github.com/mg-mg-mg))
 - Fixed applying a submodule pin patch to the worktree failing with "does not exist" for a submodule directory or trying to write the pinned commit as a file; like `git apply`, the submodule's checkout is left untouched, an added pin creates its empty directory, and a removed one deletes only an empty (uninitialized) directory ([#15459](https://github.com/can1357/oh-my-pi/pull/15459))
 - Fixed `diffText`/`numstat` showing a moved submodule as a delete plus an add instead of Git's 100% rename, and `applyPatch` now applies such rename patches ([#15459](https://github.com/can1357/oh-my-pi/pull/15459))
+- Fixed `submodulePaths()` following `.gitmodules` paths that are absolute or contain `.`/`..`, which could point outside the repository or loop forever; like Git, such entries are ignored ([#15459](https://github.com/can1357/oh-my-pi/pull/15459))
+- Fixed `copyGitObjects` exposing partially copied objects and packs to concurrent Git readers and permanently skipping a file truncated by an interrupted copy; each file is now published atomically ([#15459](https://github.com/can1357/oh-my-pi/pull/15459))
+- Fixed embedded-shell `read` in a pipeline stage or async job queueing a second blocking worker while holding its own, which could hang every such read once the bounded blocking pool filled ([#15509](https://github.com/can1357/oh-my-pi/pull/15509))
+- Fixed Mermaid labels decoding legacy references such as `&#128;` or `#150;` to invisible C1 controls instead of the browser's `€` and `–` ([#15621](https://github.com/can1357/oh-my-pi/pull/15621))
 
 ## [18.11.0] - 2026-10-14
 

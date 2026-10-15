@@ -1391,6 +1391,20 @@ export class Agent {
 	}
 
 	/**
+	 * Move the given pending steering messages (by identity) ahead of the rest,
+	 * keeping both groups' relative order, so one-at-a-time delivery takes them
+	 * first. Messages no longer pending, including a claimed batch already
+	 * being delivered, are ignored.
+	 */
+	prioritizeSteering(messages: readonly AgentMessage[]): void {
+		const wanted = new Set(messages);
+		const front = this.#steeringQueue.filter(message => wanted.has(message));
+		if (front.every((message, index) => this.#steeringQueue[index] === message)) return;
+		this.#steeringQueue = [...front, ...this.#steeringQueue.filter(message => !wanted.has(message))];
+		this.#emitQueueChanged();
+	}
+
+	/**
 	 * Queue a follow-up message to be processed after the agent finishes.
 	 * Delivered only when agent has no more tool calls or steering messages.
 	 */

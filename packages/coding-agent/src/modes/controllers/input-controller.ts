@@ -960,8 +960,9 @@ export class InputController {
 
 			// Focused subagent session: the editor is a plain chat box for it.
 			// Everything below (slash/bash/python, loop,
-			// compaction queueing) is main-session-only.
-			if (this.ctx.focusedAgentId) {
+			// compaction queueing) is main-session-only. A tool-approval dialog
+			// owning the composer is the main session's, so its draft steers main.
+			if (this.ctx.focusedAgentId && !this.ctx.approvalOwnsComposer) {
 				await this.#submitToFocusedSession(text, "steer");
 				return;
 			}
@@ -1868,7 +1869,7 @@ export class InputController {
 		if (!text && !images) return;
 
 		// Focused subagent session: follow-ups go to it; non-chat input is gated.
-		if (this.ctx.focusedAgentId) {
+		if (this.ctx.focusedAgentId && !this.ctx.approvalOwnsComposer) {
 			await this.#submitToFocusedSession(text, "followUp");
 			return;
 		}

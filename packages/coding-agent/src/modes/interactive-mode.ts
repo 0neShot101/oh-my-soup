@@ -283,7 +283,7 @@ import { SessionFocusController } from "./controllers/session-focus-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { TanCommandController } from "./controllers/tan-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
-import { imageReferenceHyperlink } from "@oh-my-pi/pi-tui/prompt/image-references";
+import { imageReferenceHyperlink, setImageBlobWriter } from "@oh-my-pi/pi-tui/prompt/image-references";
 import { describeLoopCondition, evaluateLoopCondition, type LoopConditionVerdict } from "./loop-condition";
 import {
 	consumeLoopLimitIteration,
@@ -1251,6 +1251,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		| ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor)
 		| undefined;
 	#composerStatusPersistTimer: NodeJS.Timeout | undefined;
+	readonly #initialComposerModel: Model | undefined;
 	readonly #judgmentBatchProgressHud = new JudgmentBatchProgressHud();
 	readonly #downloadActivityHud = new DownloadActivityHud(() => this.ui.requestRender());
 	readonly #judgmentBatchProgressClearTimers = new Map<string, NodeJS.Timeout>();
@@ -1452,6 +1453,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#pendingSubmittedInput: SubmittedUserInput | undefined;
 	#pendingSubmissionDispose: (() => void) | undefined;
 	#pendingSubmissionPreservesDraft = false;
+	/** Unregisters this mode's transcript-image blob writer (a later mode's registration survives). */
+	#disposeImageBlobWriter: (() => void) | undefined;
 	#optimisticUserMessageComponents: Component[] = [];
 	#optimisticSkillMessageComponents: Component[] = [];
 	/** True while an optimistically-rendered `/skill:` row awaits its canonical
@@ -1635,6 +1638,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			rules: session.ttsrManager?.getRules(),
 		};
 	}
+	approvalOwnsComposer = false;
 	get focusedAgentId(): string | undefined {
 		return this.#focusController.focusedAgentId;
 	}
@@ -1761,6 +1765,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session = session;
 		this.sessionManager = session.sessionManager;
 		this.settings = session.settings;
+		this.#initialComposerModel = session.model;
 		const preferences = {
 			quiet: cfgStartupQuiet.get(settings),
 			composerShape: cfgComposerShape.get(settings),
@@ -1915,6 +1920,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Restored drafts (esc-esc, /tree, branch) re-materialize chip links off the render
 		// path so their chip tokens become clickable again instead of degrading to dead text.
 		this.editor.draftImageLinkMaterializer = images => materializeImageChipLinks(images, this.sessionManager);
+		// Transcript images without a file of their own (pasted, tool-produced, rendered figures)
+		// link to a blob copy of their bytes, the same store that backs composer chips.
+		this.#disposeImageBlobWriter = setImageBlobWriter((data, options) =>
+			this.sessionManager.putBlobSync(data, options),
+		);
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor);
 		this.statusLine = new StatusLineComponent(session, statusLineHost);
@@ -3685,7 +3695,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	#persistComposerStatus(): void {
 		if (!this.sessionManager.getSessionFile()) return;
-		const model = this.session.model;
+		// Role changes affect the next fresh launch; session-only switches do not.
+		const initialModel = this.#initialComposerModel ?? this.session.model;
+		const model = this.settings.getModelRole("default")
+			? (this.session.resolveRoleModelWithThinking("default").model ?? initialModel)
+			: initialModel;
 		// Recover the border's ANSI wrapper by coloring a sentinel and splitting around it.
 		const marker = "\0";
 		const colored = this.editor.borderColor(marker);
@@ -3704,7 +3718,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				model,
 				thinkingLevel: this.session.thinkingLevel,
 				autoThinking: this.session.isAutoThinking,
-				fastMode: this.session.isFastModeActive(),
+				// A fresh session derives tiers from settings, not this session's `/fast` toggles.
+				fastMode: model ? this.session.isFastModeConfiguredFor(model) : false,
 				usingSubscription: model ? this.session.modelRegistry.isUsingOAuth(model) : false,
 				autoCompactEnabled: this.session.autoCompactionEnabled,
 				compactionBoundaries: model?.contextWindow
@@ -7061,6 +7076,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		// InteractiveMode instance (e.g. test harnesses, headless re-init).
 		setAutoQaConsentHandler(null, null);
 		setCfgApprovalHost(null);
+		this.#disposeImageBlobWriter?.();
+		this.#disposeImageBlobWriter = undefined;
 		this.#hideSessionInfo();
 		if (this.#ownsStartedUi) {
 			this.ui.stop();
