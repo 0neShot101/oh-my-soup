@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed width-aware text on native (TSP) surfaces truncating content two columns early: the formatter now receives the full column budget, matching what a native `Text` describes with ([#15806](https://github.com/can1357/oh-my-pi/issues/15806))
+- Fixed width-aware text on native (TSP) terminals truncating content two columns early ([#15806](https://github.com/can1357/oh-my-pi/pull/15806) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ## [18.11.0] - 2026-10-14
 
