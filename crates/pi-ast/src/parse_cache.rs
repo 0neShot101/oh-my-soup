@@ -12,11 +12,12 @@
 //! cheap clones of it.
 //!
 //! Retention is an LRU budgeted by estimated tree memory ([`tree_cost`]), not
-//! by source length: a tree runs 8-72x its source. Entries also remember the
-//! caller's path. A path keeps its current and previous version, the previous
-//! one first in line for eviction; anything older is dropped at once, since no
-//! lookup can hit those bytes again. An error-free current version seeds an
-//! incremental reparse of new content.
+//! by source length: a tree runs 8-72x its source. Entries also record which
+//! caller paths they are the current or previous version of. A path's
+//! previous version is first in line for eviction, and its version before
+//! that is dropped at once, since no lookup through that path can hit those
+//! bytes again. An error-free current version seeds an incremental reparse of
+//! new content.
 //!
 //! `Tree` is `Send` but not `Sync`, so entries live behind a [`Mutex`] and the
 //! lock is only ever held for map probes, a byte comparison, and
@@ -49,10 +50,12 @@ const COST_PER_NODE: usize = 64;
 
 /// Budget for all retained slots, in [`tree_cost`] bytes.
 ///
-/// Large enough that one hot ~1 MB TypeScript file can still be cached (it
-/// evicts everything else, which is what LRU should do when that file *is*
-/// the working set).
-pub const MAX_RETAINED_BYTES: usize = 32 << 20;
+/// The smallest budget under which re-reading a working set of large
+/// (150-350 KB) files caches as well as the old source-length bound did;
+/// typical sessions stay at a fraction of it. One hot ~2 MB file can still be
+/// cached (it evicts everything else, which is what LRU should do when that
+/// file *is* the working set).
+pub const MAX_RETAINED_BYTES: usize = 64 << 20;
 
 /// Largest source worth parsing for retention.
 ///
@@ -69,11 +72,6 @@ pub const MAX_ENTRY_SOURCE_BYTES: usize =
 /// Bounds the LRU scan and the path scan. Twelve covers the realistic hot set
 /// for a coding agent (the handful of files being read and edited).
 pub const MAX_ENTRIES: usize = 12;
-
-/// Versions of one path kept at once: the current content and the one before
-/// it, which is what a diff or a repair compares against. The previous version
-/// is the first to go under pressure; older ones can never be hit again.
-const VERSIONS_PER_PATH: usize = 2;
 
 /// Estimated heap retained by a cached `tree` over `code`.
 ///
@@ -104,18 +102,36 @@ fn key_for(code: &str, lang: SupportLang) -> Key {
 	Key { hash: xxhash_rust::xxh64::xxh64(code.as_bytes(), HASH_SEED), len: code.len(), lang }
 }
 
+/// One path's claim on an entry: its current content, or the one before it.
+struct Binding {
+	path:    Box<str>,
+	current: bool,
+}
+
 struct Entry {
 	/// Retained verbatim so a hit is verified by comparison, not by trusting
 	/// the hash, and so a superseding parse can diff against it.
-	source: Arc<str>,
-	tree:   Tree,
-	/// Path of the last caller that parsed or hit these bytes.
-	path:   Option<Box<str>>,
+	source:   Arc<str>,
+	tree:     Tree,
+	/// Paths in the key's language whose current or previous content this is.
+	/// Identical files share one entry, so there can be several.
+	bindings: Vec<Binding>,
 	/// [`tree_cost`] charged against the budget.
-	cost:   usize,
-	/// Value of [`Cache::clock`] at last use; smallest wins eviction. Zero for
-	/// a path's previous version.
-	stamp:  u64,
+	cost:     usize,
+	/// Value of [`Cache::clock`] at last use; smallest wins eviction among
+	/// entries of the same rank (see [`Cache::evict_oldest`]).
+	stamp:    u64,
+}
+
+impl Entry {
+	fn binding(&self, path: &str) -> Option<&Binding> {
+		self.bindings.iter().find(|binding| &*binding.path == path)
+	}
+
+	/// Only some path's previous version: the first to go under pressure.
+	fn is_previous_only(&self) -> bool {
+		!self.bindings.is_empty() && self.bindings.iter().all(|binding| !binding.current)
+	}
 }
 
 /// A path's previous content and tree, the base of an incremental reparse.
@@ -168,7 +184,7 @@ impl Cache {
 			let tree = entry.tree.clone();
 			self.hits += 1;
 			if let Some(path) = path {
-				self.bind_path(*key, path);
+				self.advance_path(*key, path);
 			}
 			return Lookup::Hit(tree);
 		}
@@ -181,8 +197,9 @@ impl Cache {
 			self
 				.entries
 				.iter()
-				.filter(|(other, entry)| other.lang == key.lang && entry.path.as_deref() == Some(path))
-				.max_by_key(|(_, entry)| entry.stamp)
+				.find(|(other, entry)| {
+					other.lang == key.lang && entry.binding(path).is_some_and(|binding| binding.current)
+				})
 				.filter(|(_, entry)| !entry.tree.root_node().has_error())
 				.map(|(_, entry)| Base { source: entry.source.clone(), tree: entry.tree.clone() })
 		});
@@ -190,10 +207,10 @@ impl Cache {
 	}
 
 	fn insert(&mut self, key: Key, code: &str, tree: &Tree, path: Option<&str>, cost: usize) {
-		// The path now holds `code`; versions older than the one before it are
-		// dead whether or not this tree fits.
+		// The path now holds `code`; its version before last is dead whether
+		// or not this tree fits.
 		if let Some(path) = path {
-			self.trim_path(key, path);
+			self.advance_path(key, path);
 		}
 		if cost > self.max_retained_bytes {
 			return;
@@ -213,68 +230,75 @@ impl Cache {
 		self.entries.insert(key, Entry {
 			source: Arc::from(code),
 			tree: tree.clone(),
-			path: path.map(Box::from),
+			bindings: path.map_or_else(Vec::new, |path| {
+				vec![Binding { path: Box::from(path), current: true }]
+			}),
 			cost,
 			stamp: self.clock,
 		});
 	}
 
-	/// Bind `key` to `path` as the path's current version.
-	fn bind_path(&mut self, key: Key, path: &str) {
-		self.trim_path(key, path);
-		if let Some(entry) = self.entries.get_mut(&key)
-			&& entry.path.as_deref() != Some(path)
-		{
-			entry.path = Some(Box::from(path));
-		}
-	}
-
-	/// Make room for `keep` as `path`'s current version: of the other entries
-	/// bound to `path` in `keep`'s language, only the most recently used
-	/// `VERSIONS_PER_PATH - 1` stay, demoted to the front of the eviction
-	/// order so they never cost another file its slot.
-	fn trim_path(&mut self, keep: Key, path: &str) {
-		let bound = |other: &Key, entry: &Entry| {
-			*other != keep && other.lang == keep.lang && entry.path.as_deref() == Some(path)
-		};
-		// Counting first keeps the common case (nothing to drop) allocation-free.
+	/// Make `key` (resident or not) `path`'s current version: the old current
+	/// version becomes the previous one, and the old previous version loses
+	/// its binding — and its slot, unless another path still binds it.
+	fn advance_path(&mut self, key: Key, path: &str) {
 		if self
 			.entries
-			.iter()
-			.filter(|(other, entry)| bound(other, entry))
-			.count()
-			>= VERSIONS_PER_PATH
+			.get(&key)
+			.and_then(|entry| entry.binding(path))
+			.is_some_and(|binding| binding.current)
 		{
-			let mut versions: Vec<(u64, Key)> = self
-				.entries
+			return;
+		}
+		let mut released: Option<Key> = None;
+		for (other, entry) in &mut self.entries {
+			if *other == key || other.lang != key.lang {
+				continue;
+			}
+			if let Some(index) = entry
+				.bindings
 				.iter()
-				.filter(|(other, entry)| bound(other, entry))
-				.map(|(other, entry)| (entry.stamp, *other))
-				.collect();
-			versions.sort_unstable_by_key(|&(stamp, _)| std::cmp::Reverse(stamp));
-			for (_, stale) in versions.drain(VERSIONS_PER_PATH - 1..) {
-				if let Some(entry) = self.entries.remove(&stale) {
-					self.retained_bytes -= entry.cost;
-					self.superseded += 1;
+				.position(|binding| &*binding.path == path)
+			{
+				if entry.bindings[index].current {
+					entry.bindings[index].current = false;
+				} else {
+					entry.bindings.swap_remove(index);
+					if entry.bindings.is_empty() {
+						// A path has one previous version, so at most one release.
+						released = Some(*other);
+					}
 				}
 			}
 		}
-		for (other, entry) in &mut self.entries {
-			if bound(other, entry) {
-				entry.stamp = 0;
+		if let Some(dead) = released.and_then(|dead| self.entries.remove(&dead)) {
+			self.retained_bytes -= dead.cost;
+			self.superseded += 1;
+		}
+		if let Some(entry) = self.entries.get_mut(&key) {
+			match entry
+				.bindings
+				.iter_mut()
+				.find(|binding| &*binding.path == path)
+			{
+				Some(binding) => binding.current = true,
+				None => entry
+					.bindings
+					.push(Binding { path: Box::from(path), current: true }),
 			}
 		}
 	}
 
-	/// Drop the least-recently-used slot. `false` when there was nothing left
-	/// to drop, which is what terminates [`Self::insert`]'s eviction loop.
+	/// Drop one slot: a path's previous version if there is one, else the
+	/// least recently used. `false` when there was nothing left to drop, which
+	/// is what terminates [`Self::insert`]'s eviction loop.
 	fn evict_oldest(&mut self) -> bool {
 		// Linear over at most `max_entries` slots: cheaper than maintaining an
 		// intrusive LRU list at this size.
 		let Some(&oldest) = self
 			.entries
 			.iter()
-			.min_by_key(|(_, entry)| entry.stamp)
+			.min_by_key(|(_, entry)| (!entry.is_previous_only(), entry.stamp))
 			.map(|(key, _)| key)
 		else {
 			return false;
@@ -678,6 +702,41 @@ mod tests {
 		assert!(hit(&mut cache, v2).is_none(), "the least recent of the path's versions is dropped");
 		assert!(hit(&mut cache, v3).is_some());
 		assert_eq!(cache.superseded, 1);
+	}
+
+	#[test]
+	fn identical_files_keep_their_shared_entry_until_neither_needs_it() {
+		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
+		let shared = "const a = 1;\n";
+		put(&mut cache, shared, Some("a.ts"));
+		assert!(matches!(cache.get(&key_for(shared, TS), shared, Some("b.ts")), Lookup::Hit(_)));
+		put(&mut cache, "const a = 2;\n", Some("b.ts"));
+		put(&mut cache, "const a = 3;\n", Some("b.ts"));
+
+		assert!(hit(&mut cache, shared).is_some(), "a.ts still holds these bytes");
+		assert_eq!(cache.superseded, 0);
+		let next = "const a = 4;\n";
+		let Lookup::Miss(Some(base)) = cache.get(&key_for(next, TS), next, Some("a.ts")) else {
+			panic!("a.ts keeps its reparse base after b.ts moves on");
+		};
+		assert_eq!(&*base.source, shared);
+	}
+
+	#[test]
+	fn a_pathless_hit_does_not_reorder_a_paths_versions() {
+		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
+		let (v1, v2, v3) = ("const a = 1;\n", "const a = 2;\n", "const a = 3;\n");
+		put(&mut cache, v1, Some("a.ts"));
+		put(&mut cache, v2, Some("a.ts"));
+		assert!(hit(&mut cache, v1).is_some());
+
+		let Lookup::Miss(Some(base)) = cache.get(&key_for(v3, TS), v3, Some("a.ts")) else {
+			panic!("v2 is the current version");
+		};
+		assert_eq!(&*base.source, v2);
+		put(&mut cache, v3, Some("a.ts"));
+		assert!(hit(&mut cache, v1).is_none(), "v1 is two versions behind");
+		assert!(hit(&mut cache, v2).is_some(), "v2 is the previous version");
 	}
 
 	#[test]
