@@ -182,7 +182,7 @@ export function truncateToWidth(
 	maxWidth = Math.max(0, maxWidth | 0);
 	// Fast path: every UTF-16 unit is at most 3 cells wide, so a string whose
 	// `length * 3` already fits within `safeWidth` cannot need truncation.
-	if (!pad && text.length * 3 <= maxWidth) {
+	if (!pad && !text.includes("\t") && !text.includes("\u001b]66") && text.length * 3 <= maxWidth) {
 		return text;
 	}
 	return nativeTruncateToWidth(
