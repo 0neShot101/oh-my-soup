@@ -70,7 +70,7 @@ pub fn block_range_at(options: BlockRangeOptions) -> Result<Option<BlockRange>> 
 		return Ok(None);
 	};
 
-	let Some(tree) = parse_cached(&code, language)? else {
+	let Some(tree) = parse_cached(&code, language, path.as_deref())? else {
 		return Ok(None);
 	};
 	let root = tree.root_node();
@@ -314,7 +314,7 @@ pub fn enclosing_block_boundaries(options: EnclosingBoundaryOptions) -> Result<O
 	let Some(language) = resolve_language(lang.as_deref(), path.as_deref()) else {
 		return Ok(None);
 	};
-	let Some(tree) = parse_cached(&code, language)? else {
+	let Some(tree) = parse_cached(&code, language, path.as_deref())? else {
 		return Ok(None);
 	};
 	let root = tree.root_node();
@@ -351,7 +351,7 @@ pub fn warm_parse(code: &str, lang: Option<&str>, path: Option<&str>) -> Result<
 		&& code.len() <= MAX_ENTRY_SOURCE_BYTES
 		&& let Some(language) = resolve_language(lang, path)
 	{
-		parse_cached(code, language)?;
+		parse_cached(code, language, path)?;
 	}
 	Ok(())
 }
@@ -383,7 +383,7 @@ pub fn node_chain_at(options: BlockRangeOptions) -> Result<Option<Vec<NodeSpan>>
 	let Some(col) = first_content_column(&code, row) else {
 		return Ok(None);
 	};
-	let Some(tree) = parse_cached(&code, language)? else {
+	let Some(tree) = parse_cached(&code, language, path.as_deref())? else {
 		return Ok(None);
 	};
 	let root = tree.root_node();
@@ -1081,7 +1081,7 @@ mod tests {
 			return Some(Vec::new());
 		}
 		let language = resolve_language(None, Some(path))?;
-		let tree = parse_cached(code, language).expect("grammar loads")?;
+		let tree = parse_cached(code, language, None).expect("grammar loads")?;
 		let root = tree.root_node();
 		if root.has_error() {
 			return None;
@@ -1305,7 +1305,7 @@ mod tests {
 	/// i.e. nodes ending immediately after a newline.
 	fn nodes_with_content_end_before_raw_end(code: &str, path: &str) -> usize {
 		let language = resolve_language(None, Some(path)).expect("known language");
-		let tree = parse_cached(code, language)
+		let tree = parse_cached(code, language, None)
 			.expect("grammar loads")
 			.expect("tree");
 		let mut count = 0;

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Reduced memory held by cached code-structure parses: the cache now caps estimated syntax-tree memory instead of source size, drops a file's old parse as soon as its new content is parsed, and reparses edited files incrementally
+
 ## [18.11.1] - 2026-10-15
 
 ### Added

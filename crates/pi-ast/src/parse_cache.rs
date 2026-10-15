@@ -11,17 +11,23 @@
 //! reusable artifact is the [`Tree`], so the cache lives here and hands out
 //! cheap clones of it.
 //!
+//! Retention is an LRU budgeted by estimated tree memory ([`tree_cost`]), not
+//! by source length: a tree runs 8-72x its source. Entries also remember the
+//! caller's path. New content for a path supersedes that path's entry at once —
+//! no lookup can hit the old bytes again — and the superseded tree seeds an
+//! incremental reparse of the new content.
+//!
 //! `Tree` is `Send` but not `Sync`, so entries live behind a [`Mutex`] and the
-//! lock is only ever held for a map probe, a byte comparison, and a
-//! `ts_tree_copy` refcount bump — never across a parse or a tree walk.
+//! lock is only ever held for map probes, a byte comparison, and
+//! `ts_tree_copy` refcount bumps — never across a parse or a tree walk.
 
 use std::{
 	collections::HashMap,
-	sync::{LazyLock, Mutex, MutexGuard, PoisonError},
+	sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError},
 };
 
 use anyhow::{Result, anyhow};
-use tree_sitter::Tree;
+use tree_sitter::{InputEdit, Language, Point, Tree};
 
 use crate::language::{
 	SupportLang,
@@ -33,27 +39,39 @@ use crate::language::{
 /// there is nothing to harden against `HashDoS` here.
 const HASH_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 
-/// Largest source that may occupy a slot.
-///
-/// A tree-sitter tree runs roughly an order of magnitude larger than its
-/// source, so admitting an arbitrarily large file would let one `read` of a
-/// multi-megabyte blob dominate process RSS. Files above this are still parsed,
-/// just never retained.
-pub const MAX_ENTRY_SOURCE_BYTES: usize = 4 << 20;
+/// Estimated retained bytes per source byte; covers the retained source copy
+/// plus token data that scales with text length.
+const COST_PER_SOURCE_BYTE: usize = 16;
 
-/// Ceiling on retained source bytes across all slots.
-///
-/// Equal to [`MAX_ENTRY_SOURCE_BYTES`] so a single hot large file can still be
-/// cached (it evicts everything else, which is what LRU should do when that
-/// file *is* the working set).
-pub const MAX_TOTAL_SOURCE_BYTES: usize = 4 << 20;
+/// Estimated retained bytes per visible syntax node.
+const COST_PER_NODE: usize = 64;
 
-/// Slot ceiling, independent of byte size.
+/// Budget for all retained slots, in [`tree_cost`] bytes.
 ///
-/// Bounds the tree footprint against a burst of small files. Twelve covers the
-/// realistic hot set for a coding agent (the handful of files being read and
-/// edited) while keeping the LRU scan trivially cheap.
+/// Large enough that one hot ~1 MB TypeScript file can still be cached (it
+/// evicts everything else, which is what LRU should do when that file *is*
+/// the working set).
+pub const MAX_RETAINED_BYTES: usize = 32 << 20;
+
+/// Largest source that can occupy a slot: its source term alone fills
+/// [`MAX_RETAINED_BYTES`]. Larger files are still parsed, just never retained.
+pub const MAX_ENTRY_SOURCE_BYTES: usize = MAX_RETAINED_BYTES / COST_PER_SOURCE_BYTE;
+
+/// Slot ceiling, independent of size.
+///
+/// Bounds the LRU scan and the path scan. Twelve covers the realistic hot set
+/// for a coding agent (the handful of files being read and edited).
 pub const MAX_ENTRIES: usize = 12;
+
+/// Estimated heap retained by a cached `tree` over `code`.
+///
+/// tree-sitter exposes no allocation size, and visible-node count misses hidden
+/// nodes, so this is a linear fit. Against measured allocations for 241 files
+/// of this repository it landed at 0.5-3x the real figure: TypeScript 1.2-2.7x,
+/// Python 0.9-1.5x, Rust 0.5-1.3x, Markdown 0.5-1x.
+fn tree_cost(code: &str, tree: &Tree) -> usize {
+	code.len() * COST_PER_SOURCE_BYTE + tree.root_node().descendant_count() * COST_PER_NODE
+}
 
 /// Cache key. The 64-bit hash is a *bucket selector only*: a hit additionally
 /// verifies [`Entry::source`] against the request byte-for-byte before the tree
@@ -76,80 +94,135 @@ fn key_for(code: &str, lang: SupportLang) -> Key {
 
 struct Entry {
 	/// Retained verbatim so a hit is verified by comparison, not by trusting
-	/// the hash.
-	source: Box<str>,
+	/// the hash, and so a superseding parse can diff against it.
+	source: Arc<str>,
 	tree:   Tree,
+	/// Path of the last caller that parsed or hit these bytes.
+	path:   Option<Box<str>>,
+	/// [`tree_cost`] charged against the budget.
+	cost:   usize,
 	/// Value of [`Cache::clock`] at last use; smallest wins eviction.
 	stamp:  u64,
 }
 
+/// A path's previous content and tree, the base of an incremental reparse.
+struct Base {
+	source: Arc<str>,
+	tree:   Tree,
+}
+
+enum Lookup {
+	Hit(Tree),
+	Miss(Option<Base>),
+}
+
 struct Cache {
-	entries:         HashMap<Key, Entry>,
-	source_bytes:    usize,
-	clock:           u64,
-	hits:            u64,
-	misses:          u64,
-	evictions:       u64,
-	max_entries:     usize,
-	max_total_bytes: usize,
-	max_entry_bytes: usize,
+	entries:            HashMap<Key, Entry>,
+	retained_bytes:     usize,
+	clock:              u64,
+	hits:               u64,
+	misses:             u64,
+	evictions:          u64,
+	superseded:         u64,
+	max_entries:        usize,
+	max_retained_bytes: usize,
 }
 
 impl Cache {
-	fn new(max_entries: usize, max_total_bytes: usize, max_entry_bytes: usize) -> Self {
+	fn new(max_entries: usize, max_retained_bytes: usize) -> Self {
 		Self {
 			entries: HashMap::new(),
-			source_bytes: 0,
+			retained_bytes: 0,
 			clock: 0,
 			hits: 0,
 			misses: 0,
 			evictions: 0,
+			superseded: 0,
 			max_entries,
-			max_total_bytes,
-			max_entry_bytes,
+			max_retained_bytes,
 		}
 	}
 
-	fn get(&mut self, key: &Key, code: &str) -> Option<Tree> {
+	fn get(&mut self, key: &Key, code: &str, path: Option<&str>) -> Lookup {
 		self.clock += 1;
 		let stamp = self.clock;
-		let tree = match self.entries.get_mut(key) {
-			Some(entry) if &*entry.source == code => {
-				entry.stamp = stamp;
-				// `ts_tree_copy`: an atomic refcount bump on immutable subtree
-				// data, so the clone can be walked off-lock on any thread.
-				entry.tree.clone()
-			},
-			_ => {
-				self.misses += 1;
-				return None;
-			},
-		};
-		self.hits += 1;
-		Some(tree)
+		if let Some(entry) = self.entries.get_mut(key)
+			&& &*entry.source == code
+		{
+			entry.stamp = stamp;
+			// `ts_tree_copy`: an atomic refcount bump on immutable subtree
+			// data, so the clone can be walked off-lock on any thread.
+			let tree = entry.tree.clone();
+			self.hits += 1;
+			if let Some(path) = path {
+				self.bind_path(*key, path);
+			}
+			return Lookup::Hit(tree);
+		}
+		self.misses += 1;
+		let base = path.and_then(|path| {
+			self
+				.entries
+				.iter()
+				.find(|(other, entry)| other.lang == key.lang && entry.path.as_deref() == Some(path))
+				.map(|(_, entry)| Base { source: entry.source.clone(), tree: entry.tree.clone() })
+		});
+		Lookup::Miss(base)
 	}
 
-	fn insert(&mut self, key: Key, code: &str, tree: &Tree) {
-		if code.len() > self.max_entry_bytes {
+	fn insert(&mut self, key: Key, code: &str, tree: &Tree, path: Option<&str>, cost: usize) {
+		// The path now holds `code`; its previous content is dead whether or
+		// not this tree fits.
+		if let Some(path) = path {
+			self.release_path(key, path);
+		}
+		if cost > self.max_retained_bytes {
 			return;
 		}
 		if let Some(previous) = self.entries.remove(&key) {
-			self.source_bytes -= previous.source.len();
+			self.retained_bytes -= previous.cost;
 		}
 		while self.entries.len() >= self.max_entries
-			|| self.source_bytes + code.len() > self.max_total_bytes
+			|| self.retained_bytes + cost > self.max_retained_bytes
 		{
 			if !self.evict_oldest() {
 				break;
 			}
 		}
 		self.clock += 1;
-		self.source_bytes += code.len();
+		self.retained_bytes += cost;
 		self.entries.insert(key, Entry {
-			source: Box::from(code),
-			tree:   tree.clone(),
-			stamp:  self.clock,
+			source: Arc::from(code),
+			tree: tree.clone(),
+			path: path.map(Box::from),
+			cost,
+			stamp: self.clock,
 		});
+	}
+
+	/// Make `key` the only entry bound to `path` in its language.
+	fn bind_path(&mut self, key: Key, path: &str) {
+		self.release_path(key, path);
+		if let Some(entry) = self.entries.get_mut(&key)
+			&& entry.path.as_deref() != Some(path)
+		{
+			entry.path = Some(Box::from(path));
+		}
+	}
+
+	/// Drop every entry other than `keep` bound to `path` in `keep`'s language.
+	fn release_path(&mut self, keep: Key, path: &str) {
+		let released: Vec<Entry> = self
+			.entries
+			.extract_if(|other, entry| {
+				*other != keep && other.lang == keep.lang && entry.path.as_deref() == Some(path)
+			})
+			.map(|(_, entry)| entry)
+			.collect();
+		for entry in released {
+			self.retained_bytes -= entry.cost;
+			self.superseded += 1;
+		}
 	}
 
 	/// Drop the least-recently-used slot. `false` when there was nothing left
@@ -166,7 +239,7 @@ impl Cache {
 			return false;
 		};
 		if let Some(entry) = self.entries.remove(&oldest) {
-			self.source_bytes -= entry.source.len();
+			self.retained_bytes -= entry.cost;
 			self.evictions += 1;
 		}
 		true
@@ -175,17 +248,17 @@ impl Cache {
 	/// Drop every entry and zero the counters, preserving the configured bounds.
 	fn clear(&mut self) {
 		self.entries.clear();
-		self.source_bytes = 0;
+		self.retained_bytes = 0;
 		self.clock = 0;
 		self.hits = 0;
 		self.misses = 0;
 		self.evictions = 0;
+		self.superseded = 0;
 	}
 }
 
-static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| {
-	Mutex::new(Cache::new(MAX_ENTRIES, MAX_TOTAL_SOURCE_BYTES, MAX_ENTRY_SOURCE_BYTES))
-});
+static CACHE: LazyLock<Mutex<Cache>> =
+	LazyLock::new(|| Mutex::new(Cache::new(MAX_ENTRIES, MAX_RETAINED_BYTES)));
 
 /// Every critical section is a handful of infallible map operations plus a
 /// refcount bump, so panicking while holding the lock is not reachable.
@@ -195,8 +268,76 @@ fn lock() -> MutexGuard<'static, Cache> {
 	CACHE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Position after `text` when it starts at `start`; columns are bytes.
+fn advance(start: Point, text: &[u8]) -> Point {
+	let mut point = start;
+	for &byte in text {
+		if byte == b'\n' {
+			point.row += 1;
+			point.column = 0;
+		} else {
+			point.column += 1;
+		}
+	}
+	point
+}
+
+/// The single edit turning `old` into `new`: everything between their common
+/// prefix and common suffix.
+fn input_edit(old: &str, new: &str) -> InputEdit {
+	let (old_bytes, new_bytes) = (old.as_bytes(), new.as_bytes());
+	let mut prefix = old_bytes
+		.iter()
+		.zip(new_bytes)
+		.take_while(|(a, b)| a == b)
+		.count();
+	while !old.is_char_boundary(prefix) {
+		prefix -= 1;
+	}
+	let mut suffix = old_bytes[prefix..]
+		.iter()
+		.rev()
+		.zip(new_bytes[prefix..].iter().rev())
+		.take_while(|(a, b)| a == b)
+		.count();
+	while !old.is_char_boundary(old.len() - suffix) || !new.is_char_boundary(new.len() - suffix) {
+		suffix -= 1;
+	}
+	let (old_end, new_end) = (old.len() - suffix, new.len() - suffix);
+	let start_position = advance(Point::new(0, 0), &old_bytes[..prefix]);
+	InputEdit {
+		start_byte: prefix,
+		old_end_byte: old_end,
+		new_end_byte: new_end,
+		start_position,
+		old_end_position: advance(start_position, &old_bytes[prefix..old_end]),
+		new_end_position: advance(start_position, &new_bytes[prefix..new_end]),
+	}
+}
+
+/// Parse `code`, reusing `base` incrementally when one is given.
+///
+/// Incremental and fresh parses of error-free source produce the same tree,
+/// but error recovery can settle differently. A tree with errors is therefore
+/// always a fresh parse, so a result never depends on what was cached before.
+fn parse_from(language: &Language, code: &str, base: Option<Base>) -> Result<Option<Tree>> {
+	if let Some(Base { source, mut tree }) = base {
+		tree.edit(&input_edit(&source, code));
+		if let Some(tree) = grammar::parse(language, code, Some(&tree))?
+			&& !tree.root_node().has_error()
+		{
+			return Ok(Some(tree));
+		}
+	}
+	grammar::parse(language, code, None)
+}
+
 /// Parse `code` as `lang`, reusing a cached [`Tree`] when the exact same bytes
 /// were last parsed as the same language and have not been evicted.
+///
+/// `path` identifies the file `code` came from. It never affects the result:
+/// it only lets new content for that path supersede the old entry and reuse
+/// its tree for an incremental reparse.
 ///
 /// Semantics match a bare `Parser::new()` / `set_language` / `parse` sequence
 /// exactly: `Err` when the grammar fails to load, `Ok(None)` when `parse`
@@ -207,46 +348,52 @@ fn lock() -> MutexGuard<'static, Cache> {
 /// that reject on it reach the identical verdict from a cached tree, and
 /// repeated "does this parse" probes over the same broken file get the speedup
 /// too.
-pub fn parse_cached(code: &str, lang: SupportLang) -> Result<Option<Tree>> {
+pub fn parse_cached(code: &str, lang: SupportLang, path: Option<&str>) -> Result<Option<Tree>> {
 	let key = key_for(code, lang);
-	// Bound the guard to a `let` so it drops at the end of this statement: an
-	// `if let` scrutinee would hold the lock across the early return.
-	let cached = lock().get(&key, code);
-	if let Some(tree) = cached {
-		return Ok(Some(tree));
-	}
+	// Bound the guard to a `let` so it drops at the end of this statement: a
+	// `match` scrutinee would hold the lock across the parse.
+	let lookup = lock().get(&key, code, path);
+	let base = match lookup {
+		Lookup::Hit(tree) => return Ok(Some(tree)),
+		Lookup::Miss(base) => base,
+	};
 	let language = match lang.grammar().load() {
 		Ok(language) => language,
 		Err(GrammarError::NotInstalled { .. }) => return Ok(None),
 		Err(err) => return Err(err.into()),
 	};
-	let Some(tree) = grammar::parse(&language, code)
+	let Some(tree) = parse_from(&language, code, base)
 		.map_err(|err| anyhow!("Failed to load tree-sitter language: {err}"))?
 	else {
 		return Ok(None);
 	};
-	lock().insert(key, code, &tree);
+	let cost = tree_cost(code, &tree);
+	lock().insert(key, code, &tree, path, cost);
 	Ok(Some(tree))
 }
 
 /// Occupancy and counters, for diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ParseCacheStats {
-	pub entries:      usize,
-	pub source_bytes: usize,
-	pub hits:         u64,
-	pub misses:       u64,
-	pub evictions:    u64,
+	pub entries:        usize,
+	/// Sum of [`tree_cost`] over resident entries.
+	pub retained_bytes: usize,
+	pub hits:           u64,
+	pub misses:         u64,
+	pub evictions:      u64,
+	/// Entries dropped because their path was parsed with new content.
+	pub superseded:     u64,
 }
 
 pub fn parse_cache_stats() -> ParseCacheStats {
 	let cache = lock();
 	ParseCacheStats {
-		entries:      cache.entries.len(),
-		source_bytes: cache.source_bytes,
-		hits:         cache.hits,
-		misses:       cache.misses,
-		evictions:    cache.evictions,
+		entries:        cache.entries.len(),
+		retained_bytes: cache.retained_bytes,
+		hits:           cache.hits,
+		misses:         cache.misses,
+		evictions:      cache.evictions,
+		superseded:     cache.superseded,
 	}
 }
 
@@ -264,42 +411,58 @@ mod tests {
 	/// asserted on private instances instead. `block.rs` covers the global path
 	/// end to end, where the assertions are boundary values that hold no matter
 	/// what else is resident.
-	fn cache(max_entries: usize, max_total_bytes: usize, max_entry_bytes: usize) -> Cache {
-		Cache::new(max_entries, max_total_bytes, max_entry_bytes)
+	fn cache(max_entries: usize, max_retained_bytes: usize) -> Cache {
+		Cache::new(max_entries, max_retained_bytes)
 	}
 
 	fn tree_of(code: &str, lang: SupportLang) -> Tree {
 		let language = lang.grammar().load().expect("grammar loads");
-		grammar::parse(&language, code)
+		grammar::parse(&language, code, None)
 			.expect("grammar loads")
 			.expect("parse produces a tree")
+	}
+
+	/// Parse `code` as TypeScript and store it under `path`; returns its cost.
+	fn put(cache: &mut Cache, code: &str, path: Option<&str>) -> usize {
+		let tree = tree_of(code, TS);
+		let cost = tree_cost(code, &tree);
+		cache.insert(key_for(code, TS), code, &tree, path, cost);
+		cost
+	}
+
+	fn hit(cache: &mut Cache, code: &str) -> Option<Tree> {
+		match cache.get(&key_for(code, TS), code, None) {
+			Lookup::Hit(tree) => Some(tree),
+			Lookup::Miss(_) => None,
+		}
+	}
+
+	/// A child node's id is the address of its shared subtree data, so equal
+	/// ids prove two trees share that subtree rather than parsing it twice.
+	/// (The *root* node's id is the address of the `root` field inside the
+	/// `TSTree` struct itself, which a copy necessarily relocates.)
+	fn subtree_id(tree: &Tree, index: usize) -> usize {
+		tree.root_node().child(index).expect("top-level decl").id()
 	}
 
 	const TS: SupportLang = SupportLang::TypeScript;
 
 	#[test]
 	fn hit_returns_a_clone_of_the_stored_tree() {
-		let mut cache = cache(MAX_ENTRIES, MAX_TOTAL_SOURCE_BYTES, MAX_ENTRY_SOURCE_BYTES);
+		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
 		let code = "function f() {\n  a();\n}\n";
 		let key = key_for(code, TS);
 		let tree = tree_of(code, TS);
 
-		assert!(cache.get(&key, code).is_none(), "cold lookup misses");
-		cache.insert(key, code, &tree);
-		let hit = cache.get(&key, code).expect("warm lookup hits");
+		assert!(hit(&mut cache, code).is_none(), "cold lookup misses");
+		cache.insert(key, code, &tree, None, tree_cost(code, &tree));
+		let warm = hit(&mut cache, code).expect("warm lookup hits");
 
-		// A child node's id is the address of its shared subtree data, so a
-		// matching id proves the hit is a `ts_tree_copy` of the stored tree
-		// rather than a second parse. (The *root* node's id is the address of
-		// the `root` field inside the `TSTree` struct itself, which a copy
-		// necessarily relocates, so it cannot be used here.)
-		let subtree_id = |tree: &Tree| tree.root_node().child(0).expect("top-level decl").id();
-		assert_eq!(subtree_id(&hit), subtree_id(&tree), "hit must share the stored tree");
+		assert_eq!(subtree_id(&warm, 0), subtree_id(&tree, 0), "hit must share the stored tree");
 		// The id genuinely discriminates: an independent parse of the same bytes
 		// allocates fresh subtree data.
-		assert_ne!(subtree_id(&tree_of(code, TS)), subtree_id(&tree), "id must discriminate");
+		assert_ne!(subtree_id(&tree_of(code, TS), 0), subtree_id(&tree, 0), "id must discriminate");
 		assert_eq!((cache.hits, cache.misses, cache.entries.len()), (1, 1, 1));
-		assert_eq!(cache.source_bytes, code.len());
 	}
 
 	#[test]
@@ -309,10 +472,11 @@ mod tests {
 		let ts_key = key_for(code, TS);
 		assert_ne!(py_key, ts_key, "same bytes, different language, different key");
 
-		let mut cache = cache(MAX_ENTRIES, MAX_TOTAL_SOURCE_BYTES, MAX_ENTRY_SOURCE_BYTES);
-		cache.insert(py_key, code, &tree_of(code, SupportLang::Python));
+		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
+		let tree = tree_of(code, SupportLang::Python);
+		cache.insert(py_key, code, &tree, None, tree_cost(code, &tree));
 		assert!(
-			cache.get(&ts_key, code).is_none(),
+			hit(&mut cache, code).is_none(),
 			"a Python tree must never satisfy a TypeScript request"
 		);
 	}
@@ -336,11 +500,12 @@ mod tests {
 		assert_eq!(stored.len(), probe.len(), "collision needs a matching len field");
 
 		let forged = key_for(probe, TS);
-		let mut cache = cache(MAX_ENTRIES, MAX_TOTAL_SOURCE_BYTES, MAX_ENTRY_SOURCE_BYTES);
-		cache.insert(forged, stored, &tree_of(stored, TS));
+		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
+		let tree = tree_of(stored, TS);
+		cache.insert(forged, stored, &tree, None, tree_cost(stored, &tree));
 
 		assert!(
-			cache.get(&forged, probe).is_none(),
+			matches!(cache.get(&forged, probe, None), Lookup::Miss(None)),
 			"byte comparison must turn a collision into a miss"
 		);
 		assert_eq!(cache.misses, 1);
@@ -348,92 +513,219 @@ mod tests {
 
 	#[test]
 	fn entry_bound_evicts_least_recently_used() {
-		let mut cache = cache(2, MAX_TOTAL_SOURCE_BYTES, MAX_ENTRY_SOURCE_BYTES);
+		let mut cache = cache(2, MAX_RETAINED_BYTES);
 		let sources = ["const a = 1;\n", "const b = 2;\n", "const c = 3;\n"];
-		let keys: Vec<Key> = sources.iter().map(|code| key_for(code, TS)).collect();
 
-		cache.insert(keys[0], sources[0], &tree_of(sources[0], TS));
-		cache.insert(keys[1], sources[1], &tree_of(sources[1], TS));
+		put(&mut cache, sources[0], None);
+		put(&mut cache, sources[1], None);
 		// Touch slot 0 so slot 1 becomes the least recently used.
-		assert!(cache.get(&keys[0], sources[0]).is_some());
-		cache.insert(keys[2], sources[2], &tree_of(sources[2], TS));
+		assert!(hit(&mut cache, sources[0]).is_some());
+		put(&mut cache, sources[2], None);
 
 		assert_eq!(cache.entries.len(), 2, "entry bound holds");
 		assert_eq!(cache.evictions, 1);
-		assert!(cache.get(&keys[0], sources[0]).is_some(), "recently used slot survives");
-		assert!(cache.get(&keys[1], sources[1]).is_none(), "least recently used slot evicted");
-		assert!(cache.get(&keys[2], sources[2]).is_some(), "newest slot resident");
+		assert!(hit(&mut cache, sources[0]).is_some(), "recently used slot survives");
+		assert!(hit(&mut cache, sources[1]).is_none(), "least recently used slot evicted");
+		assert!(hit(&mut cache, sources[2]).is_some(), "newest slot resident");
 	}
 
 	#[test]
-	fn byte_bound_evicts_and_reclaims_accounting() {
-		let code_len = "const a = 1;\n".len();
-		// Room for exactly two of these sources.
-		let mut cache = cache(64, code_len * 2, MAX_ENTRY_SOURCE_BYTES);
+	fn tree_cost_budget_evicts_and_reclaims_accounting() {
 		let sources = ["const a = 1;\n", "const b = 2;\n", "const c = 3;\n"];
+		let cost = tree_cost(sources[0], &tree_of(sources[0], TS));
+		// Room for exactly two of these trees.
+		let mut cache = cache(64, cost * 2);
 
 		for code in sources {
-			let key = key_for(code, TS);
-			cache.insert(key, code, &tree_of(code, TS));
-			assert!(
-				cache.source_bytes <= code_len * 2,
-				"byte bound must hold after every insert: {} > {}",
-				cache.source_bytes,
-				code_len * 2
-			);
+			assert_eq!(put(&mut cache, code, None), cost, "same shape, same cost");
+			assert!(cache.retained_bytes <= cost * 2, "budget must hold after every insert");
 		}
 
 		assert_eq!(cache.entries.len(), 2);
 		assert_eq!(cache.evictions, 1);
 		// Exact accounting, not just the bound: a subtraction missed on eviction
-		// would leave `source_bytes` drifting upward until the cache starved.
-		assert_eq!(cache.source_bytes, code_len * 2);
+		// would leave `retained_bytes` drifting upward until the cache starved.
+		assert_eq!(cache.retained_bytes, cost * 2);
+		assert!(hit(&mut cache, sources[0]).is_none(), "oldest slot evicted by the budget");
+	}
+
+	#[test]
+	fn tree_cost_tracks_tree_size_not_source_length() {
+		// The dense source is no longer, but packs far more syntax.
+		let sparse = format!("const text = \"{}\";\n", "x".repeat(64));
+		let dense = format!("const a = [{}];\n", "1,".repeat(32));
+		assert!(dense.len() <= sparse.len());
 		assert!(
-			cache.get(&key_for(sources[0], TS), sources[0]).is_none(),
-			"oldest slot evicted by the byte bound"
+			tree_cost(&dense, &tree_of(&dense, TS)) > 2 * tree_cost(&sparse, &tree_of(&sparse, TS)),
+			"a node-dense tree must cost more than a string literal of equal length"
 		);
 	}
 
 	#[test]
-	fn source_over_the_entry_bound_is_never_retained() {
+	fn tree_over_the_budget_is_never_retained() {
 		let code = "function f() {\n  a();\n}\n";
-		let mut cache = cache(MAX_ENTRIES, MAX_TOTAL_SOURCE_BYTES, code.len() - 1);
-		let key = key_for(code, TS);
+		let cost = tree_cost(code, &tree_of(code, TS));
+		let mut cache = cache(MAX_ENTRIES, cost - 1);
 
-		cache.insert(key, code, &tree_of(code, TS));
+		put(&mut cache, code, None);
 
-		assert_eq!(cache.entries.len(), 0, "oversized source is parsed but not cached");
-		assert_eq!(cache.source_bytes, 0);
+		assert_eq!(cache.entries.len(), 0, "oversized tree is parsed but not cached");
+		assert_eq!(cache.retained_bytes, 0);
 		assert_eq!(cache.evictions, 0, "rejection must not evict a healthy slot");
-		assert!(cache.get(&key, code).is_none());
+		assert!(hit(&mut cache, code).is_none());
 	}
 
 	#[test]
 	fn reinsert_of_a_resident_key_does_not_double_count_bytes() {
-		let mut cache = cache(MAX_ENTRIES, MAX_TOTAL_SOURCE_BYTES, MAX_ENTRY_SOURCE_BYTES);
+		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
 		let code = "const a = 1;\n";
-		let key = key_for(code, TS);
-		let tree = tree_of(code, TS);
 
-		cache.insert(key, code, &tree);
-		cache.insert(key, code, &tree);
+		let cost = put(&mut cache, code, None);
+		put(&mut cache, code, None);
 
 		assert_eq!(cache.entries.len(), 1);
-		assert_eq!(cache.source_bytes, code.len());
+		assert_eq!(cache.retained_bytes, cost);
 		assert_eq!(cache.evictions, 0);
 	}
 
 	#[test]
+	fn new_content_for_a_path_supersedes_only_that_path_and_language() {
+		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
+		let (v1, v2) = ("const a = 1;\n", "const a = 2;\n");
+		let other = "const b = 1;\n";
+		put(&mut cache, v1, Some("a.ts"));
+		let other_cost = put(&mut cache, other, Some("b.ts"));
+		let py_tree = tree_of(v1, SupportLang::Python);
+		let py_cost = tree_cost(v1, &py_tree);
+		cache.insert(key_for(v1, SupportLang::Python), v1, &py_tree, Some("a.ts"), py_cost);
+
+		let v2_cost = put(&mut cache, v2, Some("a.ts"));
+
+		assert!(hit(&mut cache, v1).is_none(), "the path's old content is gone");
+		assert!(hit(&mut cache, v2).is_some());
+		assert!(hit(&mut cache, other).is_some(), "another path is untouched");
+		assert!(
+			matches!(cache.get(&key_for(v1, SupportLang::Python), v1, None), Lookup::Hit(_)),
+			"the same path in another language is a different binding"
+		);
+		assert_eq!((cache.superseded, cache.evictions), (1, 0));
+		assert_eq!(cache.retained_bytes, v2_cost + other_cost + py_cost);
+	}
+
+	#[test]
+	fn a_hit_rebinds_the_path_to_the_hit_content() {
+		let mut cache = cache(MAX_ENTRIES, MAX_RETAINED_BYTES);
+		let (v1, v2) = ("const a = 1;\n", "const a = 2;\n");
+		put(&mut cache, v1, None);
+		put(&mut cache, v2, Some("a.ts"));
+
+		assert!(matches!(cache.get(&key_for(v1, TS), v1, Some("a.ts")), Lookup::Hit(_)));
+
+		assert!(hit(&mut cache, v2).is_none(), "the path no longer holds v2");
+		assert_eq!(cache.superseded, 1);
+		let Lookup::Miss(Some(base)) =
+			cache.get(&key_for("const a = 3;\n", TS), "const a = 3;\n", Some("a.ts"))
+		else {
+			panic!("a miss on a bound path returns its content as the reparse base");
+		};
+		assert_eq!(&*base.source, v1);
+	}
+
+	#[test]
+	fn rejected_tree_still_releases_its_paths_old_content() {
+		let v1 = "const a = 1;\n";
+		let v2 = "function f() {\n  a();\n  b();\n}\n";
+		let mut cache = cache(MAX_ENTRIES, tree_cost(v1, &tree_of(v1, TS)));
+		put(&mut cache, v1, Some("a.ts"));
+
+		put(&mut cache, v2, Some("a.ts"));
+
+		assert_eq!(cache.entries.len(), 0, "v2 is over budget and v1 is dead");
+		assert_eq!(cache.retained_bytes, 0);
+	}
+
+	fn base_of(code: &str) -> Base {
+		Base { source: Arc::from(code), tree: tree_of(code, TS) }
+	}
+
+	#[test]
+	fn incremental_reparse_matches_a_fresh_parse_and_reuses_unchanged_subtrees() {
+		let language = TS.grammar().load().expect("grammar loads");
+		let old = "function a() {\n  return 1;\n}\n\nfunction b() {\n  return 'é';\n}\n";
+		let edits = [
+			// In place, one line.
+			"function a() {\n  return 2;\n}\n\nfunction b() {\n  return 'é';\n}\n",
+			// Inserted lines shift every later row.
+			"function a() {\n  const x = 1;\n  return x;\n}\n\nfunction b() {\n  return 'é';\n}\n",
+			// Edit right after a multi-byte character, which shares its lead byte.
+			"function a() {\n  return 1;\n}\n\nfunction b() {\n  return 'è';\n}\n",
+			// Deletion to the end.
+			"function a() {\n  return 1;\n}\n",
+			// Prepend.
+			"// header\nfunction a() {\n  return 1;\n}\n\nfunction b() {\n  return 'é';\n}\n",
+		];
+		for new in edits {
+			let base = base_of(old);
+			let reused = subtree_id(&base.tree, 1);
+			let tree = parse_from(&language, new, Some(base))
+				.expect("parses")
+				.expect("tree");
+			let fresh = tree_of(new, TS);
+			assert_eq!(tree.root_node().to_sexp(), fresh.root_node().to_sexp(), "edit {new:?}");
+			assert_eq!(
+				tree.root_node().end_position(),
+				fresh.root_node().end_position(),
+				"edit {new:?}"
+			);
+			if new.starts_with("function a() {\n  return 2;") {
+				assert_eq!(
+					subtree_id(&tree, 1),
+					reused,
+					"the untouched function is reused, not reparsed"
+				);
+			}
+		}
+	}
+
+	#[test]
+	fn a_broken_result_is_always_a_fresh_parse() {
+		let language = TS.grammar().load().expect("grammar loads");
+		let old = "function a() {\n  return 1;\n}\n\nfunction b() {\n  return 2;\n}\n";
+		// The error sits in `b`, so an incremental parse would reuse `a` whole.
+		let broken = "function a() {\n  return 1;\n}\n\nfunction b() {\n  return 2 +;\n}\n";
+		let base = base_of(old);
+		// Keep the base alive so its subtree addresses cannot be recycled.
+		let kept = base.tree.clone();
+		let base_ids: Vec<usize> = (0..kept.root_node().child_count())
+			.map(|i| subtree_id(&kept, i))
+			.collect();
+
+		let tree = parse_from(&language, broken, Some(base))
+			.expect("parses")
+			.expect("tree");
+
+		assert!(tree.root_node().has_error());
+		assert_eq!(tree.root_node().to_sexp(), tree_of(broken, TS).root_node().to_sexp());
+		assert!(
+			(0..tree.root_node().child_count()).all(|i| !base_ids.contains(&subtree_id(&tree, i))),
+			"no subtree may come from the base"
+		);
+	}
+
+	#[test]
 	fn clear_empties_the_cache_but_keeps_its_bounds() {
-		let mut cache = cache(3, 1024, 512);
-		let code = "const a = 1;\n";
-		cache.insert(key_for(code, TS), code, &tree_of(code, TS));
+		let mut cache = cache(3, 1 << 20);
+		put(&mut cache, "const a = 1;\n", Some("a.ts"));
+		put(&mut cache, "const a = 2;\n", Some("a.ts"));
 		assert_eq!(cache.entries.len(), 1);
 
 		cache.clear();
 
 		assert_eq!(cache.entries.len(), 0);
-		assert_eq!((cache.source_bytes, cache.hits, cache.misses, cache.evictions), (0, 0, 0, 0));
-		assert_eq!((cache.max_entries, cache.max_total_bytes, cache.max_entry_bytes), (3, 1024, 512));
+		assert_eq!(
+			(cache.retained_bytes, cache.hits, cache.misses, cache.evictions, cache.superseded),
+			(0, 0, 0, 0, 0)
+		);
+		assert_eq!((cache.max_entries, cache.max_retained_bytes), (3, 1 << 20));
 	}
 }
