@@ -55,6 +55,38 @@ const TSP_OSC_PREFIX = `\x1b]877;${TSP_PREFIX.slice(2)}`;
 /** How long a TSP hello waits for its reply inside tmux, which answers DA1 itself. */
 const TSP_TMUX_HELLO_TIMEOUT_MS = 1000;
 
+/** Tern names itself in `TERM_PROGRAM`; a multiplexer started in a Tern pane may leave it behind. */
+function isTernPane(env: NodeJS.ProcessEnv): boolean {
+	return env.TERM_PROGRAM?.toLowerCase() === "tern";
+}
+
+/**
+ * Why a TSP `hello` cannot reach the terminal from this environment, or
+ * `null` when nothing in between is known to drop APC.
+ *
+ * In a Tern pane only a multiplexer's session marker counts: Tern sets
+ * `TERM=xterm-kitty`, so a `screen*`/`tmux*` TERM next to `TERM_PROGRAM=tern`
+ * without a marker was rewritten (shell rc, dev shell, `.env`), not set by a
+ * multiplexer. Elsewhere the TERM fallback keeps classifying sessions whose
+ * markers were stripped.
+ *
+ * devenv (2.0+) runs `devenv shell` in its own PTY and redraws the pane from a
+ * terminal emulator to keep its reload status line: it forwards DA1 to the
+ * real terminal but drops APC, so the DA1 reply always wins. It exports
+ * `DEVENV_RELOAD_FILE` only into that reloading shell; `devenv shell
+ * --no-reload` runs the shell on the real terminal.
+ */
+function tspPathBlocker(env: NodeJS.ProcessEnv): string | null {
+	const multiplexer = isTernPane(env)
+		? terminalMultiplexerSessions(env).find(session => session.ownsScreenGrid)
+		: classifyTerminalMultiplexerModule(env);
+	if (multiplexer?.ownsScreenGrid) return `inside a ${multiplexer.id} session, which swallows APC`;
+	if (env.DEVENV_RELOAD_FILE) {
+		return "inside devenv's reloading shell, which redraws the pane and drops APC; `devenv shell --no-reload` avoids it";
+	}
+	return null;
+}
+
 /**
  * The TSP message a reassembled input string holds, in APC form, or
  * `undefined` while its terminator has not arrived. An OSC 877 message may end
@@ -490,7 +522,7 @@ export type GlyphProtocolReportHandler = (supported: boolean) => void;
 /**
  * Outcome of the Tern Surface Protocol `hello` probe: the terminal's reply,
  * or null when it answered the DA1 sentinel first (no TSP) or the probe was
- * skipped (`PI_TUI_NATIVE=0`, multiplexers).
+ * skipped (`PI_TUI_NATIVE=0`, multiplexers, devenv's reloading shell).
  */
 export type TspHelloHandler = (hello: TspHello | null) => void;
 
@@ -886,6 +918,7 @@ export class ProcessTerminal implements Terminal {
 	#sixelSupportCallbacks: Array<(supported: boolean) => void> = [];
 	#tspPending = false;
 	#tspResult: TspHello | null | undefined;
+	#tspFallbackLogged = false;
 	#tspCallbacks: TspHelloHandler[] = [];
 	/** Hello deadline inside tmux, where no DA1 sentinel can end the probe. */
 	#tspTimeout: NodeJS.Timeout | undefined;
@@ -1036,13 +1069,13 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	get tspExpected(): boolean {
-		// A multiplexer started from Tern can leave `TERM_PROGRAM=tern` behind
-		// while swallowing APC, even when `PI_TUI_NATIVE=1` forces the probe.
+		// A multiplexer or relay started from Tern can leave `TERM_PROGRAM=tern`
+		// behind while swallowing APC, even when `PI_TUI_NATIVE=1` forces the probe.
 		return (
-			$env.TERM_PROGRAM?.toLowerCase() === "tern" &&
-			!isInsideTerminalMultiplexer($env) &&
+			isTernPane($env) &&
+			tspPathBlocker($env) === null &&
 			!isTerminalHeadless() &&
-			this.#shouldQueryTspSupport()
+			this.#tspProbeSkipReason() === null
 		);
 	}
 
@@ -1526,7 +1559,10 @@ export class ProcessTerminal implements Terminal {
 					}
 					case "tsp": {
 						// DA1 before any `tsp;r` reply: the terminal doesn't speak TSP.
-						this.#resolveTspSupport(null);
+						this.#resolveTspSupport(
+							null,
+							"DA1 was answered before a hello reply: the terminal, or a layer in between, dropped the APC query",
+						);
 						break;
 					}
 				}
@@ -1863,16 +1899,27 @@ export class ProcessTerminal implements Terminal {
 		}
 	}
 
-	#shouldQueryTspSupport(): boolean {
+	/** Why the `hello` probe does not run, or `null` when it does. */
+	#tspProbeSkipReason(): string | null {
 		const override = $env.PI_TUI_NATIVE;
-		if (override === "0") return false;
+		if (override === "0") return "PI_TUI_NATIVE=0";
 		// tmux makes APC bodies the pane title unless the hosting terminal asked
 		// for TSP through `@tern-tsp`: no override may force the probe there.
-		if (tmuxMultiplexer.isInside($env)) return tmuxSessionSpeaksTsp($env);
-		if (override === "1") return true;
-		// Multiplexers swallow APC, so the reply could never arrive.
-		if (isInsideTerminalMultiplexer($env)) return false;
-		return !isBunTestRuntime();
+		if (tmuxMultiplexer.isInside($env)) {
+			return tmuxSessionSpeaksTsp($env) ? null : "inside a tmux session without the @tern-tsp option";
+		}
+		if (override === "1") return null;
+		// The reply could never arrive.
+		const blocker = tspPathBlocker($env);
+		if (blocker !== null) return blocker;
+		return isBunTestRuntime() && $env.PI_TUI_TSP_PROBE !== "1" ? "bun test runtime" : null;
+	}
+
+	/** A Tern pane that ends up on the classic renderer says why in the log, once. */
+	#logTspFallback(reason: string): void {
+		if (this.#tspFallbackLogged || !isTernPane($env)) return;
+		this.#tspFallbackLogged = true;
+		logger.debug("TSP: Tern pane keeps the classic renderer", { reason });
 	}
 
 	#queryTspSupport(): void {
@@ -1880,7 +1927,9 @@ export class ProcessTerminal implements Terminal {
 		this.#tspResult = undefined;
 		this.#tspReplyBuffer = "";
 		if (this.#dead) return;
-		if (!this.#shouldQueryTspSupport()) {
+		const skipReason = this.#tspProbeSkipReason();
+		if (skipReason !== null) {
+			this.#logTspFallback(skipReason);
 			this.#tspResult = null;
 			for (const cb of this.#tspCallbacks) cb(null);
 			return;
@@ -1892,7 +1941,7 @@ export class ProcessTerminal implements Terminal {
 			setTmuxPaneApcTitles(false, $env);
 			this.#tspTimeout = setTimeout(() => {
 				this.#tspTimeout = undefined;
-				this.#resolveTspSupport(null);
+				this.#resolveTspSupport(null, `no hello reply through tmux within ${TSP_TMUX_HELLO_TIMEOUT_MS} ms`);
 			}, TSP_TMUX_HELLO_TIMEOUT_MS);
 			this.#safeWrite(encodeTspHelloQuery());
 			return;
@@ -1920,12 +1969,14 @@ export class ProcessTerminal implements Terminal {
 		this.#inputHandler?.(sequence);
 	}
 
-	#resolveTspSupport(hello: TspHello | null): void {
+	/** `reason` says why a `null` hello means no TSP. */
+	#resolveTspSupport(hello: TspHello | null, reason?: string): void {
 		if (!this.#tspPending) return;
 		this.#tspPending = false;
 		const result = hello !== null && hello.v === TSP_VERSION ? hello : null;
 		if (hello !== null && result === null) logger.warn("TSP: unsupported protocol version", { v: hello.v });
 		if (result === null) {
+			this.#logTspFallback(reason ?? `unsupported protocol version ${String(hello?.v)}`);
 			this.#endTspTmuxPane();
 		} else {
 			clearTimeout(this.#tspTimeout);
