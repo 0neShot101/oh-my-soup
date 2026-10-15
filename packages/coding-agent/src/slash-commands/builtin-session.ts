@@ -250,7 +250,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "delete", description: "Delete current session and return to selector" },
 			{
 				name: "pin",
-				description: "Pin the current provider to a stored OAuth account",
+				description: "Pin a stored OAuth account to the current provider for this session",
 				usage: "[account]",
 			},
 		],
