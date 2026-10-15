@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Background local memory extraction now stops after one bounded retry budget on repeated OpenAI-compatible 429 responses instead of multiplying transport, provider, and completion retries ([#15826](https://github.com/can1357/oh-my-pi/issues/15826)).
+
 ## [18.11.0] - 2026-10-14
 
 ### Added
