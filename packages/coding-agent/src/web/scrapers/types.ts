@@ -175,7 +175,11 @@ export async function loadPage(url: string, options: LoadPageOptions = {}): Prom
 
 			const responseBody = await readBodyCapped(response, maxBytes);
 			if (!responseBody) {
-				return { content: "", contentType, finalUrl, ok: false, status: response.status };
+				// A successful response can still be bodyless (HTTP 204, or a null
+				// body stream): keep the transport's own success verdict instead of
+				// rewriting it, so the caller's status handling (a 204 is a valid
+				// empty read, not a failed fetch) runs on the real outcome.
+				return { content: "", contentType, finalUrl, ok: response.ok, status: response.status };
 			}
 
 			const content = decodeBody(responseBody.bytes, rawContentType);
