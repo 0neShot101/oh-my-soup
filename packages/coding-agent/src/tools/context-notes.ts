@@ -12,7 +12,9 @@ import {
 	MAX_CONTEXT_NOTES_BYTES,
 	type ContextNotesEntry,
 } from "../session/context-notes";
+import { prompt } from "@oh-my-pi/pi-utils";
 import contextNotesDescription from "../prompts/tools/context-notes.md" with { type: "text" };
+import contextNotesTextDescription from "../prompts/tools/context-notes-text.md" with { type: "text" };
 import newContextDescription from "../prompts/tools/new-context.md" with { type: "text" };
 import type { ToolSession } from ".";
 import { throwIfAborted } from "./tool-errors";
@@ -21,7 +23,7 @@ import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { cfgCompactionExperimentalContextManagement } from "../session/context-settings";
 
 const contextNotesSchema = type({
-	"text?": type("string").describe("Entire replacement notebook text. Omit to read; use an empty string to clear."),
+	"text?": type("string").describe(prompt.render(contextNotesTextDescription, { maxBytes: MAX_CONTEXT_NOTES_BYTES })),
 });
 
 const newContextSchema = type({});
