@@ -98,6 +98,24 @@ describe("delimited path expansion", () => {
 		expect(await splitDelimitedPathEntry("missing.txt packages/b.txt", tempDir)).toBeNull();
 	});
 
+	it("rejects a comma list of selector fragments instead of reading the first part as a path", async () => {
+		// `:raw` repeated per line is one path with a broken selector; splitting it
+		// read `apps/a.txt:83:raw` (the file from line 83 to EOF) and failed the rest.
+		const malformed = splitDelimitedPathEntry("apps/a.txt:83:raw,85:raw,87:raw,172:raw", tempDir);
+		await expect(malformed).rejects.toThrow("Invalid selector ':83:raw,85:raw,87:raw,172:raw' on 'apps/a.txt'");
+		await expect(malformed).rejects.toThrow(":19,59:raw");
+		await expect(splitDelimitedPathEntry("apps/a.txt:1-2,raw", tempDir)).rejects.toThrow(
+			"Invalid selector ':1-2,raw' on 'apps/a.txt'",
+		);
+		// Valid comma grammar on a missing path is a missing path, not a selector error.
+		expect(await splitDelimitedPathEntry("missing.txt:5,9", tempDir)).toBeNull();
+		// A list of paths whose later parts happen to be numeric names still splits.
+		expect(await splitDelimitedPathEntry("apps/a.txt:5,packages/b.txt:9", tempDir)).toEqual([
+			"apps/a.txt:5",
+			"packages/b.txt:9",
+		]);
+	});
+
 	it("cleans trailing strong delimiters and expands glob entries", async () => {
 		expect(await expandDelimitedPathEntries(["apps/a.txt,"], tempDir)).toEqual(["apps/a.txt"]);
 		expect(

@@ -405,9 +405,14 @@ impl Session {
 						let key = dest_canonical.unwrap_or_else(|| canonical.clone());
 						tag = Some(self.store.record(&key, &recorded, None));
 						if track_provenance {
-							let carried = carried_seen_lines(&file.before, &recorded, prior.as_ref());
-							let kept = drifted.then(|| carried_seen_lines(&file.after, &recorded, None));
-							provenance = Some((key, carried, kept));
+							// Carried and inserted lines are numbered against `after`,
+							// like the response rows; a drifted
+							// write filters all of them below.
+							let mut edit = line_provenance(&file.before, &file.after, prior.as_ref());
+							let kept =
+								drifted.then(|| line_provenance(&file.after, &recorded, None).carried);
+							edit.carried.extend(edit.inserted);
+							provenance = Some((key, edit.carried, kept));
 						}
 					}
 					self.store.reset_noop(&canonical);
@@ -430,19 +435,13 @@ impl Session {
 				.map_or_else(|| format!("[{header_path}]"), |tag| format!("[{header_path}#{tag}]"));
 			let text = format_file_text(&file, &header);
 			if let (Some((key, mut seen_lines, kept)), Some(tag)) = (provenance, &response_tag) {
-				// Response rows are numbered against `after`. A drifted write
-				// recorded other text under the tag, so only rows it
+				// Response rows, carried lines and the edit's own lines are
+				// numbered against `after`. A drifted write recorded
+				// other text under the tag, so only lines the drift
 				// left in place stay anchorable.
-				let shown = seen_lines_from_body(&text);
-				match kept {
-					None => seen_lines.extend(shown),
-					Some(kept) => {
-						seen_lines.extend(
-							shown
-								.into_iter()
-								.filter(|line| kept.binary_search(line).is_ok()),
-						);
-					},
+				seen_lines.extend(seen_lines_from_body(&text));
+				if let Some(kept) = kept {
+					seen_lines.retain(|line| kept.binary_search(line).is_ok());
 				}
 				if !seen_lines.is_empty() {
 					self.store.record_seen_lines(&key, tag, &seen_lines);
@@ -508,13 +507,26 @@ fn recorded_view(file: &StagedFile, written: &str) -> String {
 	normalize_to_lf(strip_bom(written).1).into_owned()
 }
 
-/// Prior-snapshot lines that keep both their number and content in `after`:
-/// every unchanged run the edit did not shift (the leading run, plus runs below
-/// line-neutral hunks), filtered by what `prior` displayed. A missing or
-/// unrestricted prior snapshot let the edit anchor anywhere, so every such run
-/// carries over. Shifted lines never carry: their old numbers name other
-/// content.
-fn carried_seen_lines(before: &str, after: &str, prior: Option<&Snapshot>) -> Vec<u32> {
+/// Lines of `after` the model can anchor without a fresh display.
+struct LineProvenance {
+	/// Prior-snapshot lines that keep both their number and content.
+	carried:  Vec<u32>,
+	/// Lines the edit itself introduced.
+	inserted: Vec<u32>,
+}
+
+/// `carried`: every unchanged run the edit did not shift (the leading run,
+/// plus runs below line-neutral hunks), filtered by what `prior` displayed. A
+/// missing or unrestricted prior snapshot let the edit anchor anywhere, so
+/// every such run carries over. Shifted lines never carry: their old numbers
+/// name other content.
+///
+/// `inserted`: every line the edit added. The response numbers each added
+/// run's ends and the model authored the rest in order, so an interior line's
+/// number is known even where the compact preview elides it — without this, a
+/// follow-up edit inside a block the model just wrote was rejected for a line
+/// the tool itself had placed.
+fn line_provenance(before: &str, after: &str, prior: Option<&Snapshot>) -> LineProvenance {
 	let seen = prior
 		.and_then(|snapshot| snapshot.seen_lines.as_ref())
 		.filter(|seen| !seen.is_empty());
@@ -522,9 +534,11 @@ fn carried_seen_lines(before: &str, after: &str, prior: Option<&Snapshot>) -> Ve
 	let new_lines: Vec<&str> = after.split('\n').collect();
 	let (old_ids, new_ids) = pi_diff::intern(&old_lines, &new_lines);
 	let mut carried = Vec::new();
+	let mut inserted = Vec::new();
 	let (mut old_line, mut new_line) = (1_u32, 1_u32);
 	for run in pi_diff::myers_diff(&old_ids, &new_ids) {
 		if run.added {
+			inserted.extend(new_line..new_line + run.count);
 			new_line += run.count;
 			continue;
 		}
@@ -542,7 +556,7 @@ fn carried_seen_lines(before: &str, after: &str, prior: Option<&Snapshot>) -> Ve
 		old_line += run.count;
 		new_line += run.count;
 	}
-	carried
+	LineProvenance { carried, inserted }
 }
 
 /// Model-facing text for one file (`formatEditResultText`).

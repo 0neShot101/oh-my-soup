@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Multi-range reads (`file.ts:10-20,40-50`) now show the same one line above and three below each range as a single range does, so the line between a range and the block opener it surfaces is no longer skipped.
+- The `read` prompt notes that any range skips the structural summary, so `file.ts:1-` reads a file whole, with anchors, before a large edit.
+
+### Fixed
+
+- Fixed the hashline seen-line guard rejecting an edit that rewrites a line the tool's own earlier edit had shifted, when the payload is that line edited in place (a clause added, a name changed) rather than restated verbatim; stale-numbered edits whose payload matches another line still reject with the reveal.
+- Fixed edits inside a block the model had just inserted being rejected as never displayed when the response preview elided the block's interior: every line an edit inserts now counts as displayed under the minted tag, while lines a format-on-write hook rewrote still require a fresh read.
+- Fixed `read` treating `file.md:83:raw,85:raw` as four paths — reading the file from line 83 and failing the rest — instead of rejecting it as a malformed selector with the comma-list grammar.
+- Fixed multi-range reads starting immediately past EOF showing the last file line instead of the skipped-range notice.
+
 ## [18.8.9] - 2026-10-10
 
 ### Fixed

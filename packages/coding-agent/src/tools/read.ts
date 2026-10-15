@@ -115,6 +115,7 @@ import {
 	hashlineHeaderContextForText,
 	lineNumbersFromSpans,
 	markMarkdownContentType,
+	padLineRange,
 	prependHashlineHeader,
 	prependSuffixResolutionNotice,
 	RANGE_LEADING_CONTEXT_LINES,
@@ -1514,7 +1515,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		let columnTruncated = 0;
 		let displayContent: { text: string; startLine: number; lineNumbers?: Array<number | null> } | undefined;
 
-		for (const range of ranges) {
+		for (const requested of ranges) {
+			// Raw reads keep exact bounds (verbatim-extraction contract); addressable
+			// ranges get the same context as a single range.
+			const range = rawSelector ? requested : padLineRange(requested);
 			const rangeStart = range.startLine - 1; // 0-indexed
 			const requestedLength = range.endLine !== undefined ? range.endLine - range.startLine + 1 : this.#defaultLimit;
 			const maxLines = Math.min(requestedLength, DEFAULT_MAX_LINES);
@@ -1540,8 +1544,11 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				collectedLines = window.lines;
 			}
 
-			if (rangeStart >= totalFileLines) {
-				const bound = range.endLine !== undefined ? `${range.startLine}-${range.endLine}` : `${range.startLine}`;
+			if (requested.startLine > totalFileLines) {
+				const bound =
+					requested.endLine !== undefined
+						? `${requested.startLine}-${requested.endLine}`
+						: `${requested.startLine}`;
 				notices.push(`[Range ${bound} is beyond end of file (${totalFileLines} lines total); skipped]`);
 				continue;
 			}

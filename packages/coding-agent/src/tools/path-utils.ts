@@ -686,10 +686,47 @@ async function tryDelimitedPathSplit(
 	return parts;
 }
 
+// One read-selector chunk, well-formed or a common malformed shape (`:-N-M`).
+const SELECTOR_CHUNK_SRC = String.raw`(?:raw|conflicts|img|-?\d+(?:[-+]\d*)?)`;
+const SELECTOR_CHUNK_RE = new RegExp(`^${SELECTOR_CHUNK_SRC}$`, "i");
+// A comma part made only of selector chunks (`85:raw`, `172`, `raw`).
+const SELECTOR_FRAGMENT_RE = new RegExp(`^${SELECTOR_CHUNK_SRC}(?::${SELECTOR_CHUNK_SRC})*$`, "i");
+
+/**
+ * The selector error for a comma list whose tail parts are bare selector
+ * grammar after a selector-bearing first part (`README.md:83:raw,85:raw`):
+ * one path with a malformed selector, not a list of paths. Splitting it would
+ * read the first part — often a whole file — and fail the rest. Null for a
+ * real list, or when the trailing selector is valid grammar and only the path
+ * is missing (`missing.ts:5,9`).
+ */
+export function malformedSelectorListError(entry: string): ToolError | null {
+	const parts = splitTopLevelDelimitedPath(entry, "comma").map(part => part.trim());
+	if (parts.length < 2 || !parts.slice(1).every(part => SELECTOR_FRAGMENT_RE.test(part))) return null;
+	// Peel selector chunks off the first part the way the read tool would.
+	let basePath = parts[0] ?? "";
+	let chunks = 0;
+	for (;;) {
+		const colon = basePath.lastIndexOf(":");
+		if (colon <= 0 || !SELECTOR_CHUNK_RE.test(basePath.slice(colon + 1))) break;
+		basePath = basePath.slice(0, colon);
+		chunks++;
+	}
+	if (chunks === 0 || basePath.length === 0) return null;
+	if (splitPathAndSel(entry).path === basePath) return null;
+	const selector = entry.slice(basePath.length + 1);
+	return new ToolError(
+		`Invalid selector ':${selector}' on '${basePath}'. Commas join line ranges or lines (:5-16,960-973 or :19,59); ` +
+			"raw goes once, before or after the whole list (:19,59:raw). Use :N, :N-M, :N+K, :N- (open-ended), " +
+			":-N (last N lines), :raw, or :img for SVG rendering.",
+	);
+}
+
 /**
  * Split one path-like entry whose multiple targets were flattened into one
  * string. Existing paths are kept intact, so real filenames containing spaces,
- * commas, or semicolons win over delimiter recovery.
+ * commas, or semicolons win over delimiter recovery. A comma list that is
+ * really one path with a malformed selector throws instead of splitting.
  */
 export async function splitDelimitedPathEntry(
 	entry: string,
@@ -721,6 +758,8 @@ export async function splitDelimitedPathEntry(
 	if (!hasGlobPathChars(peeledEntry) && (await delimitedPathPartResolves(normalizedEntry, cwd, splitter))) {
 		return null;
 	}
+	const malformedSelector = malformedSelectorListError(normalizedEntry);
+	if (malformedSelector) throw malformedSelector;
 
 	return (
 		(await tryDelimitedPathSplit(normalizedEntry, cwd, splitter, "semicolon", "none")) ??

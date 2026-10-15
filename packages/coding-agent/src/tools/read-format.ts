@@ -274,6 +274,22 @@ function expandRangeWithContext(
 	};
 }
 
+/**
+ * The same context padding for each range of a multi-range read: leading
+ * context unless the range starts at line 1, trailing context unless it is
+ * open-ended. Ranges are 1-indexed and inclusive; the end is clamped to the
+ * source downstream, and padded ranges that touch merge into one span. Without
+ * this, a multi-range read showed the enclosing block's opener as context and
+ * left the one line between it and the range undisplayed — the anchor a
+ * follow-up edit was then rejected on. Raw reads never pad.
+ */
+export function padLineRange(range: LineRange): LineRange {
+	return {
+		startLine: Math.max(1, range.startLine - RANGE_LEADING_CONTEXT_LINES),
+		endLine: range.endLine === undefined ? undefined : range.endLine + RANGE_TRAILING_CONTEXT_LINES,
+	};
+}
+
 /** Options shared by the in-memory text builders; `raw` flips the line split to verbatim `\n` segments. */
 export interface InMemoryTextOptions {
 	details?: ReadToolDetails;
@@ -515,8 +531,8 @@ export async function buildInMemoryTextResult(
  * Render a multi-range read against in-memory text. Each range emits a
  * formatted block with its own anchors / line numbers, blocks are joined
  * with an elision separator, and ranges past EOF surface as `[…]` notices
- * so the model can correct the next call. No leading/trailing context is
- * added — multi-range callers always specify exact bounds.
+ * so the model can correct the next call. Addressable ranges get the same
+ * leading/trailing context as a single range ({@link padLineRange}).
  */
 export async function buildInMemoryMultiRangeResult(
 	session: ToolSession,
@@ -552,11 +568,12 @@ export async function buildInMemoryMultiRangeResult(
 	const outOfBounds: LineRange[] = [];
 	const visibleSpans: Array<{ startLine: number; endLine: number }> = [];
 	const rawParts: string[] = [];
-	for (const range of ranges) {
-		if (range.startLine > totalLines) {
-			outOfBounds.push(range);
+	for (const requested of ranges) {
+		if (requested.startLine > totalLines) {
+			outOfBounds.push(requested);
 			continue;
 		}
+		const range = allLines ? padLineRange(requested) : requested;
 		const effectiveEnd = Math.min(range.endLine ?? totalLines, totalLines);
 		visibleSpans.push({ startLine: range.startLine, endLine: effectiveEnd });
 		if (!allLines) {

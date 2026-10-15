@@ -63,17 +63,48 @@ describe("read tool multi-range selector", () => {
 		const firstLine = text.split("\n")[0];
 		expect(firstLine).toMatch(/^\[src\/numbered\.txt#[0-9A-F]{4}\]$/);
 
-		expect(text).toContain("line 3");
-		expect(text).toContain("line 4");
-		expect(text).toContain("line 5");
-		expect(text).toContain("line 20");
-		expect(text).toContain("line 21");
-		expect(text).toContain("line 22");
-		// Lines between the ranges must be elided
-		expect(text).not.toContain("line 10");
-		expect(text).not.toContain("line 19");
+		// Each range carries the single-range context: one line above, three below.
+		expect(text).toContain("2:line 2");
+		expect(text).toContain("3:line 3");
+		expect(text).toContain("8:line 8");
+		expect(text).toContain("19:line 19");
+		expect(text).toContain("22:line 22");
+		expect(text).toContain("25:line 25");
+		// Lines between the padded ranges must be elided
+		expect(text).not.toContain("line 9");
+		expect(text).not.toContain("line 18");
+		expect(text).not.toContain("line 26");
 		// Separator marker is present between blocks
 		expect(text).toContain("…");
+	});
+
+	it("shows the line between a range and the block opener it surfaces as context", async () => {
+		// A range starting one line into a function body used to display the
+		// function's opener as block context and skip the line in between, so
+		// an edit anchored there was rejected as never displayed.
+		const filePath = path.join(tmpDir, "panel.ts");
+		const lines = [
+			"export function panel(summary: Summary) {",
+			"  const { trailer, thresholds } = summary;",
+			"  const rows = trailer.tires.map(toRow);",
+			"  return render(rows);",
+			"}",
+			"",
+			"export function other() {",
+			"  return 1;",
+			"}",
+			"",
+		];
+		await fs.writeFile(filePath, lines.join("\n"));
+
+		const tool = new ReadTool(createSession(tmpDir));
+		const text = textOutput(await tool.execute("call-opener", { path: `${filePath}:3-4,8-8` }));
+		const shown = text
+			.split("\n")
+			.slice(1)
+			.map(line => line.split(":")[0]);
+		expect(shown).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+		expect(text).not.toContain("…");
 	});
 
 	it("includes the matching closing bracket line outside a forward range", async () => {
@@ -202,6 +233,25 @@ describe("read tool multi-range selector", () => {
 		expect(text).toContain("Range 999-1000 is beyond end of file (10 lines total); skipped");
 	});
 
+	it.each(["disk", "ACP"] as const)(
+		"reports a range immediately after EOF without reading the last line (%s)",
+		async backend => {
+			const filePath = path.join(tmpDir, "small.txt");
+			const content = makeNumberedContent(10);
+			await Bun.write(filePath, content);
+			const bridge: ClientBridge | undefined =
+				backend === "ACP" ? { capabilities: { readTextFile: true }, readTextFile: async () => content } : undefined;
+			const result = await new ReadTool(createSession(tmpDir, bridge)).execute("call-adjacent-oob", {
+				path: `${filePath}:3-3,11-11`,
+			});
+			const text = textOutput(result);
+
+			expect(text).toContain("3:line 3");
+			expect(text).toContain("Range 11-11 is beyond end of file (10 lines total); skipped");
+			expect(text).not.toContain("10:line 10");
+		},
+	);
+
 	it("supports the +count syntax in multi-range", async () => {
 		const filePath = path.join(tmpDir, "numbered.txt");
 		await fs.writeFile(filePath, makeNumberedContent(30));
@@ -210,12 +260,14 @@ describe("read tool multi-range selector", () => {
 		const result = await tool.execute("call-plus", { path: `${filePath}:2+2,20+2` });
 		const text = textOutput(result);
 
-		expect(text).toContain("line 2");
-		expect(text).toContain("line 3");
-		expect(text).toContain("line 20");
-		expect(text).toContain("line 21");
-		expect(text).not.toContain("line 4");
-		expect(text).not.toContain("line 19");
+		expect(text).toContain("1:line 1");
+		expect(text).toContain("3:line 3");
+		expect(text).toContain("6:line 6");
+		expect(text).toContain("19:line 19");
+		expect(text).toContain("24:line 24");
+		expect(text).not.toContain("line 7");
+		expect(text).not.toContain("line 18");
+		expect(text).not.toContain("line 25");
 	});
 
 	it("accepts `..` as a forgiving alias for `-`, producing identical output", async () => {
@@ -257,22 +309,24 @@ describe("read tool multi-range selector", () => {
 
 	it("routes multi-range reads through the ACP bridge when available", async () => {
 		const filePath = path.join(tmpDir, "disk.txt");
-		await fs.writeFile(filePath, "disk one\ndisk two\ndisk three\ndisk four\ndisk five\n");
-		const bridgeText = "bridge one\nbridge two\nbridge three\nbridge four\nbridge five\n";
+		const words = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
+		await fs.writeFile(filePath, `${words.map(word => `disk ${word}`).join("\n")}\n`);
+		const bridgeText = `${words.map(word => `bridge ${word}`).join("\n")}\n`;
 		const bridge: ClientBridge = {
 			capabilities: { readTextFile: true },
 			readTextFile: async () => bridgeText,
 		};
 
 		const tool = new ReadTool(createSession(tmpDir, bridge));
-		const result = await tool.execute("call-bridge", { path: `${filePath}:1-2,4-5` });
+		const result = await tool.execute("call-bridge", { path: `${filePath}:1-1,9-9` });
 		const text = textOutput(result);
 
 		expect(text).toContain("bridge one");
-		expect(text).toContain("bridge two");
 		expect(text).toContain("bridge four");
-		expect(text).toContain("bridge five");
-		expect(text).not.toContain("bridge three");
+		expect(text).toContain("bridge eight");
+		expect(text).toContain("bridge ten");
+		expect(text).not.toContain("bridge five");
+		expect(text).not.toContain("bridge seven");
 		expect(text).not.toContain("disk one");
 	});
 

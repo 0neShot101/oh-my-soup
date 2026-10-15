@@ -283,18 +283,63 @@ fn line_carries(body_line: &str, evidence: &str) -> bool {
 	})
 }
 
+/// Minimum trimmed chars a payload line must share with an anchor's current
+/// content, as a common prefix plus suffix, to read as that line edited in
+/// place. Below this, a shared keyword or indentation proves nothing.
+const EDITED_FROM_MIN_CHARS: usize = 16;
+
+/// Chars `body_line` shares with `evidence` as a common prefix plus a
+/// non-overlapping common suffix, both trimmed: the shape of a line edited in
+/// place (a clause inserted, an identifier renamed, a tail rewritten).
+fn edited_from_score(body_line: &str, evidence: &str) -> usize {
+	let body = body_line.trim();
+	let target = evidence.trim();
+	let (prefix_bytes, prefix_chars) = body
+		.chars()
+		.zip(target.chars())
+		.take_while(|(a, b)| a == b)
+		.fold((0, 0), |(bytes, chars), (c, _)| (bytes + c.len_utf8(), chars + 1));
+	let suffix = body[prefix_bytes..]
+		.chars()
+		.rev()
+		.zip(target[prefix_bytes..].chars().rev())
+		.take_while(|(a, b)| a == b)
+		.count();
+	prefix_chars + suffix
+}
+
+/// True when `body_line` reads as an in-place edit of current line `line`,
+/// whose content is `evidence`: it shares at least [`EDITED_FROM_MIN_CHARS`]
+/// with that line and strictly more than with any other line of the file. A
+/// stale number's payload was authored from the line it was meant for, which
+/// still sits elsewhere in the file and scores higher — or ties, which also
+/// rejects.
+fn edited_from(body_line: &str, evidence: &str, current_lines: &[&str], line: u32) -> bool {
+	let score = edited_from_score(body_line, evidence);
+	if score < EDITED_FROM_MIN_CHARS {
+		return false;
+	}
+	current_lines.iter().enumerate().all(|(index, other)| {
+		index + 1 == line as usize || edited_from_score(body_line, other) < score
+	})
+}
+
 /// Body evidence that an op targets `first..=last` as currently numbered: the
-/// payload carries the first anchor's current content and, for ranges, the
-/// last anchor's current content at or after it. Checking both ends is what
-/// rejects stale numbers whichever way lines moved: after lines shift down,
-/// a stale range's first line holds content from above the intended range;
-/// after lines shift up, its last line holds content from below it. Either
-/// way that end's content is absent from the payload.
+/// payload carries the first anchor's current content — verbatim, or as an
+/// in-place edit of it ([`edited_from`]) — and, for ranges, the last anchor's
+/// current content at or after it. Checking both ends is what rejects stale
+/// numbers whichever way lines moved: after lines shift down, a stale range's
+/// first line holds content from above the intended range; after lines shift
+/// up, its last line holds content from below it. Either way that end's
+/// content is absent from the payload.
 fn body_targets(body: &[String], current_lines: &[&str], first: u32, last: u32) -> bool {
+	let targets = |body_line: &str, evidence: &str, line: u32| {
+		line_carries(body_line, evidence) || edited_from(body_line, evidence, current_lines, line)
+	};
 	let Some(head) = unique_evidence(current_lines, first) else {
 		return false;
 	};
-	let Some(head_at) = body.iter().position(|line| line_carries(line, head)) else {
+	let Some(head_at) = body.iter().position(|line| targets(line, head, first)) else {
 		return false;
 	};
 	if first == last {
@@ -305,17 +350,18 @@ fn body_targets(body: &[String], current_lines: &[&str], first: u32, last: u32) 
 	};
 	body
 		.iter()
-		.rposition(|line| line_carries(line, tail))
+		.rposition(|line| targets(line, tail, last))
 		.is_some_and(|tail_at| tail_at >= head_at)
 }
 
 /// Anchors the guard would reject that a shift-aware reading accepts: every
 /// unseen anchor of a replacement op images a displayed line of a retained
 /// version (same content, older number), and the payload carries the current
-/// content of both ends of the unseen span ([`body_targets`]). Stale-numbered
-/// anchors fail the payload check and stay rejected, as do anchors no retained
-/// version displayed, ends too short or repeated to identify a line, and pure
-/// inserts/cuts (no payload to evidence against).
+/// content of both ends of the unseen span — verbatim or edited in place
+/// ([`body_targets`]). Stale-numbered anchors fail the payload check and stay
+/// rejected, as do anchors no retained version displayed, ends too short or
+/// repeated to identify a line, and pure inserts/cuts (no payload to evidence
+/// against).
 fn rescue_shifted_anchors(
 	section: &PatchSection,
 	store: &EditStore,
@@ -788,6 +834,54 @@ mod tests {
 		let reversed = body(&["let v0004 = 4;", "let v0001 = 1;"]);
 		assert!(!body_targets(&reversed, &file, 1, 4));
 	}
+
+	#[test]
+	fn edited_from_score_counts_prefix_and_non_overlapping_suffix() {
+		let evidence = "import type { BrakeReading, Subsystem } from '../data/types';";
+		// A clause inserted mid-line keeps the whole original as prefix + suffix.
+		let inserted = "import type { BrakeReading, History, Subsystem } from '../data/types';";
+		assert_eq!(edited_from_score(inserted, evidence), evidence.chars().count());
+		// Indentation is trimmed before comparing.
+		assert_eq!(edited_from_score("    foo(bar);", "foo(bar);"), 9);
+		// A repeated line never scores past the shorter string.
+		assert_eq!(edited_from_score("abcabc", "abc"), 3);
+		assert_eq!(edited_from_score("other();", "foo(bar);"), 2);
+	}
+
+	#[test]
+	fn body_targets_accepts_an_in_place_edit_of_the_anchored_line() {
+		let file = [
+			"import { useThresholds, type Thresholds } from '../data/thresholds';",
+			"import type { BrakeReading, Subsystem, Trailer } from '../data/types';",
+			"import { useLiveUpdates } from '../data/live';",
+		];
+		// A clause inserted mid-line: not carried verbatim, but edited from line
+		// 2.
+		let edited =
+			body(&["import type { BrakeReading, History, Subsystem, Trailer } from '../data/types';"]);
+		assert!(!line_carries(&edited[0], file[1]));
+		assert!(body_targets(&edited, &file, 2, 2));
+		// A rewrite sharing only the keyword and the terminator is no evidence.
+		assert!(!body_targets(&body(&["import { other } from './other';"]), &file, 2, 2));
+	}
+
+	#[test]
+	fn body_targets_rejects_an_edit_authored_from_another_line() {
+		let file = [
+			"        self.assertEqual(response[\"tires\"][0][\"points\"], [])",
+			"        self.assertEqual(response[\"tires\"][1][\"points\"], [",
+			"        self.assertEqual(stub.request[0], IMEI)",
+		];
+		// Stale number: the payload was authored from line 2, which still sits
+		// in the file and scores higher than the anchored line 1.
+		let stale =
+			body(&["        self.assertEqual(response[\"tires\"][1][\"points\"], [  # edited"]);
+		assert!(!body_targets(&stale, &file, 1, 1));
+		assert!(body_targets(&stale, &file, 2, 2));
+		// Two lines the payload matches equally well stay ambiguous.
+		let twins = ["alpha_value = compute(1)", "alpha_value = compute(2)"];
+		assert!(!body_targets(&body(&["alpha_value = compute(3)"]), &twins, 1, 1));
+	}
 }
 
 #[cfg(test)]
@@ -1116,5 +1210,93 @@ mod lifecycle {
 			"let v0021 = 21; // b",
 			"let v0022 = 22;",
 		]);
+	}
+
+	/// A file of call lines long enough to carry in-place-edit evidence.
+	fn call_fixture(ctx: &Lifecycle, file: &str) {
+		use std::fmt::Write as _;
+		let mut text = String::new();
+		for i in 1..=30 {
+			writeln!(text, "const value_{i:04} = compute({i}, \"label-{i:04}\");").unwrap();
+		}
+		ctx.write_text(file, &text);
+	}
+
+	/// Full read, two inserted lines above, then a replace at the shifted
+	/// number whose payload edits the line in place (an argument added) rather
+	/// than restating it. The old content is no longer in the payload, but the
+	/// payload still reads as that line edited, so it applies.
+	#[tokio::test]
+	async fn in_place_edit_of_shifted_line_applies() {
+		let ctx = Lifecycle::new("case-k.ts", 30);
+		call_fixture(&ctx, "case-k.ts");
+		let tag0 = ctx.read("case-k.ts", &all_seen(30));
+		ctx.edit(&format!("[case-k.ts#{tag0}]\nPUT >5:\n+// ins a\n+// ins b\n"))
+			.await
+			.unwrap();
+		let tag1 = ctx.head_tag("case-k.ts");
+		ctx.edit(&format!(
+			"[case-k.ts#{tag1}]\nPUT 20.=20:\n+const value_0018 = compute(18, \"label-0018\", \
+			 extra);\n"
+		))
+		.await
+		.unwrap();
+		let text = ctx.text("case-k.ts");
+		assert_eq!(
+			text.lines().nth(19).unwrap(),
+			"const value_0018 = compute(18, \"label-0018\", extra);"
+		);
+		assert_eq!(text.lines().nth(18).unwrap(), "const value_0017 = compute(17, \"label-0017\");");
+	}
+
+	/// The same in-place edit at the stale pre-shift number: the anchored line
+	/// now holds old line 16, and the payload matches old line 18 (two lines
+	/// down) better, so the guard rejects and the file is untouched.
+	#[tokio::test]
+	async fn stale_in_place_edit_stays_rejected() {
+		let ctx = Lifecycle::new("case-l.ts", 30);
+		call_fixture(&ctx, "case-l.ts");
+		let tag0 = ctx.read("case-l.ts", &all_seen(30));
+		ctx.edit(&format!("[case-l.ts#{tag0}]\nPUT >5:\n+// ins a\n+// ins b\n"))
+			.await
+			.unwrap();
+		let before = ctx.text("case-l.ts");
+		let tag1 = ctx.head_tag("case-l.ts");
+		let err = ctx
+			.edit(&format!(
+				"[case-l.ts#{tag1}]\nPUT 18.=18:\n+const value_0018 = compute(18, \"label-0018\", \
+				 extra);\n"
+			))
+			.await
+			.unwrap_err();
+		assert!(err.contains("never displayed"), "unexpected error: {err}");
+		assert!(err.contains("  18:const value_0016"), "stale line missing from reveal: {err}");
+		assert_eq!(ctx.text("case-l.ts"), before);
+	}
+
+	/// A block long enough for the compact preview to elide its interior is
+	/// still anchorable there: the model authored every line and the response
+	/// numbered the block's ends, so the interior numbers are known. Before the
+	/// insert's lines were recorded as displayed, this edit was rejected for a
+	/// line the tool itself had placed.
+	#[tokio::test]
+	async fn interior_of_an_inserted_block_is_anchorable() {
+		let ctx = Lifecycle::new("case-m.ts", 30);
+		let tag0 = ctx.read("case-m.ts", &all_seen(30));
+		let mut patch = format!("[case-m.ts#{tag0}]\nPUT >5:\n");
+		for i in 1..=9 {
+			use std::fmt::Write as _;
+			writeln!(patch, "+// ins {i}").unwrap();
+		}
+		ctx.edit(&patch).await.unwrap();
+		let tag1 = ctx.head_tag("case-m.ts");
+		// Line 10 is the fifth inserted line, inside the preview's elision.
+		ctx.edit(&format!("[case-m.ts#{tag1}]\nPUT 10.=10:\n+// ins 5 edited\n"))
+			.await
+			.unwrap();
+		let text = ctx.text("case-m.ts");
+		assert_eq!(text.lines().nth(9).unwrap(), "// ins 5 edited");
+		assert_eq!(text.lines().nth(8).unwrap(), "// ins 4");
+		assert_eq!(text.lines().nth(10).unwrap(), "// ins 6");
 	}
 }
