@@ -978,13 +978,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					if (output.type === "json") {
 						const formatted = formatDisplayJson(output.data, artifactPath !== undefined);
 						const label = `display[${cellDisplayTexts.length + 1}]:\n`;
-						// Fully-inline values render once, in the cell box: pushing
-						// them as well makes the TUI tree repeat them (#10778).
-						// Oversized values keep the details entry (bounded preview
-						// or restored full value) for tree navigation and SDK use.
-						if (formatted.spillFullValue || formatted.previewText !== formatted.fullText) {
-							jsonOutputs.push(formatted.detailsValue);
-						}
+						jsonOutputs.push(formatted.detailsValue);
 						cellDisplayTexts.push(`${label}${formatted.previewText}`);
 						if (formatted.spillFullValue) {
 							spilledDisplays.push({ index: jsonOutputs.length - 1, fullValue: output.data });
@@ -1043,13 +1037,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 						: runtimeOutput;
 				const imageText = cellImageNotes.join("\n");
 				const displayText = cellDisplayTexts.join("\n\n");
-				const visibleDisplayText =
-					displayText && imageText ? `${displayText}\n\n${imageText}` : displayText || imageText;
-				const cellOutput =
-					stdoutTrimmed && visibleDisplayText
-						? `${stdoutTrimmed}\n\n${visibleDisplayText}`
-						: stdoutTrimmed || visibleDisplayText;
+				const cellOutput = [stdoutTrimmed, displayText, imageText].filter(Boolean).join("\n\n");
 				cellResult.output = cellOutput;
+				// Renderers show JSON displays from `jsonOutputs`; without them the cell box repeats each one (#10778).
+				cellResult.textOutput = displayText ? [stdoutTrimmed, imageText].filter(Boolean).join("\n\n") : undefined;
 				cellResult.exitCode = result.exitCode;
 				cellResult.durationMs = durationMs;
 				cellResult.statusEvents = cellStatus.statusEvents;

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { getThemeByName } from "@oh-my-pi/pi-tui/theme";
+import { evalToolRenderer } from "@oh-my-pi/pi-tui/tools/eval";
 import { formatOutputNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
 import * as evalIndex from "@oh-my-pi/pi-coding-agent/eval";
 import * as pyKernel from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
@@ -68,24 +70,34 @@ describe("EvalTool display() text surfacing", () => {
 		expect(text).not.toBe("(no text output)");
 	});
 
-	it("keeps fully-inline small displays out of details.jsonOutputs (issue #10778)", async () => {
+	it("renders a display() value once in the TUI while the model text and jsonOutputs keep it (issue #10778)", async () => {
 		vi.spyOn(pyKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
 		vi.spyOn(evalIndex.jsBackend, "execute").mockResolvedValue(
 			baseResult({
-				displayOutputs: [{ type: "json", data: { stdout: "hi", exit_code: 0 } }],
+				output: "before\n",
+				displayOutputs: [{ type: "json", data: { marker: "ZZUNIQUE" } }],
 			}) as never,
 		);
 
 		const tool = new EvalTool(makeSession());
 		const result = await tool.execute("call-small-display", {
 			language: "js",
-			code: "display({ stdout: 'hi', exit_code: 0 });",
+			code: "print('before'); display(value);",
 		});
 
 		const text = result.content.map(c => (c.type === "text" ? c.text : "")).join("\n");
-		expect(text).toContain("display[1]");
-		expect(text).toContain('"stdout": "hi"');
-		expect(result.details?.jsonOutputs).toBeUndefined();
+		expect(text).toContain('"marker": "ZZUNIQUE"');
+		expect(result.details?.jsonOutputs).toEqual([{ marker: "ZZUNIQUE" }]);
+
+		const theme = (await getThemeByName("dark"))!;
+		const rendered = Bun.stripANSI(
+			evalToolRenderer
+				.renderResult(result, { expanded: true, isPartial: false, spinnerFrame: 0 }, theme)
+				.render(120)
+				.join("\n"),
+		);
+		expect(rendered).toContain("before");
+		expect(rendered.split("ZZUNIQUE")).toHaveLength(2);
 	});
 
 	it("interleaves stdout text and display() JSON values", async () => {
