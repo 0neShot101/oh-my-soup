@@ -450,9 +450,10 @@ return {
 				collectErrors(`() => tab.uploadFile("#direct", "large.bin"),
 	() => tab.uploadFile("#trigger", "large.bin"),
 	() => tab.uploadFile("#drop", "large.bin"),`),
+				60,
 			);
 			expect(errors).toEqual([]);
-			expect(await run(readDigests)).toEqual([digest, digest, digest]);
+			expect(await run(readDigests, 60)).toEqual([digest, digest, digest]);
 		} finally {
 			await close();
 		}

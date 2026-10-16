@@ -57,7 +57,7 @@ describe("executeJs workflow helpers", () => {
 		expect(phase?.event.title).toBe("Scan");
 	});
 
-	it("reads the turn budget from Goal Mode via the __budget__ bridge", async () => {
+	it("rejects inspecting the remaining token budget from Goal Mode via the __budget__ bridge", async () => {
 		const session = baseSession(tempDir.path(), sessionFile, {
 			getGoalModeState: () => ({
 				enabled: true,
@@ -78,11 +78,11 @@ describe("executeJs workflow helpers", () => {
 			"return JSON.stringify([await budget.total(), await budget.spent(), await budget.remaining()]);",
 			{ sessionId: `js-budget-goal:${tempDir.path()}`, session, sessionFile },
 		);
-		expect(result.exitCode).toBe(0);
-		expect(result.output.trim()).toBe("[100000,4200,95800]");
+		expect(result.exitCode).toBe(1);
+		expect(result.output).toContain("Inspecting the remaining token budget is disabled.");
 	});
 
-	it("falls back to session output tokens with no ceiling when Goal Mode is inactive", async () => {
+	it("rejects inspecting the remaining token budget when Goal Mode is inactive", async () => {
 		const session = baseSession(tempDir.path(), sessionFile, {
 			getUsageStatistics: () => ({
 				input: 10,
@@ -102,7 +102,7 @@ describe("executeJs workflow helpers", () => {
 			"return JSON.stringify([await budget.total(), await budget.spent(), (await budget.remaining()) === Infinity]);",
 			{ sessionId: `js-budget-usage:${tempDir.path()}`, session, sessionFile },
 		);
-		expect(result.exitCode).toBe(0);
-		expect(result.output.trim()).toBe("[null,777,true]");
+		expect(result.exitCode).toBe(1);
+		expect(result.output).toContain("Inspecting the remaining token budget is disabled.");
 	});
 });

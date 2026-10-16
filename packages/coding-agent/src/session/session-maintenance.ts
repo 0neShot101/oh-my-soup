@@ -2544,7 +2544,7 @@ export class SessionMaintenance {
 	#fixedContextTokens(pendingMessages: AgentMessage[] = [], tokenizer = this.#tokenizer): number {
 		return (
 			computeNonMessageTokens(this.#host.nonMessageTokenSource(), tokenizer, this.#host.settings.revision) +
-			this.#host.importantNotesReferenceTokens(pendingMessages)
+			(this.#host.importantNotesReferenceTokens?.(pendingMessages) ?? 0)
 		);
 	}
 
@@ -2557,7 +2557,7 @@ export class SessionMaintenance {
 		if (!model) return;
 		assertImportantNotesFit(
 			contextTokens,
-			this.#host.importantNotesReferenceTokens(pendingMessages),
+			this.#host.importantNotesReferenceTokens?.(pendingMessages) ?? 0,
 			model,
 			cfgCompaction.get(this.#host.settings),
 			{ attemptedRecovery },
