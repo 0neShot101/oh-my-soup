@@ -77,13 +77,18 @@ impl Operation {
 /// One normalized single-file patch request.
 pub struct PatchInput<'a> {
 	/// Authored source path.
-	pub path:   &'a str,
+	pub path:        &'a str,
 	/// Requested file operation.
-	pub op:     Operation,
+	pub op:          Operation,
 	/// Optional update destination.
-	pub rename: Option<&'a str>,
+	pub rename:      Option<&'a str>,
 	/// Full create content or update hunks.
-	pub diff:   Option<&'a str>,
+	pub diff:        Option<&'a str>,
+	/// Codex `apply_patch` placement: a context-free hunk whose lines occur more
+	/// than once binds to its first exact or whitespace/unicode-normalized match
+	/// at or after the previous hunk instead of being rejected. Fuzzy matches
+	/// must still be unique.
+	pub first_match: bool,
 }
 
 /// JSON patch mode engine.
@@ -92,6 +97,8 @@ pub struct PatchEngine {
 	pub allow_fuzzy:     bool,
 	/// Minimum confidence for character-level fallback matching.
 	pub fuzzy_threshold: f64,
+	/// See [`PatchInput::first_match`].
+	pub first_match:     bool,
 }
 
 #[derive(Debug, Clone)]
@@ -3054,14 +3061,22 @@ fn character_search(
 	outcome
 }
 
+/// Applies a single context-free hunk at the character level. With
+/// `first_match`, repeated text yields `None` so the caller binds it to the
+/// first line-based match instead of rejecting it; this covers exact repeats
+/// and repeats that only match after normalization (whitespace, unicode),
+/// which the character pass reports as fuzzy candidates. `compute_replacements`
+/// binds those that match by Codex rules and rejects the rest when they have
+/// more than one candidate.
 fn character_match(
 	content: &str,
 	path: &str,
 	hunk: &DiffHunk,
 	threshold: f64,
 	allow_fuzzy: bool,
+	first_match: bool,
 	record: Option<&mut Consumption>,
-) -> Result<(String, Vec<String>), EditError> {
+) -> Result<Option<(String, Vec<String>)>, EditError> {
 	let old_text = hunk.old_lines.join("\n");
 	let outcome = character_search(content, &old_text, threshold, allow_fuzzy);
 	if let Some(record) = record.as_ref() {
@@ -3091,6 +3106,9 @@ fn character_match(
 		anchor_suggestions(&query, &starts(outcome))
 	};
 	if outcome.occurrences.is_some_and(|count| count > 1) {
+		if first_match {
+			return Ok(None);
+		}
 		return Err(EditError::apply(format!(
 			"{}{}",
 			format_patch_occurrence_error(path, &outcome),
@@ -3100,6 +3118,9 @@ fn character_match(
 	// A fuzzy window standing clearly ahead of the rest is the match, as in
 	// `replace` mode; only an undecided set of windows is refused.
 	if outcome.matched.is_none() && outcome.fuzzy_matches.is_some_and(|count| count > 1) {
+		if first_match && outcome.dominant_fuzzy != Some(true) {
+			return Ok(None);
+		}
 		return Err(EditError::apply(format!(
 			"Found {} high-confidence matches in {path}. The text must be unique. Please provide \
 			 more context to make it unique.{}{}",
@@ -3392,7 +3413,7 @@ fn character_match(
 		let snapshot = record.origin_snapshot(origins.iter().copied());
 		record.splice(first_row, old_stop, &origins, 1, &snapshot);
 	}
-	Ok((result, warnings))
+	Ok(Some((result, warnings)))
 }
 
 /// A line's tokens: identifier and number runs, and each other
@@ -4733,6 +4754,7 @@ fn resolve_hunks(
 	hunks: &[DiffHunk],
 	allow_fuzzy: bool,
 	record: Option<&Consumption>,
+	first_match: bool,
 ) -> Result<Vec<PlacedHunk>, EditError> {
 	let locate = |position: usize, hunk: &DiffHunk, hints: Hints, incomplete: Option<&mut bool>| {
 		let guard = record.filter(|record| hunk.old_lines.is_empty() && !record.history.is_empty());
@@ -4997,6 +5019,52 @@ fn resolve_hunks(
 			}
 			progress = true;
 		}
+		if !progress && first_match {
+			let mut line_index = 0;
+			for position in 0..hunks.len() {
+				if fixed[position] {
+					if let Some(at) = placed[position].result.index {
+						line_index = at + placed[position].view.old.len();
+					}
+					continue;
+				}
+				let hunk = &hunks[position];
+				if hunk.old_lines.is_empty() {
+					continue;
+				}
+				let bare_codex = hunk.change_context.is_none()
+					&& !hunk.has_context_lines
+					&& !hunk.is_end_of_file
+					&& Hints::of(hunk).raw.is_none()
+					&& !placed[position].variant_used
+					&& matches!(
+						placed[position].result.strategy,
+						Some(
+							SequenceMatchStrategy::Exact
+								| SequenceMatchStrategy::TrimTrailing
+								| SequenceMatchStrategy::Trim
+								| SequenceMatchStrategy::Unicode
+						)
+					);
+				if bare_codex {
+					let candidates = placed[position]
+						.result
+						.top_indices
+						.as_deref()
+						.or(placed[position].result.match_indices.as_deref())
+						.unwrap_or_default();
+					if let Some(&at) = candidates.iter().find(|&&at| at >= line_index) {
+						let result = &mut placed[position].result;
+						result.index = Some(at);
+						result.match_count = Some(1);
+						result.match_indices = Some(vec![at]);
+						result.top_indices = None;
+						progress = true;
+					}
+				}
+				break;
+			}
+		}
 		if !progress {
 			break;
 		}
@@ -5091,6 +5159,7 @@ fn compute_replacements(
 	hunks: &[DiffHunk],
 	allow_fuzzy: bool,
 	record: Option<&Consumption>,
+	first_match: bool,
 ) -> Result<(Vec<Replacement>, Vec<String>), EditError> {
 	let layout = Layout::new(lines, path, content);
 	let mut replacements = Vec::new();
@@ -5102,7 +5171,7 @@ fn compute_replacements(
 	let mut obligations = Vec::new();
 	let mut insertion_obligations = Vec::new();
 	let mut rewritten = HashMap::new();
-	let placements = resolve_hunks(&layout, hunks, allow_fuzzy, record)?;
+	let placements = resolve_hunks(&layout, hunks, allow_fuzzy, record, first_match)?;
 	for (position, (hunk, mut placed)) in hunks.iter().zip(placements).enumerate() {
 		let number = position + 1;
 		if hunk.old_start_line == Some(0) || hunk.new_start_line == Some(0) {
@@ -5304,7 +5373,28 @@ fn compute_replacements(
 			)
 		});
 		let refs = view.old_refs(hunk);
-		if let Some(count) = result.match_count.filter(|count| *count > 1) {
+		let codex_first_match = first_match
+			&& bare_hunk
+			&& !variant_used
+			&& result.index.is_some_and(|found| {
+				found
+					>= replacements
+						.last()
+						.map_or(0, |prev: &Replacement| prev.start_index + prev.old_len)
+			})
+			&& matches!(
+				result.strategy,
+				Some(
+					SequenceMatchStrategy::Exact
+						| SequenceMatchStrategy::TrimTrailing
+						| SequenceMatchStrategy::Trim
+						| SequenceMatchStrategy::Unicode
+				)
+			);
+		if let Some(count) = result
+			.match_count
+			.filter(|count| *count > 1 && !codex_first_match)
+		{
 			let candidates = result.match_indices.as_deref().unwrap_or_default();
 			if variant_used {
 				// Replaying suggestions cannot help: the full hunk matches
@@ -6433,6 +6523,7 @@ fn apply_hunks(
 	threshold: f64,
 	allow_fuzzy: bool,
 	mut record: Option<&mut Consumption>,
+	first_match: bool,
 ) -> Result<(String, Vec<String>), EditError> {
 	let had_newline = content.ends_with('\n');
 	if hunks.len() == 1 {
@@ -6442,13 +6533,33 @@ fn apply_hunks(
 			&& !hunk.old_lines.is_empty()
 			&& hunk.old_start_line.is_none()
 			&& !hunk.is_end_of_file
-		{
-			return character_match(content, path, hunk, threshold, allow_fuzzy, record);
+			&& let Some((mut next, warnings)) = character_match(
+				content,
+				path,
+				hunk,
+				threshold,
+				allow_fuzzy,
+				first_match,
+				record.as_deref_mut(),
+			)? {
+			if had_newline && !next.ends_with('\n') {
+				next.push('\n');
+			} else if !had_newline {
+				next.truncate(next.trim_end_matches('\n').len());
+			}
+			return Ok((next, warnings));
 		}
 	}
 	let lines = patch_rows(content).collect::<Vec<_>>();
-	let (replacements, warnings) =
-		compute_replacements(content, &lines, path, hunks, allow_fuzzy, record.as_deref())?;
+	let (replacements, warnings) = compute_replacements(
+		content,
+		&lines,
+		path,
+		hunks,
+		allow_fuzzy,
+		record.as_deref(),
+		first_match,
+	)?;
 	if !replacements.is_empty()
 		&& let Some(record) = record.as_mut()
 	{
@@ -6669,8 +6780,15 @@ fn apply_entry(
 			if hunks.is_empty() {
 				return Err(EditError::apply("Diff contains no hunks"));
 			}
-			let (after, warnings) =
-				apply_hunks(&read.text, input.path, &hunks, threshold, allow_fuzzy, None)?;
+			let (after, warnings) = apply_hunks(
+				&read.text,
+				input.path,
+				&hunks,
+				threshold,
+				allow_fuzzy,
+				None,
+				input.first_match,
+			)?;
 			Ok(AppliedEntry {
 				resolved: read.resolved.clone(),
 				read: Some(read),
@@ -6770,12 +6888,17 @@ fn preview_entry(
 	})
 }
 
-fn entry_input<'a>(path: &'a str, entry: &'a EditEntry) -> Result<PatchInput<'a>, EditError> {
+fn entry_input<'a>(
+	path: &'a str,
+	entry: &'a EditEntry,
+	first_match: bool,
+) -> Result<PatchInput<'a>, EditError> {
 	Ok(PatchInput {
 		path,
 		op: Operation::parse(entry.op.as_deref())?,
 		rename: entry.rename.as_deref(),
 		diff: entry.diff.as_deref(),
+		first_match,
 	})
 }
 
@@ -6797,7 +6920,7 @@ impl ModeEngine for PatchEngine {
 		let Some(entry) = args.edits.iter().find(|entry| !streaming || entry.closed) else {
 			return Vec::new();
 		};
-		match entry_input(path, entry) {
+		match entry_input(path, entry, self.first_match) {
 			Ok(input) => {
 				vec![preview_patch(
 					input,
@@ -6836,7 +6959,7 @@ impl ModeEngine for PatchEngine {
 		}
 		if entries.len() == 1 {
 			return Ok(vec![stage_patch(
-				entry_input(path, entries[0])?,
+				entry_input(path, entries[0], self.first_match)?,
 				files,
 				self.allow_fuzzy,
 				self.fuzzy_threshold,
@@ -6844,7 +6967,7 @@ impl ModeEngine for PatchEngine {
 			)?]);
 		}
 
-		let first = entry_input(path, entries[0])?;
+		let first = entry_input(path, entries[0], self.first_match)?;
 		let initial_resolved = files.resolve(path, first.op != Operation::Create)?;
 		// After a create or delete, later updates use replacement text or fail
 		// the existence check; only an initial update needs the original text.
@@ -6869,7 +6992,7 @@ impl ModeEngine for PatchEngine {
 		let mut move_to = None;
 		let mut use_new_encoding = false;
 		for entry in entries {
-			let input = entry_input(path, entry)?;
+			let input = entry_input(path, entry, self.first_match)?;
 			if let Some(rename) = input.rename {
 				let destination = files.resolve(rename, false)?;
 				if destination.absolute == initial_resolved.absolute {
@@ -6927,6 +7050,7 @@ impl ModeEngine for PatchEngine {
 						self.fuzzy_threshold,
 						self.allow_fuzzy,
 						Some(&mut consumption),
+						self.first_match,
 					)?;
 					current = next;
 					consumption.hunk_offset += hunks.len();
@@ -6944,6 +7068,7 @@ impl ModeEngine for PatchEngine {
 			},
 			rename: None,
 			diff: None,
+			first_match: self.first_match,
 		};
 		let after = exists.then_some(current);
 		Ok(vec![{
@@ -7023,7 +7148,7 @@ mod tests {
 				}],
 				..ArgSnapshot::default()
 			};
-			PatchEngine { allow_fuzzy: false, fuzzy_threshold: 0.95 }
+			PatchEngine { allow_fuzzy: false, fuzzy_threshold: 0.95, first_match: false }
 				.inspect(&args)
 				.entries
 		};
@@ -7045,13 +7170,13 @@ mod tests {
 			is_start_of_file:  false,
 		};
 		assert_eq!(
-			apply_hunks("one\n", "a.txt", std::slice::from_ref(&hunk), 0.95, true, None)
+			apply_hunks("one\n", "a.txt", std::slice::from_ref(&hunk), 0.95, true, None, false)
 				.unwrap()
 				.0,
 			"two\n"
 		);
 		assert_eq!(
-			apply_hunks("one", "a.txt", &[hunk], 0.95, true, None)
+			apply_hunks("one", "a.txt", &[hunk], 0.95, true, None, false)
 				.unwrap()
 				.0,
 			"two"

@@ -34,6 +34,7 @@ import {
 } from "@oh-my-soup/pi-ai/dialect";
 import * as AIError from "@oh-my-soup/pi-ai/error";
 import { appendDuplicateSuffix, MAX_TOOL_CALL_ID_LENGTH } from "@oh-my-soup/pi-ai/providers/transform-messages";
+import { isProviderRefusalErrorMessage, isProviderRefusalMessage } from "./replay-policy";
 import {
 	type CursorExecResolvedCarrier,
 	copyCursorExecResolved,
@@ -701,7 +702,17 @@ export function agentLoopContinue(
 			const newMessages: AgentMessage[] = [];
 			const currentContext: AgentContext = { ...context, messages: [...context.messages] };
 
-			stream.push({ type: "agent_start" });
+			const resumeTail = unpairedToolCallTail(currentContext.messages);
+			stream.push(
+				resumeTail
+					? {
+							type: "agent_start",
+							resumedToolCallIds: resumeTail.content.flatMap(block =>
+								block.type === "toolCall" ? [block.id] : [],
+							),
+						}
+					: { type: "agent_start" },
+			);
 
 			await runLoop(currentContext, newMessages, config, signal, stream, streamFn);
 		} catch (err) {
@@ -1538,7 +1549,11 @@ async function runLoopBody(
 						(scopedAbort ? buildToolCallAbortMessages(message, scopedAbort) : undefined);
 					const toolResults: ToolResultMessage[] = [];
 					for (const toolCall of toolCalls) {
-						const errorMessage = toolCallAbortMessages?.[toolCall.id] ?? message.errorMessage;
+						const rawErrorMessage = toolCallAbortMessages?.[toolCall.id] ?? message.errorMessage;
+						const errorMessage =
+							isProviderRefusalMessage(message) || isProviderRefusalErrorMessage(rawErrorMessage)
+								? undefined
+								: rawErrorMessage;
 						const result = createAbortedToolResult(toolCall, stream, message.stopReason, errorMessage);
 						currentContext.messages.push(result);
 						newMessages.push(result);
@@ -2229,17 +2244,15 @@ async function streamAssistantResponse(
 							}
 						}
 						finalMessage = snapshotAssistantMessage(finalMessage);
-						// Unhealed DSML tool-call markup must never reach history: replaying
-						// it teaches the model to keep writing calls as text (#10556). Strip
-						// it before the context, the UI, and the session see the message.
-						// Only DSML-speaking models qualify; from others it is prose.
-						if (
-							dsmlLeakRecoveryEnabled &&
-							finalMessage.stopReason === "stop" &&
-							!finalMessage.content.some(block => block.type === "toolCall") &&
-							removeDsmlToolMarkupLeak(finalMessage)
-						) {
-							dsmlLeakMessages.add(finalMessage);
+						// Unhealed DSML markup must not reach history, including reasoning
+						// and turns with a valid structured call. Only a failed text-only
+						// call needs the recovery nudge.
+						if (dsmlLeakRecoveryEnabled) {
+							const hasToolCall = finalMessage.content.some(block => block.type === "toolCall");
+							const removed = removeDsmlToolMarkupLeak(finalMessage);
+							if (removed && finalMessage.stopReason === "stop" && !hasToolCall) {
+								dsmlLeakMessages.add(finalMessage);
+							}
 						}
 						// Expand inline macros (and any other registered rewrite) on the
 						// finalized message before it reaches the context, the UI, or tool
@@ -3571,13 +3584,15 @@ async function executeToolCalls(
 							executionArgs,
 							record.signal,
 							partialResult => {
-								stream.push({
+								const event: Extract<AgentEvent, { type: "tool_execution_update" }> = {
 									type: "tool_execution_update",
 									toolCallId: toolCall.id,
 									toolName: toolCall.name,
 									args: executionArgs,
 									partialResult: coerceToolResult(partialResult).result,
-								});
+								};
+								if (stream.done) config.onDetachedToolUpdate?.(event);
+								else stream.push(event);
 							},
 							toolContext,
 						);
@@ -3931,12 +3946,13 @@ export function createSyntheticToolResultMessage(
 				: reason === "skipped"
 					? "Tool call was not executed because the assistant ended its turn"
 					: "Tool call was not executed because the provider stream ended with an error before the tool could run";
-	const details = syntheticDetailsFor(reason, errorMessage);
+	const safeErrorMessage = isProviderRefusalErrorMessage(errorMessage) ? undefined : errorMessage;
+	const details = syntheticDetailsFor(reason, safeErrorMessage);
 	return {
 		role: "toolResult",
 		toolCallId: toolCall.id,
 		toolName: toolCall.name,
-		content: [{ type: "text", text: errorMessage ? `${message}: ${errorMessage}` : `${message}.` }],
+		content: [{ type: "text", text: safeErrorMessage ? `${message}: ${safeErrorMessage}` : `${message}.` }],
 		details,
 		isError: true,
 		timestamp: Date.now(),

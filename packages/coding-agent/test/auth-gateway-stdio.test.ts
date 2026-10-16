@@ -3,7 +3,7 @@ import { getBundledModel } from "@oh-my-soup/pi-catalog/models";
 import { selectorCandidates } from "@oh-my-soup/pi-coding-agent/cli/auth-gateway-stdio";
 import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
 
-const fast = getBundledModel("google", "gemini-2.5-flash")!;
+const fast = getBundledModel("google", "gemini-3.5-flash")!;
 const mini = getBundledModel("openai", "gpt-4o-mini")!;
 // Selector resolution does not depend on Vertex's current published roster.
 const vertex = { ...fast, provider: "google-vertex" };

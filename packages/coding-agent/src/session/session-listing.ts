@@ -467,8 +467,9 @@ async function scanSessionFile(
 			}
 		}
 
-		firstMessage ||= extractFirstDisplayMessageFromPrefix(content) ?? "";
-		const messageCount = Math.max(parsedMessageCount, countMessageMarkers(content));
+		firstMessage ||=
+			extractFirstDisplayMessageFromPrefix(content) ?? extractFirstDisplayMessageFromPrefix(suffix) ?? "";
+		const messageCount = Math.max(parsedMessageCount, countMessageMarkers(content), countMessageMarkers(suffix));
 		// Either bounded window may hold the only copy of an assistant record,
 		// and neither may: a >prefix record before a >suffix tail leaves the
 		// middle unexamined. When both windows miss, ask the backend for a full
@@ -684,10 +685,14 @@ export async function listAllSessions(
  * ACP, `resolveResumableSession`) keeps the unfiltered scan.
  */
 export function isEmptySession(session: SessionInfo): boolean {
+	const hasFirstMessage = Boolean(
+		sanitizeSessionName(session.firstMessage === "(no messages)" ? undefined : session.firstMessage),
+	);
+	if (session.messageCount === 0 && !hasFirstMessage) return true;
 	if (session.status !== undefined && session.status !== "pending" && session.status !== "unknown") return false;
 	if ((session.assistantTurns ?? 1) > 0) return false;
 	if (sanitizeSessionName(session.title)) return false;
-	if (sanitizeSessionName(session.firstMessage === "(no messages)" ? undefined : session.firstMessage)) return false;
+	if (hasFirstMessage) return false;
 	return true;
 }
 

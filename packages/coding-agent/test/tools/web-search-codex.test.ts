@@ -8,6 +8,7 @@ import { runSearchQuery } from "@oh-my-soup/pi-coding-agent/web/search";
 import * as provider from "@oh-my-soup/pi-coding-agent/web/search/provider";
 import type { SearchParams } from "@oh-my-soup/pi-coding-agent/web/search/providers/base";
 import { hasCodexSearch, searchCodex } from "@oh-my-soup/pi-coding-agent/web/search/providers/codex";
+import { TempDir } from "@oh-my-soup/pi-utils";
 
 type CapturedRequest = {
 	url: string;
@@ -237,13 +238,24 @@ describe("searchCodex model selection", () => {
 	let modelRegistry: ModelRegistry;
 	let proxyModelRegistry: ModelRegistry;
 	let oauthModelRegistry: ModelRegistry;
+	let tempDir: TempDir;
 	let capturedRequest: CapturedRequest | null = null;
 
 	function createAuthStorage(): AuthStorage {
 		return new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")));
 	}
 
+	// Every registry below is pointed at a temp `models.yml`. Without it the
+	// constructor reads the host `~/.oms/agent/models.yml`, and a configured
+	// `openai-codex` apiKey there replaces the env bearer under test with a
+	// config-sourced key, so the suite fails on exactly the machines it is
+	// meant to protect. Keep this path explicit when adding registries.
+	function modelsYmlPath(): string {
+		return tempDir.join("models.yml");
+	}
+
 	beforeEach(() => {
+		tempDir = TempDir.createSync();
 		oauthAuthStorage = createAuthStorage();
 		vi.spyOn(oauthAuthStorage.oauth, "access").mockResolvedValue({
 			accessToken: residencyToken,
@@ -259,9 +271,9 @@ describe("searchCodex model selection", () => {
 		oauthOnlyAuthStorage = createAuthStorage();
 		oauthOnlyAuthStorage.keys.setRuntime("openai-codex", "official-oauth-token");
 		vi.spyOn(oauthOnlyAuthStorage.keys, "source").mockReturnValue({ kind: "oauth", concrete: true });
-		modelRegistry = new ModelRegistry(oauthAuthStorage);
-		proxyModelRegistry = new ModelRegistry(proxyAuthStorage);
-		oauthModelRegistry = new ModelRegistry(oauthOnlyAuthStorage);
+		modelRegistry = new ModelRegistry(oauthAuthStorage, modelsYmlPath());
+		proxyModelRegistry = new ModelRegistry(proxyAuthStorage, modelsYmlPath());
+		oauthModelRegistry = new ModelRegistry(oauthOnlyAuthStorage, modelsYmlPath());
 	});
 
 	function makeSearchParams(
@@ -319,7 +331,7 @@ describe("searchCodex model selection", () => {
 		return result.details.response;
 	}
 
-	afterEach(() => {
+	afterEach(async () => {
 		vi.restoreAllMocks();
 		resetSettingsForTest();
 		capturedRequest = null;
@@ -327,6 +339,7 @@ describe("searchCodex model selection", () => {
 		emailOnlyAuthStorage.close();
 		proxyAuthStorage.close();
 		oauthOnlyAuthStorage.close();
+		await tempDir.remove();
 	});
 
 	it("sends the selected Codex model id on the wire", async () => {
@@ -356,13 +369,39 @@ describe("searchCodex model selection", () => {
 		const result = await searchCodex({
 			...makeSearchParams("email-only Codex search", mockCodexFetch("gpt-5.6-luna")),
 			authStorage: emailOnlyAuthStorage,
-			modelRegistry: new ModelRegistry(emailOnlyAuthStorage),
+			modelRegistry: new ModelRegistry(emailOnlyAuthStorage, modelsYmlPath()),
 		});
 
 		const headers = new Headers(capturedRequest?.headers);
 		expect(headers.get("authorization")).toBe("Bearer email-only-access-token");
 		expect(headers.has("chatgpt-account-id")).toBe(false);
 		expect(result.answer).toBe("Codex answer");
+	});
+
+	it("searches with an OPENAI_CODEX_OAUTH_TOKEN env bearer and no stored OAuth row", async () => {
+		// hasCodexSearch admits the provider from keys.source(), which is env-aware,
+		// but the official-backend path seeds from oauth.access, which only reads
+		// stored `type: "oauth"` rows. With only the env var set, the provider was
+		// advertised and then every search failed with "No Codex OAuth credentials".
+		// Nothing is stored here on purpose — that is the setup from the issue.
+		const envAuthStorage = createAuthStorage();
+		const previous = process.env.OPENAI_CODEX_OAUTH_TOKEN;
+		process.env.OPENAI_CODEX_OAUTH_TOKEN = "env-bearer-token";
+		try {
+			const result = await searchCodex({
+				...makeSearchParams("env bearer codex search", mockCodexFetch("gpt-5.6-luna"), selectedCodexModel),
+				authStorage: envAuthStorage,
+				modelRegistry: new ModelRegistry(envAuthStorage, modelsYmlPath()),
+			});
+
+			expect(await hasCodexSearch(envAuthStorage)).toBe(true);
+			const headers = new Headers(capturedRequest?.headers);
+			expect(headers.get("authorization")).toBe("Bearer env-bearer-token");
+			expect(result.answer).toBe("Codex answer");
+		} finally {
+			if (previous === undefined) delete process.env.OPENAI_CODEX_OAUTH_TOKEN;
+			else process.env.OPENAI_CODEX_OAUTH_TOKEN = previous;
+		}
 	});
 
 	it("applies the configured request timeout to Codex search", async () => {

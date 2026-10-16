@@ -5956,6 +5956,18 @@ export const SETTINGS_SCHEMA = {
 			],
 		},
 	},
+	"providers.webSearchEnginesOnly": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			additionalPlacements: [{ tab: "tools", group: "Available Tools" }],
+			label: "Web Search Engines Only",
+			description:
+				"Disable chat/LLM models (OpenAI, Anthropic, Gemini, Codex, xAI, OpenRouter, and web/hosted) from being used for web_search; allow only dedicated web search engines",
+		},
+	},
 	"providers.webSearchGeminiModel": {
 		type: "string",
 		default: undefined,

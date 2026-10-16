@@ -46,14 +46,6 @@ function cloneState(state: GoalModeState): GoalModeState {
 	return { ...state, goal: cloneGoal(state.goal) };
 }
 
-function budgetValue(goal: Goal): string {
-	return goal.tokenBudget === undefined ? "none" : String(goal.tokenBudget);
-}
-
-function remainingValue(goal: Goal): string {
-	return goal.tokenBudget === undefined ? "unbounded" : String(Math.max(0, goal.tokenBudget - goal.tokensUsed));
-}
-
 export function remainingTokens(goal: Goal | null | undefined): number | null {
 	if (!goal || goal.tokenBudget === undefined) return null;
 	return Math.max(0, goal.tokenBudget - goal.tokensUsed);
@@ -86,23 +78,13 @@ export function renderGoalPrompt(kind: GoalPromptKind, goal: Goal): string {
 				: goalBudgetLimitPrompt;
 	return prompt.render(template, {
 		objective: escapeXmlText(goal.objective),
-		tokensUsed: String(goal.tokensUsed),
-		tokenBudget: budgetValue(goal),
-		remainingTokens: remainingValue(goal),
 		timeUsedSeconds: String(goal.timeUsedSeconds),
 	});
 }
 
 export function completionBudgetReport(goal: Goal): string | null {
-	const parts: string[] = [];
-	if (goal.tokenBudget !== undefined) {
-		parts.push(`tokens used: ${goal.tokensUsed} of ${goal.tokenBudget}`);
-	}
-	if (goal.timeUsedSeconds > 0) {
-		parts.push(`time used: ${goal.timeUsedSeconds} seconds`);
-	}
-	if (parts.length === 0) return null;
-	return `Goal achieved. Report final budget usage to the user: ${parts.join("; ")}.`;
+	if (goal.timeUsedSeconds <= 0) return null;
+	return `Goal achieved. Time used: ${goal.timeUsedSeconds} seconds.`;
 }
 
 function validateTokenBudget(tokenBudget: number | undefined): void {

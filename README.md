@@ -23,7 +23,70 @@
   Fork of <a href="https://github.com/can1357/oh-my-pi">Oh My Pi</a> by <a href="https://github.com/can1357">@can1357</a> · built on <a href="https://github.com/badlogic/pi-mono">Pi</a> by <a href="https://github.com/mariozechner">@mariozechner</a>
 </p>
 
----
+The most capable agent surface that ships. Continuously tuned by real-world use — complete out of the box, open all the way down.
+
+**60+** providers · **31** built-in tools · **14** lsp ops · **28** dap ops · **~80k** lines of Rust core.
+
+> [!NOTE]
+> Pull requests are **temporarily open to everyone** as a trial. We previously
+> required a vouch before accepting PRs; that requirement is lifted for now
+> while we evaluate how open contributions go. Depending on the results, the
+> vouch system may return.
+
+## Install
+
+**macOS · Linux**
+
+```sh
+curl -fsSL https://omp.sh/install | sh
+```
+
+Without a usable bun (or with `--binary`), the install scripts fetch the prebuilt binary from `build.stencil.so` and check its SHA-256 before installing it. Pin a release with `curl -fsSL https://omp.sh/install | sh -s -- --binary --ref v<version>` (PowerShell: `-Binary -Ref v<version>`).
+
+> **Alpine / musl:** the prebuilt musl binary links `libstdc++`/`libgcc` dynamically, which stock Alpine does not ship. Install them first: `apk add libstdc++ libgcc`.
+
+**Homebrew**
+
+```sh
+brew install can1357/tap/oms
+```
+
+**Bun (recommended)**
+
+```sh
+bun install -g @oh-my-soup/pi-coding-agent
+```
+
+**Nix**
+
+```sh
+# Run without installing
+nix run github:pickpocket/oh-my-soup
+
+# Or install into the active profile (Nix < 2.30: `nix profile install`)
+nix profile add github:pickpocket/oh-my-soup
+```
+
+Flake consumers can use `packages.<system>.oms`, `overlays.default`, `nixosModules.default`, or `homeManagerModules.default`. A Home Manager configuration can install OMS and own its settings declaratively:
+
+```nix
+{
+  inputs.oms.url = "github:pickpocket/oh-my-soup";
+
+  # In your Home Manager module:
+  imports = [ inputs.oms.homeManagerModules.default ];
+  programs.oms = {
+    enable = true;
+    settings.startup.quiet = true;
+  };
+}
+```
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://omp.sh/install.ps1 | iex
+```
 
 `oms` is a terminal coding agent. It reads, edits, searches, runs shells, talks to language servers, and drives a real debugger, all from one self-contained binary. Search, shell, syntax highlighting, and file walking run in-process through a Rust core instead of shelling out, so the same binary behaves the same on macOS, Linux, and Windows. No WSL, no runtime to install.
 
@@ -275,7 +338,72 @@ providers:
         maxTokens: 32000
 ```
 
-`oms models spark` verifies discovery; then assign it to a role in `/model` or preconfigure `modelRoles.default: spark/minimax-m3` in `~/.oms/agent/config.yml`. Declared APIs can be any of `openai-completions`, `openai-responses`, `openai-codex-responses`, `azure-openai-responses`, `anthropic-messages`, `bedrock-converse-stream`, `google-generative-ai`, `google-gemini-cli`, `google-vertex`, `typesafe`, or `openrouter-decisions`.
+`oms models spark` verifies discovery. Then run `oms setup` and choose the model in the default-model step, use `/model` in a session to assign it to the `default` role, or preconfigure `modelRoles.default: spark/minimax-m3` in `~/.oms/agent/config.yml`. Declared APIs can be any of `openai-completions`, `openai-responses`, `openai-codex-responses`, `azure-openai-responses`, `anthropic-messages`, `bedrock-converse-stream`, `google-generative-ai`, `google-gemini-cli`, `google-vertex`, `typesafe`, or `openrouter-decisions`.
+
+To preconfigure the default without the picker, add the selector to `~/.oms/agent/config.yml`:
+
+```yaml
+modelRoles:
+  default: spark/minimax-m3
+```
+
+### Four knobs that make routing useful
+
+- **Custom providers** — Declare anything that speaks `openai-completions`, `openai-responses`, `openai-codex-responses`, `azure-openai-responses`, `anthropic-messages`, `bedrock-converse-stream`, `google-generative-ai`, `google-gemini-cli`, `google-vertex`, `typesafe`, `openrouter-decisions`, `openai-decisions`, or `workers-ai-systemone` (the judge APIs) in `~/.oms/agent/models.yml`.
+- **Fallback chains** — Per-role or per-model chains under `retry.fallbackChains`. When the primary throws 429s or hits a quota wall, the next entry takes the rest of the turn — restored on cooldown.
+- **Path-scoped models** — Scope `enabledModels` and `disabledProviders` entries to a `path:` prefix to pin a different model set on one repo without touching the global config. Scoped entries cover the path and everything under it.
+- **Round-robin credentials** — Stack API keys per provider and the runtime rotates with session affinity and per-credential backoff. Useful when one key would burn its quota by lunch.
+
+Full provider & routing reference at [omp.sh/docs/providers](https://omp.sh/docs/providers).
+
+## Twenty-three backends. _One tool the agent already knows_.
+
+`web_search` is built in, not bolted on. `auto` walks a twenty-three-provider chain; pin one by name if you already pay for it. Behind every hit, site-aware extraction turns GitHub, registries, arXiv, Stack Overflow, and docs into structured markdown — anchors and link targets survive.
+
+### Search providers
+
+Twenty-three backends. Pin one, or let `auto` walk the chain in order.
+
+| provider     | auth                                      |
+| ------------ | ----------------------------------------- |
+| `auto`       | chain                                     |
+| `perplexity` | `PERPLEXITY_API_KEY` (anonymous fallback) |
+| `gemini`     | oauth                                     |
+| `anthropic`  | oauth                                     |
+| `codex`      | oauth                                     |
+| `xai`        | oauth or `XAI_API_KEY`                    |
+| `zai`        | `ZAI_API_KEY`                             |
+| `exa`        | `EXA_API_KEY` (or mcp)                    |
+| `tinyfish`   | `TINYFISH_API_KEY`                        |
+| `jina`       | `JINA_API_KEY`                            |
+| `kagi`       | `KAGI_API_KEY`                            |
+| `tavily`     | `TAVILY_API_KEY`                          |
+| `firecrawl`  | `FIRECRAWL_API_KEY` (keyless fallback)    |
+| `brave`      | `BRAVE_API_KEY`                           |
+| `kimi`       | `/login kimi-code` or search key          |
+| `parallel`   | `PARALLEL_API_KEY`                        |
+| `synthetic`  | `SYNTHETIC_API_KEY`                       |
+| `searxng`    | self-hosted                               |
+| `duckduckgo` | no key                                    |
+| `startpage`  | no key                                    |
+| `google`     | no key (browser)                          |
+| `ecosia`     | no key (browser)                          |
+| `mojeek`     | no key (browser)                          |
+| `public`     | no key (all of the above, consolidated)   |
+
+Exa also accepts a stored API key through `/login exa`; explicit keyless selection uses the public MCP fallback.
+
+### Specialised handlers
+
+The agent gets structured content, not stripped HTML.
+
+- **Code hosts** — github, gitlab
+- **Package registries** — npm, PyPI, crates.io, Hex, Hackage, NuGet, Maven, RubyGems, Packagist, pub.dev, Go packages
+- **Research sources** — arxiv, semantic scholar
+- **Forums** — stack overflow, reddit, hn
+- **Docs** — mdn, readthedocs, docs.rs
+
+Pages convert to markdown with link structure intact. The agent can cite, follow, and quote without losing anchors.
 
 Routing extras: per-role fallback chains under `retry.fallbackChains` for 429s and quota walls, `path:`-scoped `enabledModels`/`disabledProviders` to pin a different model set per repo, and round-robin credential stacks with per-key backoff (`/rotateaccount` pins one by hand). Reference: [providers](docs/providers.md), [models](docs/models.md).
 

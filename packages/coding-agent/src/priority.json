@@ -85,8 +85,8 @@
 	],
 	"web": [
 		"web/parallel",
-		"web/hosted",
 		"web/exa",
+		"web/public",
 		"web/firecrawl",
 		"web/searxng",
 		"web/startpage",
@@ -94,7 +94,7 @@
 		"web/ecosia",
 		"web/google",
 		"web/mojeek",
-		"web/public"
+		"web/hosted"
 	],
 	"speech": [
 		"local/kokoro",

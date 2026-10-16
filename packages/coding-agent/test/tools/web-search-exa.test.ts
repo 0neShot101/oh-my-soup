@@ -651,6 +651,42 @@ describe("searchExa", () => {
 		]);
 	});
 
+	it("parses Exa MCP Highlights: and Published: fields and ignores N/A sentinels", async () => {
+		delete process.env.EXA_API_KEY;
+		const fetchMock: FetchImpl = (_url, init) => {
+			const request = parsePostedMcpRequest(init?.body);
+			return Promise.resolve(
+				new Response(
+					JSON.stringify({
+						jsonrpc: "2.0",
+						id: request.id,
+						result: {
+							content: [
+								{
+									type: "text",
+									text: "Title: Proxmox Docs\nURL: https://pve.proxmox.com/pve-docs/qm.conf.5.html\nPublished: N/A\nAuthor: N/A\nHighlights:\nargs and cpulimit configuration",
+								},
+							],
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				),
+			);
+		};
+
+		const result = await searchExa({ query: "proxmox qm.conf", fetch: fetchMock });
+		expect(result.sources).toEqual([
+			{
+				title: "Proxmox Docs",
+				url: "https://pve.proxmox.com/pve-docs/qm.conf.5.html",
+				snippet: "args and cpulimit configuration",
+				publishedDate: undefined,
+				ageSeconds: undefined,
+				author: undefined,
+			},
+		]);
+	});
+
 	it("uses AuthStorage credentials when EXA_API_KEY is unset", async () => {
 		delete process.env.EXA_API_KEY;
 		let receivedKey: string | undefined;

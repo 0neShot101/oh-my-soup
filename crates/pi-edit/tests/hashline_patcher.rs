@@ -1,18 +1,176 @@
 mod common;
 
+use std::path::Path;
+
 use pi_edit::{
-	EditMode, ModeEngine,
-	modes::hashline::{
-		HashlineEngine,
-		patcher::{no_change_diagnostic, no_change_loop_diagnostic},
-	},
-	stream_json::ArgSnapshot,
+	EditMode, ModeEngine, modes::hashline::HashlineEngine, path_policy::canonical_key,
+	store::file_hash, stream_json::ArgSnapshot,
 };
 use serde_json::json;
 
 #[tokio::test]
 async fn patcher_apply_cases() {
 	common::run_fixture("hashline/patcher.json", EditMode::Hashline).await;
+}
+
+#[tokio::test]
+async fn file_url_target_uses_live_hash_without_stored_snapshot() {
+	let workspace = common::Workspace::new(EditMode::Hashline);
+	let target = workspace.write("nested/a b.txt", "before\n");
+	let absolute = canonical_key(&target);
+	let encoded = absolute
+		.to_str()
+		.unwrap()
+		.replace('\\', "/")
+		.replace(' ', "%20");
+	let url = if encoded.starts_with('/') {
+		format!("file://{encoded}")
+	} else {
+		format!("file:///{encoded}")
+	};
+	let tag = file_hash("before\n");
+	let writer = common::DiskWriter::default();
+	let outcome = workspace
+		.apply_json(&json!({ "input": format!("[{url}#{tag}]\nPUT 1.=1:\n+after\n") }), &writer)
+		.await
+		.expect("a native file URL resolves without snapshot-assisted path recovery");
+	assert_eq!(workspace.read("nested/a b.txt").as_deref(), Some("after\n"));
+	assert_eq!(outcome.files.len(), 1);
+	assert_eq!(canonical_key(&outcome.files[0].absolute), absolute);
+	let requests = writer.requests.lock();
+	assert_eq!(requests.len(), 1);
+	assert_eq!(canonical_key(&requests[0].absolute), absolute);
+}
+
+fn link_directory(target: &Path, link: &Path) {
+	#[cfg(unix)]
+	std::os::unix::fs::symlink(target, link).expect("directory symlink");
+	#[cfg(windows)]
+	{
+		// Junctions do not require Windows Developer Mode or symlink privileges.
+		let output = std::process::Command::new("cmd")
+			.args(["/d", "/c", "mklink", "/J"])
+			.arg(link)
+			.arg(target)
+			.output()
+			.expect("create directory junction");
+		assert!(
+			output.status.success(),
+			"junction creation failed: {}",
+			String::from_utf8_lossy(&output.stderr)
+		);
+	}
+}
+
+#[tokio::test]
+async fn tag_path_recovery_accepts_physical_cwd_aliases() {
+	let mut workspace = common::Workspace::new(EditMode::Hashline);
+	let actual_root = canonical_key(workspace.cwd());
+	let links = tempfile::tempdir().unwrap();
+	let alias = links.path().join("cwd alias");
+	link_directory(&actual_root, &alias);
+	let aliases = std::iter::once(alias);
+	#[cfg(windows)]
+	let aliases = aliases.chain(std::iter::once(std::path::PathBuf::from(
+		actual_root.to_str().unwrap().to_ascii_uppercase(),
+	)));
+	for cwd in aliases {
+		workspace.config.policy.cwd = cwd;
+		let target = workspace.write("nested/a b.txt", "before\n");
+		let canonical = canonical_key(&target);
+		let tag = workspace.snapshot("nested/a b.txt", "before\n", None);
+		let args = json!({ "input": format!("[a b.txt#{tag}]\nPUT 1.=1:\n+after\n") });
+		for finished in [false, true] {
+			let mut session = workspace.session();
+			session.set_args_json(&args.to_string());
+			if finished {
+				session.finish();
+			}
+			let batch = session.preview();
+			assert_eq!(batch.streaming, !finished);
+			assert_eq!(batch.files.len(), 1);
+			assert!(batch.files[0].error.is_none(), "{:?}", batch.files[0].error);
+			assert!(batch.files[0].diff.is_some());
+			assert_eq!(canonical_key(Path::new(&batch.files[0].display)), canonical);
+		}
+		let writer = common::DiskWriter::default();
+		let outcome = workspace
+			.apply_json(&args, &writer)
+			.await
+			.expect("recovery follows the physical cwd rather than its spelling");
+		assert_eq!(workspace.read("nested/a b.txt").as_deref(), Some("after\n"));
+		assert!(workspace.read("a b.txt").is_none());
+		assert_eq!(outcome.files.len(), 1);
+		assert_eq!(canonical_key(&outcome.files[0].absolute), canonical);
+		assert_eq!(writer.requests.lock().len(), 1);
+	}
+}
+
+#[tokio::test]
+async fn tag_path_recovery_rejects_links_outside_physical_scope() {
+	let workspace = common::Workspace::new(EditMode::Hashline);
+	let outside = tempfile::tempdir().unwrap();
+	let target = outside.path().join("a.txt");
+	std::fs::write(&target, "before\n").unwrap();
+	let link = canonical_key(workspace.cwd()).join("linked");
+	link_directory(&canonical_key(outside.path()), &link);
+	assert!(
+		!workspace
+			.config
+			.policy
+			.allow_tag_path_recovery("a.txt", &link.join("a.txt"))
+	);
+	let tag = workspace
+		.store
+		.record(&canonical_key(&target), "before\n", None);
+	let args = json!({ "input": format!("[a.txt#{tag}]\nPUT 1.=1:\n+after\n") });
+	for finished in [false, true] {
+		let mut session = workspace.session();
+		session.set_args_json(&args.to_string());
+		if finished {
+			session.finish();
+		}
+		let batch = session.preview();
+		if finished {
+			assert_eq!(batch.files.len(), 1);
+			assert!(batch.files[0].error.is_some());
+			assert!(batch.files[0].diff.is_none());
+			assert_eq!(batch.files[0].display, "a.txt");
+		} else {
+			assert!(batch.files.is_empty());
+		}
+	}
+	let writer = common::DiskWriter::default();
+	assert!(workspace.apply_json(&args, &writer).await.is_err());
+	assert!(writer.requests.lock().is_empty());
+	assert_eq!(std::fs::read_to_string(&target).unwrap(), "before\n");
+	assert!(workspace.read("a.txt").is_none());
+}
+
+#[test]
+fn tag_path_recovery_rejects_ambiguous_snapshots_in_previews() {
+	let workspace = common::Workspace::new(EditMode::Hashline);
+	workspace.write("first/a.txt", "before\n");
+	workspace.write("second/a.txt", "before\n");
+	let tag = workspace.snapshot("first/a.txt", "before\n", None);
+	assert_eq!(workspace.snapshot("second/a.txt", "before\n", None), tag);
+	let args = json!({ "input": format!("[a.txt#{tag}]\nPUT 1.=1:\n+after\n") });
+	for finished in [false, true] {
+		let mut session = workspace.session();
+		session.set_args_json(&args.to_string());
+		if finished {
+			session.finish();
+		}
+		let batch = session.preview();
+		if finished {
+			assert_eq!(batch.files.len(), 1);
+			assert!(batch.files[0].error.is_some());
+			assert!(batch.files[0].diff.is_none());
+			assert_eq!(batch.files[0].display, "a.txt");
+		} else {
+			assert!(batch.files.is_empty());
+		}
+	}
 }
 
 #[test]
@@ -31,21 +189,6 @@ fn matcher_paths_accept_partial_sections_and_header_noise() {
 		("one.ts".into(), "one".into()),
 		("dir with spaces/two.ts".into(), "two".into())
 	]);
-}
-
-#[test]
-fn no_op_diagnostics_preserve_model_guidance() {
-	assert_eq!(
-		no_change_diagnostic("a.ts"),
-		"Edits to a.ts parsed and applied cleanly, but produced no change: your body row(s) are \
-		 byte-identical to the file at the targeted lines. The bug is somewhere else — re-read the \
-		 file before issuing another edit. Do NOT widen the payload or add lines; verify the anchor \
-		 first."
-	);
-	assert!(
-		no_change_loop_diagnostic("a.ts", 3)
-			.starts_with("STOP. Edits to a.ts have been a byte-identical no-op 3 times in a row")
-	);
 }
 
 #[tokio::test]

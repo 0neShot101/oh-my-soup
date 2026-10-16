@@ -219,6 +219,34 @@ async function searchWithAuthStorage(
 	);
 }
 
+function demoteParallelDirectives(parsed: StructuredQuery): StructuredQuery {
+	const pathTerms: string[] = [];
+	for (const site of parsed.sites) {
+		const slash = site.indexOf("/");
+		if (slash !== -1) {
+			pathTerms.push(
+				...site
+					.slice(slash + 1)
+					.split("/")
+					.filter(Boolean),
+			);
+		}
+	}
+	const extraTerms = [...pathTerms, ...parsed.inUrl, ...parsed.inTitle, ...parsed.inText, ...parsed.filetypes];
+	if (extraTerms.length === 0 && parsed.sites.every(site => !site.includes("/"))) {
+		return parsed;
+	}
+	return {
+		...parsed,
+		sites: siteHosts(parsed.sites),
+		inUrl: [],
+		inTitle: [],
+		inText: [],
+		filetypes: [],
+		terms: [...parsed.terms, ...extraTerms.map(text => ({ text }))],
+	};
+}
+
 export async function searchParallel(
 	params: {
 		query: string;
@@ -234,7 +262,8 @@ export async function searchParallel(
 	sessionId?: string,
 ): Promise<SearchResponse> {
 	const numResults = clampNumResults(params.num_results, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);
-	const parsed = params.parsedQuery ?? parseSearchQuery(params.query);
+	const rawParsed = params.parsedQuery ?? parseSearchQuery(params.query);
+	const parsed = demoteParallelDirectives(rawParsed);
 	// Directives are removed only where Parallel has a native equivalent.
 	const query = parsed.hasDirectives ? formatQuery(parsed, PARALLEL_QUERY_SYNTAX) : params.query;
 	const sourcePolicy = toSourcePolicy(parsed, params.recency);
@@ -284,8 +313,9 @@ export class ParallelProvider extends SearchProvider {
 		return true;
 	}
 
-	search(params: SearchParams): Promise<SearchResponse> {
-		return searchParallel(
+	async search(params: SearchParams): Promise<SearchResponse> {
+		const parsed = params.parsedQuery ?? parseSearchQuery(params.query);
+		const primary = await searchParallel(
 			{
 				query: params.query,
 				num_results: params.numSearchResults ?? params.limit,
@@ -293,7 +323,46 @@ export class ParallelProvider extends SearchProvider {
 				signal: params.signal,
 				timeoutMs: params.timeoutMs,
 				fetch: params.fetch,
-				parsedQuery: params.parsedQuery,
+				parsedQuery: parsed,
+				modelName: params.model.id,
+			},
+			params.authStorage,
+			params.sessionId,
+		);
+		if (
+			primary.sources.length > 0 ||
+			(!parsed.sites.length && !parsed.terms.some(term => term.phrase || term.group !== undefined))
+		) {
+			return primary;
+		}
+
+		const relaxedTerms = [
+			...parsed.terms.map(term => ({ text: term.text, negated: term.negated })),
+			...parsed.sites.flatMap(site => site.split("/").filter(Boolean)).map(text => ({ text })),
+			...parsed.inUrl.map(text => ({ text })),
+			...parsed.inTitle.map(text => ({ text })),
+			...parsed.inText.map(text => ({ text })),
+			...parsed.filetypes.map(text => ({ text })),
+		];
+		const relaxedParsed: StructuredQuery = {
+			...parsed,
+			sites: [],
+			inUrl: [],
+			inTitle: [],
+			inText: [],
+			filetypes: [],
+			terms: relaxedTerms,
+		};
+		const relaxedQuery = formatQuery(relaxedParsed, { negation: true });
+		return searchParallel(
+			{
+				query: relaxedQuery,
+				num_results: params.numSearchResults ?? params.limit,
+				recency: params.recency,
+				signal: params.signal,
+				timeoutMs: params.timeoutMs,
+				fetch: params.fetch,
+				parsedQuery: relaxedParsed,
 				modelName: params.model.id,
 			},
 			params.authStorage,

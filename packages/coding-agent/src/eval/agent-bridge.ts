@@ -174,9 +174,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	const parsed = parseAgentArgs(args);
 	const turnBudget = options.session.getTurnBudget?.();
 	if (turnBudget?.hard && turnBudget.total !== null && turnBudget.spent >= turnBudget.total) {
-		throw new ToolError(
-			`agent() blocked: turn token budget exhausted (${turnBudget.spent}/${turnBudget.total} output tokens). Raise or drop the +Nk! ceiling to continue.`,
-		);
+		throw new ToolError("agent() blocked: turn token budget exhausted. Raise or drop the +Nk! ceiling to continue.");
 	}
 	if (parsed.tools?.length && options.session.getPlanModeState?.()?.enabled === true) {
 		throw new ToolError("Eval-defined tools are unavailable in plan mode.");

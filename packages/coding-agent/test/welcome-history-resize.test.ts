@@ -13,7 +13,7 @@ import {
 } from "@oh-my-soup/pi-tui/terminal-capabilities";
 import { VirtualRenderScheduler } from "../../tui/test/virtual-render-scheduler";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
-import { withoutTerminalMultiplexer } from "../../tui/test/terminal-multiplexer-environment";
+import { withoutTerminalMultiplexer } from "../../tui/test/helpers/terminal-multiplexer";
 
 const BASE64_ONE_PIXEL_PNG =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==";

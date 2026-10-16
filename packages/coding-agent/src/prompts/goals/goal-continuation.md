@@ -6,11 +6,7 @@ Continue active goal.
 {{objective}}
 </objective>
 
-Budget:
-- Tokens used: {{tokensUsed}}
-- Token budget: {{tokenBudget}}
-- Tokens remaining: {{remainingTokens}}
-- Time used: {{timeUsedSeconds}} seconds
+Time used: {{timeUsedSeconds}} seconds
 
 Autonomous continuation; objective persists across turns. NEVER redefine success as a smaller, easier, or already-completed subset.
 

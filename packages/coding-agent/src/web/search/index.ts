@@ -28,6 +28,7 @@ import {
 	formatSearchProviderFailures,
 	getGroundedSearchProvider,
 	getSearchProvider,
+	isRegisteredSearchEngine,
 	type SearchProvider,
 } from "./provider";
 import { rankXAIProviders, targetsX, xaiModelChain, xSearchAvailable } from "./providers/xai";
@@ -44,6 +45,8 @@ import {
 	type SearchResultDetails,
 } from "./types";
 import { cfgProvidersAntigravityEndpoint, cfgProvidersWebSearchTimeoutSeconds } from "../../session/settings";
+import { cfgProvidersWebSearchEnginesOnly } from "../settings";
+import { MODEL_ROLES } from "../../config/model-roles";
 
 const MAX_WEB_SEARCH_ATTEMPTS = 3;
 
@@ -181,6 +184,12 @@ async function executeSearch(
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: SearchResultDetails }> {
 	const { authStorage, sessionId, signal } = options;
 	const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage, undefined, { settings });
+	let enginesOnly = false;
+	try {
+		enginesOnly = cfgProvidersWebSearchEnginesOnly.get(settings);
+	} catch {
+		enginesOnly = false;
+	}
 	const pool = roleCandidatePool("web", settings, modelRegistry);
 	const invalidProvider =
 		params.provider !== undefined && params.provider !== "auto" && !isSearchProviderId(params.provider);
@@ -188,6 +197,23 @@ async function executeSearch(
 		params.provider && params.provider !== "auto" && isSearchProviderId(params.provider)
 			? params.provider
 			: undefined;
+	const blockedGroundedProvider =
+		enginesOnly && explicitProvider !== undefined && !isRegisteredSearchEngine(explicitProvider);
+	const blockedGroundedModel =
+		enginesOnly &&
+		params.model !== undefined &&
+		resolveModelRoleValue(params.model, pool, { settings }).model === undefined &&
+		resolveModelRoleValue(params.model, modelRegistry.getAvailable("all").filter(MODEL_ROLES.web.accepts), {
+			settings,
+		}).model !== undefined;
+	if (blockedGroundedProvider || blockedGroundedModel) {
+		const message =
+			"Model-backed web search is disabled by providers.webSearchEnginesOnly; only dedicated web search engines are allowed.";
+		return {
+			content: [{ type: "text", text: `Error: ${message}` }],
+			details: { response: { provider: "none", sources: [] }, error: message },
+		};
+	}
 	const roleCandidates = params.model
 		? (() => {
 				const resolved = resolveModelRoleValue(params.model, pool, { settings });
@@ -198,7 +224,10 @@ async function executeSearch(
 		: resolveRoleChain("web", settings, pool);
 	let expanded = roleCandidates
 		.flatMap(candidate =>
-			expandHostedCandidate(candidate, options.sessionModel, pool).map(expandedCandidate => {
+			(enginesOnly && isHostedPlaceholder(candidate.model)
+				? []
+				: expandHostedCandidate(candidate, options.sessionModel, pool)
+			).map(expandedCandidate => {
 				const model = expandedCandidate.model;
 				const providerId = (modelKind(model) === "search" ? model.id : model.webSearch) as
 					| SearchProviderId
@@ -206,7 +235,12 @@ async function executeSearch(
 				return { candidate: expandedCandidate, providerId };
 			}),
 		)
-		.filter(({ providerId }) => !invalidProvider && (!explicitProvider || providerId === explicitProvider))
+		.filter(
+			({ candidate, providerId }) =>
+				!invalidProvider &&
+				(!enginesOnly || modelKind(candidate.model) === "search") &&
+				(!explicitProvider || providerId === explicitProvider),
+		)
 		.map(({ candidate, providerId }) => ({
 			...candidate,
 			explicit: candidate.explicit || (explicitProvider !== undefined && providerId === explicitProvider),
@@ -214,7 +248,7 @@ async function executeSearch(
 	const parsedQuery = parseSearchQuery(params.query);
 	expanded = rankXAIProviders(expanded, candidate => candidate.model, settings);
 	// Only xAI reaches X posts; X-only queries try it first even when the role prefers another engine.
-	if (!params.model && targetsX(parsedQuery)) expanded = preferXAI(expanded, modelRegistry);
+	if (!enginesOnly && !params.model && targetsX(parsedQuery)) expanded = preferXAI(expanded, modelRegistry);
 
 	let antigravityEndpointMode: "auto" | "production" | "sandbox" | undefined;
 	try {
@@ -308,6 +342,18 @@ async function executeSearch(
 					const constraintNotes: string[] = [];
 					if (parsedQuery.hasConstraints && response.sources.length > 0) {
 						const filtered = applyQueryConstraints(response.sources, parsedQuery);
+						if (
+							!candidate.explicit &&
+							modelKind(model) !== "search" &&
+							parsedQuery.sites.length > 0 &&
+							filtered.dropped.some(label => label.startsWith("site:"))
+						) {
+							throw new SearchProviderError(
+								provider.id,
+								`${provider.label} returned no sources matching site constraint.`,
+								204,
+							);
+						}
 						if (filtered.sources.length !== response.sources.length) {
 							finalResponse = { ...response, sources: filtered.sources };
 						}

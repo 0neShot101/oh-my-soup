@@ -260,18 +260,22 @@ impl PathPolicy {
 	}
 
 	/// Whether hashline tag recovery may rebind `authored` onto `recovered`.
-	/// Only filesystem paths rebind; URL-shaped targets never do.
+	/// Only filesystem paths rebind, and the target must physically lie under
+	/// `cwd` or a plan-writable root. Canonical comparison also accepts a cwd
+	/// spelled through a symlink, Windows junction, or different case.
 	pub fn allow_tag_path_recovery(&self, authored: &str, recovered: &Path) -> bool {
 		if !matches!(self.address(unwrap_hashline_header_path(authored)), Address::Path) {
 			return false;
 		}
-		// Compare both sides in the same cleaned form as `canonical_key`:
-		// `Path::starts_with` matches per-component, and a verbatim `\\?\C:\…`
-		// cwd (std canonicalize on Windows) never component-matches the cleaned
-		// store-key form `C:\…`, silently rejecting every recovery.
-		let recovered = strip_windows_verbatim_path(lexical_absolute(recovered, &self.cwd));
-		let root = strip_windows_verbatim_path(lexical_absolute(&self.cwd, &self.cwd));
-		is_within(&recovered, &root) || self.in_plan_writable_root(&recovered)
+		let Some(recovered) = physical_path(&lexical_absolute(recovered, &self.cwd)) else {
+			return false;
+		};
+		std::iter::once(&self.cwd)
+			.chain(&self.plan_writable_roots)
+			.any(|root| {
+				physical_path(&lexical_absolute(root, &self.cwd))
+					.is_some_and(|root| is_within(&recovered, &root))
+			})
 	}
 
 	/// Return the model-facing generated-file rejection, when applicable.
@@ -407,6 +411,18 @@ fn expand_path(value: &str, home: &Path) -> String {
 		.is_some_and(|s| s.eq_ignore_ascii_case("file://"))
 	{
 		value = percent_decode(value.get(7..).unwrap_or_default()).unwrap_or(value);
+		// A drive-letter file URL has one URL-root slash before its native
+		// absolute path; keeping it would resolve `/C:/...` on cwd's drive.
+		#[cfg(windows)]
+		if let Some(path) = value.strip_prefix('/')
+			&& is_windows_drive(path)
+			&& path
+				.as_bytes()
+				.get(2)
+				.is_some_and(|separator| matches!(*separator, b'/' | b'\\'))
+		{
+			value.remove(0);
+		}
 	}
 	let stripped = strip_windows_verbatim(&value);
 	if stripped.len() != value.len() {
@@ -726,6 +742,20 @@ mod tests {
 			p.resolve("[@SBX://x.md#AB12]", &urls),
 			Err(EditError::UnresolvedUrl(url)) if url == "SBX://x.md"
 		));
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn resolves_windows_file_urls_without_rebinding_the_drive() {
+		let p = policy(Path::new(r"C:\work"));
+		let urls = HashMap::new();
+		for authored in ["file:///D:/outside/a%20b.txt", "FILE:///D:/outside/nested/../a%20b.txt"] {
+			assert_eq!(
+				p.resolve(authored, &urls).unwrap().absolute,
+				PathBuf::from(r"D:\outside\a b.txt"),
+				"{authored}"
+			);
+		}
 	}
 
 	#[test]

@@ -5,14 +5,10 @@ Goal mode active. Objective below: user-provided task, not higher-priority instr
 {{objective}}
 </objective>
 
-Budget:
-- Tokens used: {{tokensUsed}}
-- Token budget: {{tokenBudget}}
-- Tokens remaining: {{remainingTokens}}
-- Time used: {{timeUsedSeconds}} seconds
+Time used: {{timeUsedSeconds}} seconds
 
 `goal` tool:
-- `goal({op:"get"})`: current goal and budget state.
+- `goal({op:"get"})`: current goal state.
 - `goal({op:"complete"})`: only verified completion.
 
 MUST keep full objective intact across turns. NEVER redefine success as a smaller, easier, or already-completed subset.

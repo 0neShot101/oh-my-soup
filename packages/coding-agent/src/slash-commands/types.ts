@@ -26,6 +26,12 @@ export interface BuiltinSlashCommand {
 	subcommands?: SubcommandDef[];
 	/** Runtime-scoped argument completions; overrides the declarative `subcommands` completion (e.g. live session state: note keys, model thinking levels). */
 	argumentCompletions?: (runtime: TuiSlashCommandRuntime) => (prefix: string) => AutocompleteItem[] | null;
+	/**
+	 * The bare command is a complete invocation (`/fork`). Subcommand completion
+	 * then waits for a typed prefix, so Enter on `/name ` submits the bare command
+	 * instead of accepting the first subcommand from the dropdown.
+	 */
+	subcommandOptional?: boolean;
 	/** Static inline hint when command takes a simple argument (no subcommands). */
 	inlineHint?: string;
 	/** TUI-only dynamic status text for command-name autocomplete. Static `description` remains canonical for ACP/help. */

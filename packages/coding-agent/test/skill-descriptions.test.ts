@@ -20,11 +20,14 @@ describe("system prompt skill descriptions", () => {
 		const { promise, resolve } = Promise.withResolvers<string>();
 		const started = Promise.withResolvers<void>();
 		let calls = 0;
-		const compress = (_name: string, _description: string, request: string) => {
-			calls++;
-			started.resolve();
-			expect(request).toContain(original.description);
-			return promise;
+		const compress = {
+			modelKey: () => "test/smol",
+			compress: (_name: string, _description: string, request: string) => {
+				calls++;
+				started.resolve();
+				expect(request).toContain(original.description);
+				return promise;
+			},
 		};
 		const session = new SkillDescriptionCatalog({ store, compress });
 		const preview = session.render([original, original])[0]?.description;
@@ -69,9 +72,12 @@ describe("system prompt skill descriptions", () => {
 		let calls = 0;
 		const first = new SkillDescriptionCatalog({
 			store,
-			compress: async () => {
-				calls++;
-				return "Use for interactive browser tasks.";
+			compress: {
+				modelKey: () => "test/smol",
+				compress: async () => {
+					calls++;
+					return "Use for interactive browser tasks.";
+				},
 			},
 		});
 		first.render([original]);
@@ -79,9 +85,12 @@ describe("system prompt skill descriptions", () => {
 		const changed = { ...original, description: `${original.description} Also inspect accessibility trees.` };
 		const next = new SkillDescriptionCatalog({
 			store,
-			compress: async () => {
-				calls++;
-				return "Use for interactive browser and accessibility tasks.";
+			compress: {
+				modelKey: () => "test/smol",
+				compress: async () => {
+					calls++;
+					return "Use for interactive browser and accessibility tasks.";
+				},
 			},
 		});
 		expect(next.render([changed])[0]?.description).not.toBe("Use for interactive browser tasks.");
@@ -92,13 +101,19 @@ describe("system prompt skill descriptions", () => {
 	it("does not cache malformed output and retries in a later session", async () => {
 		using temp = TempDir.createSync("omp-skill-description-invalid-");
 		using store = SkillDescriptionStore.open(temp.join("skills.db"));
-		const failed = new SkillDescriptionCatalog({ store, compress: async () => "line one\nline two" });
+		const failed = new SkillDescriptionCatalog({
+			store,
+			compress: { modelKey: () => "test/smol", compress: async () => "line one\nline two" },
+		});
 		const preview = failed.render([original])[0]?.description;
 		await failed.waitForPending();
 
 		const retry = new SkillDescriptionCatalog({
 			store,
-			compress: async () => "Use for interactive sites; not static pages.",
+			compress: {
+				modelKey: () => "test/smol-v2",
+				compress: async () => "Use for interactive sites; not static pages.",
+			},
 		});
 		expect(retry.render([original])[0]?.description).toBe(preview);
 		await retry.waitForPending();

@@ -33,42 +33,20 @@ export function liveSessionForIdentifier(
 	return match;
 }
 
-/** Overlay live host state on saved-session metadata, including sessions not yet written to disk. */
+/** Overlay live host state on saved-session metadata, hiding sessions with no messages sent. */
 export function markLiveSessions(
 	sessions: SessionInfo[],
 	liveSessions: readonly LiveServiceSession[],
-	sessionDir?: string,
+	_sessionDir?: string,
 ): SessionInfo[] {
-	if (liveSessions.length === 0) return sessions;
+	const nonEmpty = sessions.filter(
+		session => session.messageCount > 0 || (session.firstMessage !== "" && session.firstMessage !== "(no messages)"),
+	);
+	if (liveSessions.length === 0) return nonEmpty;
 	const byPath = new Map(liveSessions.map(session => [sessionPathKey(session.sessionPath), session]));
-	const found = new Set<string>();
-	const saved = sessions.map(session => {
+	return nonEmpty.map(session => {
 		const key = sessionPathKey(session.path);
 		if (!byPath.has(key)) return session;
-		found.add(key);
 		return { ...session, status: "running" as const };
 	});
-	const folder = sessionDir === undefined ? undefined : sessionPathKey(sessionDir);
-	let now: Date | undefined;
-	const unsaved: SessionInfo[] = [];
-	for (const session of liveSessions) {
-		const key = sessionPathKey(session.sessionPath);
-		if (found.has(key) || (folder && sessionPathKey(path.dirname(session.sessionPath)) !== folder)) continue;
-		found.add(key);
-		unsaved.push({
-			path: session.sessionPath,
-			id: session.id,
-			cwd: session.cwd,
-			title: `Live session ${session.id.slice(0, 8)}`,
-			created: (now ??= new Date()),
-			modified: now,
-			messageCount: 0,
-			assistantTurns: 0,
-			size: 0,
-			firstMessage: "(no messages)",
-			allMessagesText: `${session.id} ${session.cwd}`,
-			status: "running",
-		});
-	}
-	return unsaved.concat(saved);
 }

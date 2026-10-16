@@ -65,7 +65,9 @@ class ContractMCPManager extends MCPManager {
 	}
 }
 
-async function fixture(options: { mcp?: boolean; readOnly?: boolean } = {}) {
+async function fixture(
+	options: { mcp?: boolean; readOnly?: boolean; interactive?: boolean; customToolName?: string } = {},
+) {
 	const root = TempDir.createSync("@oms-tool-contract-");
 	const cwd = root.path();
 	const evidencePath = path.join(cwd, "evidence.txt");
@@ -146,7 +148,7 @@ async function fixture(options: { mcp?: boolean; readOnly?: boolean } = {}) {
 		}));
 	};
 	const customTool: CustomTool = {
-		name: customName,
+		name: options.customToolName ?? customName,
 		label: customName,
 		description: "Read evidence with the host callback rebound to the invoking session.",
 		parameters: type({}),
@@ -189,9 +191,10 @@ async function fixture(options: { mcp?: boolean; readOnly?: boolean } = {}) {
 		workspaceTree: { rootPath: cwd, rendered: "", truncated: false, totalLines: 0, agentsMdFiles: [] },
 		enableMCP: options.mcp === true,
 		mcpManager,
-		enableLsp: false,
+		hasUI: options.interactive === true,
+		enableLsp: options.interactive === true,
 		skipPythonPreflight: true,
-		toolNames: ["read", "write", "todo"],
+		toolNames: ["read", "write", "todo", ...(options.interactive ? ["ask", "lsp"] : [])],
 	});
 	await initializeExtensions(parent, {
 		reportSendError: (_action, error) => {
@@ -206,7 +209,7 @@ async function fixture(options: { mcp?: boolean; readOnly?: boolean } = {}) {
 	// This adapter reads the live parent; no spawn/session creation is mocked.
 	const session: ToolSession = {
 		cwd,
-		hasUI: false,
+		hasUI: options.interactive === true,
 		settings,
 		authStorage,
 		modelRegistry,
@@ -226,7 +229,7 @@ async function fixture(options: { mcp?: boolean; readOnly?: boolean } = {}) {
 		promptTemplates: [],
 		rules: [],
 		customToolPaths: [],
-		enableLsp: false,
+		enableLsp: options.interactive === true,
 		getSessionId: () => manager.getSessionId(),
 		getSessionFile: () => manager.getSessionFile() ?? null,
 		getSessionSpawns: () => "*",
@@ -272,7 +275,7 @@ async function fixture(options: { mcp?: boolean; readOnly?: boolean } = {}) {
 					authStorage,
 					modelRegistry,
 					settings,
-					enableLsp: false,
+					enableLsp: options.interactive === true,
 				}),
 				() => 0,
 			);
@@ -370,6 +373,44 @@ test("omitted child selection inherits enabled mounted/custom capabilities, whil
 		);
 		await f.parent.setActiveToolsByName(["read", "write"]);
 		await expect(f.spawn({ toolNames: [customName] })).rejects.toThrow("Unavailable child tool capabilities");
+	} finally {
+		await f.dispose();
+	}
+}, 60_000);
+
+test("interactive parent capabilities do not prevent headless children from completing work or reviving", async () => {
+	const f = await fixture({ interactive: true });
+	try {
+		expect(f.parent.getEnabledToolNames()).toEqual(expect.arrayContaining(["ask", "lsp"]));
+		const child = await f.spawn();
+		await readEvidence(child.session, f.evidencePath);
+		expect(child.session.getEnabledToolNames()).not.toContain("ask");
+		expect(child.session.getEnabledToolNames()).not.toContain("lsp");
+		const revived = await f.cold(child.id);
+		await readEvidence(revived, f.evidencePath);
+		expect(revived.getEnabledToolNames()).not.toContain("ask");
+		expect(revived.getEnabledToolNames()).not.toContain("lsp");
+	} finally {
+		await f.dispose();
+	}
+}, 60_000);
+
+test("a missing custom capability named like a gated builtin still fails closed", async () => {
+	const f = await fixture({ customToolName: "ask" });
+	try {
+		// The owner still authorizes its SDK callback, but the child no longer
+		// has that implementation. It must not silently drop it as headless ask.
+		f.session.getCustomTools = () => [];
+		const child = await runStructuredSubagent({
+			session: f.session,
+			invocationKind: "task",
+			agent: "contract-worker",
+			assignment: "Read the evidence and yield the result.",
+			enableIrc: false,
+			maxRuntimeMs: 30_000,
+		});
+		expect(child.result.exitCode).toBe(1);
+		expect(child.result.stderr).toContain("Unavailable authorized tool capabilities: ask");
 	} finally {
 		await f.dispose();
 	}

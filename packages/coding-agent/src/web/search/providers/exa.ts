@@ -204,11 +204,12 @@ function parseOptionalField(section: string, label: string): string | null | und
 	const match = section.match(regex);
 	if (!match) return undefined;
 	const value = match[1].trim();
-	return value.length > 0 ? value : null;
+	if (value.length === 0 || value.toUpperCase() === "N/A") return null;
+	return value;
 }
 
 function parseTextField(section: string): string | null | undefined {
-	const match = section.match(/(?:^|\n)Text:\s*([\s\S]*)$/);
+	const match = section.match(/(?:^|\n)(?:Text|Highlights):\s*([\s\S]*)$/);
 	if (!match) return undefined;
 	const value = match[1].trim();
 	return value.length > 0 ? value : null;
@@ -233,7 +234,7 @@ function parseExaMcpTextPayload(payload: unknown): ExaSearchResponse | null {
 
 	const sections = textBlocks
 		.join("\n\n")
-		.split(/\n{2,}(?=Title:\s*[^\n]*(?:\n(?:URL|Author|Published Date|Text):))/)
+		.split(/\n{2,}(?=Title:\s*[^\n]*(?:\n(?:URL|Author|Published(?: Date)?|Text|Highlights):))/)
 		.map(section => section.trim())
 		.filter(section => section.startsWith("Title:"));
 
@@ -242,7 +243,7 @@ function parseExaMcpTextPayload(payload: unknown): ExaSearchResponse | null {
 		const title = parseOptionalField(section, "Title");
 		const url = parseOptionalField(section, "URL");
 		const author = parseOptionalField(section, "Author");
-		const publishedDate = parseOptionalField(section, "Published Date");
+		const publishedDate = parseOptionalField(section, "Published Date") ?? parseOptionalField(section, "Published");
 		const text = parseTextField(section);
 
 		if (!title && !url && !text) continue;
@@ -531,8 +532,32 @@ function directiveParams(
 > {
 	if (!parsed.hasDirectives) return { query: parsed.raw };
 	const hosts = (sites: readonly string[]) => [...new Set(sites.map(site => site.split("/", 1)[0]))];
+	const pathTerms: string[] = [];
+	for (const site of parsed.sites) {
+		const slash = site.indexOf("/");
+		if (slash !== -1) {
+			pathTerms.push(
+				...site
+					.slice(slash + 1)
+					.split("/")
+					.filter(Boolean),
+			);
+		}
+	}
+	const extraTerms = [...pathTerms, ...parsed.inUrl, ...parsed.inTitle, ...parsed.inText, ...parsed.filetypes];
+	const querySource =
+		extraTerms.length > 0
+			? {
+					...parsed,
+					inUrl: [],
+					inTitle: [],
+					inText: [],
+					filetypes: [],
+					terms: [...parsed.terms, ...extraTerms.map(text => ({ text }))],
+				}
+			: parsed;
 	return {
-		query: formatQuery(parsed, { phrases: true }),
+		query: formatQuery(querySource, { phrases: true }),
 		include_domains: parsed.sites.length ? hosts(parsed.sites) : undefined,
 		exclude_domains: parsed.excludedSites.length ? hosts(parsed.excludedSites) : undefined,
 		start_published_date: parsed.after,

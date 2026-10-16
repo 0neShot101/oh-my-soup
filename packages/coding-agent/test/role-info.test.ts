@@ -53,6 +53,26 @@ describe("getRoleInfo", () => {
 		expect(acceptedIds("judge", settings)).toEqual(["chat", "explicit-chat", "grounded-chat", "tiny", "judge"]);
 	});
 
+	test("restricts the web role to pure search engines when providers.webSearchEnginesOnly is enabled", () => {
+		const hostedPlaceholder = buildModel({
+			id: "hosted",
+			name: "Session model",
+			api: "web-search",
+			provider: "web",
+			baseUrl: "web://search",
+			kind: "search",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 0,
+			maxTokens: 0,
+		});
+		const settings = Settings.isolated({ "providers.webSearchEnginesOnly": true });
+		const accepts = getRoleInfo("web", settings).accepts;
+
+		expect([groundedChat, hostedPlaceholder, search].filter(accepts).map(m => m.id)).toEqual(["search"]);
+	});
+
 	test("custom metadata overrides presentation without widening model acceptance", () => {
 		const settings = Settings.isolated({
 			modelTags: {

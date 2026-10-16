@@ -5,7 +5,7 @@ import { initTheme } from "@oh-my-soup/pi-tui/theme";
 import { Text } from "@oh-my-soup/pi-tui";
 import { VirtualRenderScheduler } from "./virtual-render-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
-import { withoutTerminalMultiplexer } from "./terminal-multiplexer-environment";
+import { withoutTerminalMultiplexer } from "./helpers/terminal-multiplexer";
 
 withoutTerminalMultiplexer();
 beforeAll(async () => {

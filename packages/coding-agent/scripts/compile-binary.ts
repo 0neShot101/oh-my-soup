@@ -62,6 +62,10 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			// fork-side module trips the CJS lowering). Keep source mode — the
 			// fork always shipped without bytecode — until the offending module
 			// is isolated and re-enablement is verified by the install smoke.
+			format: "esm",
+			splitting: true,
+			// Discovery entry chunks can share a hash; include their source names to avoid collisions.
+			naming: { chunk: "chunks/[name]-[hash].[ext]" },
 			bytecode: false,
 			minify: {
 				identifiers: options.minifyIdentifiers ?? false,

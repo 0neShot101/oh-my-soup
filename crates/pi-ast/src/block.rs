@@ -771,7 +771,7 @@ impl PayloadFrame {
 		let (text, projection) = projected
 			.map_or_else(|| (None, Vec::new()), |(text, projection)| (Some(text), projection));
 		let payload = text.as_deref().unwrap_or_else(|| &source[range.clone()]);
-		let tree = language.and_then(|language| parse_cached(payload, language).ok().flatten());
+		let tree = language.and_then(|language| parse_cached(payload, language, None).ok().flatten());
 		let line_starts = std::iter::once(0)
 			.chain(payload.match_indices('\n').map(|(at, _)| at + 1))
 			.collect();
@@ -1552,7 +1552,9 @@ fn make_define_frames(
 		return Vec::new();
 	};
 	let fragment = &source[body.byte_range()];
-	let tree = parse_cached(fragment, SupportLang::Make).ok().flatten();
+	let tree = parse_cached(fragment, SupportLang::Make, None)
+		.ok()
+		.flatten();
 	let mut islands = Vec::new();
 	if let Some(tree) = &tree {
 		let mut cursor = tree.walk();
@@ -1574,7 +1576,7 @@ fn make_define_frames(
 					canonical.replace_range(1..2, "(");
 					let last = canonical.len() - 1;
 					canonical.replace_range(last..=last, ")");
-					parse_cached(&canonical, SupportLang::Make)
+					parse_cached(&canonical, SupportLang::Make, None)
 						.ok()
 						.flatten()
 						.and_then(|tree| {
@@ -2082,7 +2084,7 @@ fn docker_payloads(source: &str) -> Vec<PayloadFrame> {
 				.trim();
 			shell = phase
 				.complete
-				.then(|| parse_cached(header, SupportLang::Json).ok().flatten())
+				.then(|| parse_cached(header, SupportLang::Json, None).ok().flatten())
 				.flatten()
 				.filter(|tree| !tree.root_node().has_error())
 				.and_then(|tree| {
@@ -2127,7 +2129,7 @@ fn docker_payloads(source: &str) -> Vec<PayloadFrame> {
 			.map_or(&[][..], |(_, map)| map.as_slice());
 		let docker_tree = (has_options || possible_json || has_heredoc)
 			.then(|| {
-				parse_cached(docker_header, SupportLang::Dockerfile)
+				parse_cached(docker_header, SupportLang::Dockerfile, None)
 					.ok()
 					.flatten()
 			})
@@ -2167,7 +2169,7 @@ fn docker_payloads(source: &str) -> Vec<PayloadFrame> {
 			.as_ref()
 			.map_or(&source[body..header_end], |(text, _)| text.as_str());
 		let header_tree = (shell == Some(SupportLang::Bash) && run && header.contains("<<"))
-			.then(|| parse_cached(header, SupportLang::Bash).ok().flatten())
+			.then(|| parse_cached(header, SupportLang::Bash, None).ok().flatten())
 			.flatten();
 		let header_roles = header_tree
 			.as_ref()
@@ -2713,7 +2715,7 @@ impl<'a> BlockIndex<'a> {
 		let Some(language) = resolve_language(None, Some(path)) else {
 			return Ok(None);
 		};
-		let Some(tree) = parse_cached(code, language)? else {
+		let Some(tree) = parse_cached(code, language, Some(path))? else {
 			return Ok(None);
 		};
 		let line_starts: Vec<usize> = std::iter::once(0)
@@ -5216,7 +5218,7 @@ impl<'a> BlockIndex<'a> {
 		inserted: &[Range<usize>],
 		retained: &[(Range<usize>, Range<usize>)],
 	) -> Result<Option<Insertion>> {
-		let Some(tree) = parse_cached(source, self.language)? else {
+		let Some(tree) = parse_cached(source, self.language, None)? else {
 			return Err(anyhow!("The composed source has no supported parser"));
 		};
 		let frames = payload_frames(tree.root_node(), source, self.language);
@@ -5445,7 +5447,7 @@ impl<'a> BlockIndex<'a> {
 				&frames,
 			);
 		}
-		let Some(counter_tree) = parse_cached(&counterfactual, self.language)? else {
+		let Some(counter_tree) = parse_cached(&counterfactual, self.language, None)? else {
 			return self.fixed_insertions_against(source, &tree, mapping, gaps, inserted, &frames);
 		};
 		let counter = BlockIndex {
@@ -8033,7 +8035,7 @@ fn lexical_roles(root: Node<'_>, source: &str, language: SupportLang) -> Option<
 		text.push_str(&source[start..]);
 		projection.push(Projection { payload: payload..text.len(), source: start..source.len() });
 	}
-	let tree = parse_cached(&text, language).ok().flatten()?;
+	let tree = parse_cached(&text, language, None).ok().flatten()?;
 	if tree.root_node().has_error() {
 		return None;
 	}
@@ -9858,7 +9860,7 @@ fn with_block_node<R>(
 		return Ok(None);
 	};
 
-	let Some(tree) = parse_cached(code, language)? else {
+	let Some(tree) = parse_cached(&code, language, path.as_deref())? else {
 		return Ok(None);
 	};
 	Ok(block_node(tree.root_node(), row, col).map(inspect))
@@ -10101,7 +10103,7 @@ pub fn enclosing_block_boundaries(options: EnclosingBoundaryOptions) -> Result<O
 	let Some(language) = resolve_language(lang.as_deref(), path.as_deref()) else {
 		return Ok(None);
 	};
-	let Some(tree) = parse_cached(&code, language)? else {
+	let Some(tree) = parse_cached(&code, language, path.as_deref())? else {
 		return Ok(None);
 	};
 	let root = tree.root_node();
@@ -10131,14 +10133,15 @@ pub struct NodeSpan {
 ///
 /// The next block query over the same source and language is then a cache
 /// hit. Does nothing for empty source or an unrecognized language, where the
-/// queries never parse either, nor for a source the cache will not retain
-/// (the tree would be discarded and parsed again by the query).
+/// queries never parse either, nor for a source over
+/// [`MAX_ENTRY_SOURCE_BYTES`], where a typical tree would not fit the cache's
+/// memory budget (it would be discarded and parsed again by the query).
 pub fn warm_parse(code: &str, lang: Option<&str>, path: Option<&str>) -> Result<()> {
 	if !code.is_empty()
 		&& code.len() <= MAX_ENTRY_SOURCE_BYTES
 		&& let Some(language) = resolve_language(lang, path)
 	{
-		parse_cached(code, language)?;
+		parse_cached(code, language, path)?;
 	}
 	Ok(())
 }
@@ -10170,7 +10173,7 @@ pub fn node_chain_at(options: BlockRangeOptions) -> Result<Option<Vec<NodeSpan>>
 	let Some(col) = first_content_column(&code, row) else {
 		return Ok(None);
 	};
-	let Some(tree) = parse_cached(&code, language)? else {
+	let Some(tree) = parse_cached(&code, language, path.as_deref())? else {
 		return Ok(None);
 	};
 	let root = tree.root_node();
@@ -10868,7 +10871,7 @@ mod tests {
 			return Some(Vec::new());
 		}
 		let language = resolve_language(None, Some(path))?;
-		let tree = parse_cached(code, language).expect("grammar loads")?;
+		let tree = parse_cached(code, language, None).expect("grammar loads")?;
 		let root = tree.root_node();
 		if root.has_error() {
 			return None;
@@ -11102,7 +11105,7 @@ mod tests {
 	/// i.e. nodes ending immediately after a newline.
 	fn nodes_with_content_end_before_raw_end(code: &str, path: &str) -> usize {
 		let language = resolve_language(None, Some(path)).expect("known language");
-		let tree = parse_cached(code, language)
+		let tree = parse_cached(code, language, None)
 			.expect("grammar loads")
 			.expect("tree");
 		let mut count = 0;

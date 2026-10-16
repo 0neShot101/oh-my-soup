@@ -625,6 +625,7 @@ async function downloadTool(
 
 // Install a Python package via uv (preferred) or pip
 async function installPythonPackage(pkg: string, signal?: AbortSignal): Promise<boolean> {
+	if (signal?.aborted) return false;
 	try {
 		// Try uv first (faster, better isolation)
 		const uv = $which("uv");
@@ -636,6 +637,7 @@ async function installPythonPackage(pkg: string, signal?: AbortSignal): Promise<
 				stderr: "full",
 			});
 			if (result.exitCode === 0) return true;
+			if (signal?.aborted) return false;
 		}
 
 		// Fall back to pip
@@ -693,6 +695,7 @@ export async function ensureTool(tool: ToolName, silentOrOptions?: EnsureToolOpt
 			return undefined;
 		}
 	}
+	if (signal?.aborted) return undefined;
 	if (existingPath) return existingPath;
 
 	// On Android/Termux, Linux binaries don't work due to Bionic libc incompatibility.
@@ -716,6 +719,10 @@ export async function ensureTool(tool: ToolName, silentOrOptions?: EnsureToolOpt
 		notify?.(`Installing ${pythonConfig.name}…`);
 		const tracker = trackDownload(pythonConfig.name, { detail: "installing" });
 		const success = await installPythonPackage(pythonConfig.package, signal);
+		if (signal?.aborted) {
+			tracker.done();
+			return undefined;
+		}
 		if (success) {
 			// Re-check for the command after installation
 			const path = $which(pythonConfig.binaryName);

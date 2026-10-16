@@ -8,16 +8,24 @@ import type { AgentTool, AgentToolResult, ToolApprovalDecision } from "@oh-my-so
 import { prompt } from "@oh-my-soup/pi-utils";
 import sshDescription from "../prompts/tools/ssh.md" with { type: "text" };
 import type { SSHHostInfo } from "../ssh/connection-manager";
-import { closeSession, listSessions, openSession, type SSHSessionInfo } from "../ssh/sessions";
+import {
+	closeSession,
+	forwardSessionPorts,
+	listSessions,
+	openSession,
+	type SSHPortForwardInput,
+	type SSHSessionInfo,
+	unforwardSessionPorts,
+} from "../ssh/sessions";
 import type { ToolSession } from "./index";
 import { truncateForPrompt } from "./approval";
 import { ToolError } from "./tool-errors";
 
 const sshSchema = type({
-	op: type('"connect" | "disconnect" | "list"').describe("operation to apply"),
-	"host?": type("string").describe("connect: [user@]host[:port] — address, DNS name, or ~/.ssh/config alias"),
+	op: type('"connect" | "disconnect" | "list" | "forward" | "unforward"').describe("operation to apply"),
+	"host?": type("string").describe("connect/forward: [user@]host[:port] — address, DNS name, or ~/.ssh/config alias"),
 	"name?": type("string").describe(
-		"session name used as bash target= and ssh://<name>/ (connect: default user@host[:port]; disconnect: required)",
+		"session name used as bash target= and ssh://<name>/ (connect: default user@host[:port]; disconnect/forward/unforward: target session or configured host)",
 	),
 	"user?": type("string").describe("connect: login user when host has no user@ part (a different user@ is an error)"),
 	"port?": type("number").describe(
@@ -30,6 +38,16 @@ const sshSchema = type({
 	"compat?": type("boolean").describe(
 		"connect: Windows hosts — run commands under a POSIX compat shell when found (default true)",
 	),
+	"forward?": type("string | string[]").describe(
+		"connect/forward/unforward: port forward spec(s), e.g. '8080:127.0.0.1:80', 'L:8080:localhost:80', 'R:9000:localhost:3000', or 'D:1080'",
+	),
+	"forward_type?": type('"local" | "remote" | "dynamic"').describe(
+		"connect/forward/unforward: tunnel direction (-L local, -R remote, -D dynamic SOCKS; default local)",
+	),
+	"local_port?": type("number").describe("connect/forward/unforward: local port 1-65535"),
+	"local_host?": type("string").describe("connect/forward/unforward: local bind/target address (default 127.0.0.1)"),
+	"remote_port?": type("number").describe("connect/forward/unforward: remote port 1-65535"),
+	"remote_host?": type("string").describe("connect/forward/unforward: remote bind/target address (default 127.0.0.1)"),
 	"+": "reject",
 });
 
@@ -51,7 +69,42 @@ export function describeHostInfo(info: SSHHostInfo | undefined): string {
 }
 
 function describeSession(session: SSHSessionInfo): string {
-	return `${session.name} → ${session.address} · ${session.auth} auth · ${describeHostInfo(session.hostInfo)} · ${session.adHoc ? "open session" : "configured host"}`;
+	const forwards =
+		session.forwards && session.forwards.length > 0
+			? ` · forwards: ${session.forwards.map(f => `${f.flag} ${f.spec}`).join(", ")}`
+			: "";
+	return `${session.name} → ${session.address} · ${session.auth} auth · ${describeHostInfo(session.hostInfo)} · ${session.adHoc ? "open session" : "configured host"}${forwards}`;
+}
+
+function collectForwardInputs(params: SshParams): SSHPortForwardInput[] {
+	const inputs: SSHPortForwardInput[] = [];
+	if (typeof params.forward === "string" && params.forward.trim()) {
+		const prefix =
+			params.forward_type && !/^(?:-[LRD]\s*|(?:[LRD]|local|remote|dynamic):)/i.test(params.forward.trim())
+				? `${params.forward_type}:`
+				: "";
+		inputs.push(`${prefix}${params.forward.trim()}`);
+	} else if (Array.isArray(params.forward)) {
+		for (const item of params.forward) {
+			if (typeof item === "string" && item.trim()) {
+				const prefix =
+					params.forward_type && !/^(?:-[LRD]\s*|(?:[LRD]|local|remote|dynamic):)/i.test(item.trim())
+						? `${params.forward_type}:`
+						: "";
+				inputs.push(`${prefix}${item.trim()}`);
+			}
+		}
+	}
+	if (params.local_port !== undefined || params.remote_port !== undefined) {
+		inputs.push({
+			type: params.forward_type,
+			localPort: params.local_port,
+			localHost: params.local_host,
+			remotePort: params.remote_port,
+			remoteHost: params.remote_host,
+		});
+	}
+	return inputs;
 }
 
 export class SshTool implements AgentTool<typeof sshSchema, SshToolDetails> {
@@ -66,7 +119,7 @@ export class SshTool implements AgentTool<typeof sshSchema, SshToolDetails> {
 	/** Opening a connection with credentials is an action; closing or listing is not. */
 	readonly approval = (args: unknown): ToolApprovalDecision => {
 		const input = args !== null && typeof args === "object" ? (args as Partial<SshParams>) : {};
-		return input.op === "connect" ? "exec" : "read";
+		return input.op === "connect" || input.op === "forward" || input.op === "unforward" ? "exec" : "read";
 	};
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const input = args !== null && typeof args === "object" ? (args as Partial<SshParams>) : {};
@@ -89,6 +142,10 @@ export class SshTool implements AgentTool<typeof sshSchema, SshToolDetails> {
 				return this.#disconnect(params);
 			case "list":
 				return this.#list();
+			case "forward":
+				return this.#forward(params);
+			case "unforward":
+				return this.#unforward(params);
 		}
 	}
 
@@ -105,6 +162,7 @@ export class SshTool implements AgentTool<typeof sshSchema, SshToolDetails> {
 					password: params.password,
 					keyPath: params.key,
 					compat: params.compat,
+					forwards: collectForwardInputs(params),
 				},
 				this.session.cwd,
 			);
@@ -137,5 +195,53 @@ export class SshTool implements AgentTool<typeof sshSchema, SshToolDetails> {
 				? "No SSH sessions or configured hosts. Open one with op=connect, or add hosts to ssh.json."
 				: sessions.map(describeSession).join("\n");
 		return { content: [{ type: "text", text }], details: { op: "list", sessions } };
+	}
+
+	async #forward(params: SshParams): Promise<AgentToolResult<SshToolDetails>> {
+		const targetName = params.name?.trim() || params.host?.trim();
+		if (!targetName) {
+			throw new ToolError("forward requires name (or host) identifying the SSH session or configured host.");
+		}
+		const inputs = collectForwardInputs(params);
+		if (inputs.length === 0) {
+			throw new ToolError(
+				"forward requires `forward` (e.g. '8080:127.0.0.1:80' or 'D:1080') or `local_port`/`remote_port`.",
+			);
+		}
+		try {
+			const { session, forwards } = await forwardSessionPorts(targetName, inputs, this.session.cwd);
+			const specs = forwards.map(f => `${f.flag} ${f.spec}`).join(", ");
+			return {
+				content: [{ type: "text", text: `Forwarded on "${session.name}": ${specs}\n${describeSession(session)}` }],
+				details: { op: "forward", sessions: [session] },
+			};
+		} catch (error) {
+			throw new ToolError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	async #unforward(params: SshParams): Promise<AgentToolResult<SshToolDetails>> {
+		const targetName = params.name?.trim() || params.host?.trim();
+		if (!targetName) {
+			throw new ToolError("unforward requires name (or host) identifying the SSH session or configured host.");
+		}
+		const inputs = collectForwardInputs(params);
+		try {
+			const { session, removed } = await unforwardSessionPorts(targetName, inputs, this.session.cwd);
+			return {
+				content: [
+					{
+						type: "text",
+						text:
+							removed > 0
+								? `Stopped ${removed} port forward${removed === 1 ? "" : "s"} on "${session.name}".`
+								: `No matching active port forwards on "${session.name}".`,
+					},
+				],
+				details: { op: "unforward", sessions: [session] },
+			};
+		} catch (error) {
+			throw new ToolError(error instanceof Error ? error.message : String(error));
+		}
 	}
 }

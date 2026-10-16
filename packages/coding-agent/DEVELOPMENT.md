@@ -30,6 +30,33 @@ Scope fake timers to the deadline a test exercises, then restore real timers
 before real socket listeners are started. Bun's mocked clock can defer
 `server.listen` callbacks, leaving registry publication and teardown waiting.
 
+## Update regression gate
+
+Run these commands from the repository root:
+
+| Scope | Command |
+|---|---|
+| Fresh native build, edit engine tests/doctests, read/edit, child capability, updater contracts, and CLI worker smoke | `bun run test:regressions` |
+| One Rust package, including its doctests | `bun run test:rs -- --package pi-edit` |
+| Selected Rust tests; package doctests still run | `bun run test:rs -- -p pi-edit -E 'test(modes::hashline::) \| binary(session)'` |
+| Contract tests and CLI worker smoke against an already built checkout-matched addon | `bun run ci:test:regressions` |
+
+Explicit Rust package/filter requests run even on a clean checkout. Repeat
+`--package` to select several packages; `--filterset` filters nextest, not doctests.
+Unknown flags fail instead of silently running a different scope.
+
+CI runs the focused gate on Linux and Windows using baseline native artifacts
+built by the same workflow run. It follows the existing non-PR native-validation
+policy and is a required dependency of release publication; it does not replace
+the full workspace checks. For local Rust edits, use `test:regressions`, not the
+tests-only command: workspace loaders can otherwise use an older addon.
+
+For a confirmed regression, retain a failing-before/passing-after test of the
+observable contract: exact persisted bytes, rejected stale anchors with no writes,
+child capability boundaries, or updater integrity and rollback. Also exercise
+the changed path outside the test runner with temporary files or an isolated
+installation; never update the developer's real installation as a smoke test.
+
 ## Boot flow
 
 ```text

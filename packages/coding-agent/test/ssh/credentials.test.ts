@@ -11,7 +11,12 @@ import {
 	sshProcessEnv,
 } from "../../src/ssh/connection-manager";
 import { withRemoteCwd } from "../../src/ssh/ssh-executor";
-import { formatSshAddress, parseSshDestination, sessionTargetFromRequest } from "../../src/ssh/sessions";
+import {
+	formatSshAddress,
+	parsePortForward,
+	parseSshDestination,
+	sessionTargetFromRequest,
+} from "../../src/ssh/sessions";
 
 const PASSWORD_HOST: SSHConnectionTarget = { name: "box", host: "10.0.0.5", username: "root", password: "hunter2" };
 const KEY_HOST: SSHConnectionTarget = { name: "box", host: "10.0.0.5", username: "root" };
@@ -104,6 +109,45 @@ describe("session destinations", () => {
 		expect(() => sessionTargetFromRequest({ host: "alice@h", username: "bob" })).toThrow("Conflicting usernames");
 		expect(() => sessionTargetFromRequest({ host: "h:22", port: 2222 })).toThrow("Conflicting ports");
 		expect(() => sessionTargetFromRequest({ host: "h", name: "bad name" })).toThrow("Invalid session name");
+	});
+});
+
+describe("SSH port forwarding specs", () => {
+	it("parses shorthand and structured local, remote, and dynamic port forwards", () => {
+		expect(parsePortForward("8080:localhost:80")).toEqual({
+			type: "local",
+			flag: "-L",
+			spec: "127.0.0.1:8080:localhost:80",
+			bindAddress: "127.0.0.1",
+			listenPort: 8080,
+			targetHost: "localhost",
+			targetPort: 80,
+		});
+		expect(parsePortForward("R:0.0.0.0:9000:127.0.0.1:3000")).toEqual({
+			type: "remote",
+			flag: "-R",
+			spec: "0.0.0.0:9000:127.0.0.1:3000",
+			bindAddress: "0.0.0.0",
+			listenPort: 9000,
+			targetHost: "127.0.0.1",
+			targetPort: 3000,
+		});
+		expect(parsePortForward("D:1080")).toEqual({
+			type: "dynamic",
+			flag: "-D",
+			spec: "127.0.0.1:1080",
+			bindAddress: "127.0.0.1",
+			listenPort: 1080,
+		});
+		expect(parsePortForward({ type: "local", localPort: 5432, remoteHost: "::1", remotePort: 5432 })).toEqual({
+			type: "local",
+			flag: "-L",
+			spec: "127.0.0.1:5432:[::1]:5432",
+			bindAddress: "127.0.0.1",
+			listenPort: 5432,
+			targetHost: "[::1]",
+			targetPort: 5432,
+		});
 	});
 });
 

@@ -66,7 +66,7 @@ describe("post-compaction kernel-state probe + compact.* prelude (JS)", () => {
 		expect(names).toHaveLength(1);
 	});
 
-	it("exposes compact.status() through the host bridge", async () => {
+	it("exposes compact.status() scheduled state without leaking token budget counts", async () => {
 		const result = await executeJs("return JSON.stringify(await compact.status());", {
 			sessionId,
 			session,
@@ -74,9 +74,9 @@ describe("post-compaction kernel-state probe + compact.* prelude (JS)", () => {
 		});
 		expect(result.exitCode).toBe(0);
 		expect(JSON.parse(result.output.trim())).toEqual({
-			tokens: 1200,
-			contextWindow: 200_000,
-			percent: 0.6,
+			tokens: null,
+			contextWindow: null,
+			percent: null,
 			scheduled: false,
 		});
 	});

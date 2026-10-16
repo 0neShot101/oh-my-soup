@@ -96,6 +96,49 @@ describe("assistant refusal replay policy", () => {
 		expect(replayed.map(message => message.role)).toEqual(["user", "user"]);
 		expect(JSON.stringify(replayed)).not.toContain("Refusal (bio)");
 	});
+
+	it("strips refusal reasons from tool-bearing refused turns and synthetic tool results on replay", () => {
+		const messages: AgentMessage[] = [
+			{ role: "user", content: [{ type: "text", text: "inspect file" }], timestamp: 1 },
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.txt" } }],
+				stopReason: "error",
+				stopDetails: { type: "refusal", category: "cyber", explanation: "blocked by policy" },
+				errorMessage: "Refusal (cyber): blocked by policy",
+				api: "anthropic",
+				provider: "anthropic",
+				model: "claude-opus-4",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: 2,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "call-1",
+				toolName: "read",
+				isError: true,
+				content: [
+					{
+						type: "text",
+						text: "Tool call was not executed because the provider stream ended with an error before the tool could run: Refusal (cyber): blocked by policy",
+					},
+				],
+				timestamp: 3,
+			},
+		];
+
+		const replayed = filterProviderReplayMessages(convertToLlm(messages));
+		expect(replayed.map(message => message.role)).toEqual(["user", "assistant", "toolResult"]);
+		expect(JSON.stringify(replayed)).not.toContain("Refusal (cyber)");
+		expect(JSON.stringify(replayed)).not.toContain("blocked by policy");
+	});
 });
 
 describe("convertToLlm custom message mapping", () => {

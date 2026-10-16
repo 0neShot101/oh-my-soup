@@ -8,7 +8,7 @@ import { getAntigravityUserAgent } from "@oh-my-soup/pi-catalog/wire/gemini-head
 import { readSseJson } from "@oh-my-soup/pi-utils";
 import { withAuth } from "../auth-retry";
 import * as AIError from "../error";
-import { errorMessage, ImageApiError, usageFromWire } from "./shared";
+import { errorMessage, ImageApiError, usageFromWire, validateImageInput } from "./shared";
 import type { GeneratedImage, ImageGenerationOptions, ImageGenerationRequest, ImageGenerationResult } from "./types";
 
 const IMAGE_SYSTEM_INSTRUCTION =
@@ -138,6 +138,7 @@ export async function generateAntigravityImage(
 	request: ImageGenerationRequest,
 	options: ImageGenerationOptions,
 ): Promise<ImageGenerationResult> {
+	for (const image of request.inputImages ?? []) validateImageInput(image);
 	const fetchImpl = options.fetch ?? fetch;
 	const response = await withAuth(
 		options.apiKey,

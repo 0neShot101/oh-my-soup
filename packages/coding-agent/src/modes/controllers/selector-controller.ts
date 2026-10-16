@@ -72,7 +72,7 @@ import { SessionManager } from "../../session/session-manager";
 import { loadPinnedSessionIds } from "../../session/session-pins";
 import { FileSessionStorage } from "../../session/session-storage";
 import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpers/logout";
-import { handoffServiceSession, listServiceSessions } from "../../service/control";
+import { handoffServiceSession, listServiceSessions, spawnServiceSession } from "../../service/control";
 import { liveSessionForPath, markLiveSessions } from "../../service/resume";
 import type { LogoutAccount } from "@oh-my-soup/pi-tui/overlays/logout-account-selector";
 import { describeRedeemOutcome, toResetUsageAccounts } from "../../slash-commands/helpers/reset-usage";
@@ -195,7 +195,7 @@ function loadProviderAuthUi(): ProviderAuthUiModules {
 }
 
 /** Menus that open at most once: a repeat request focuses the open one. */
-type MenuKind = "settings" | "model-picker" | "model-hub" | "agents-dashboard" | "agent-hub";
+type MenuKind = "settings" | "model-picker" | "model-hub" | "agents-dashboard" | "agent-hub" | "usage-dashboard";
 
 /** An open menu: registered when the request runs, filled once its component mounts. */
 interface OpenMenu {
@@ -438,6 +438,9 @@ export class SelectorController {
 	 * classic full report one keypress away. Takes no transcript space.
 	 */
 	showUsageDashboard(reports: UsageReport[]): void {
+		// Checked here, not before the fetch: a repeat `/usage` whose fetch lands
+		// while the first dashboard is open focuses it instead of stacking a copy.
+		if (this.#focusOpenMenu("usage-dashboard")) return;
 		const authStorage = this.ctx.session.modelRegistry.authStorage;
 		const accounts = selectReportableAccounts(
 			collectStoredAccounts(authStorage),
@@ -457,7 +460,8 @@ export class SelectorController {
 			: undefined;
 		const usageModelSelectors = this.ctx.session.getUsageReportingModelSelectors(reports);
 		const done = () => {
-			overlayHandle?.hide();
+			menu.handle?.hide();
+			this.#releaseMenu("usage-dashboard", menu);
 			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
 		};
@@ -479,7 +483,8 @@ export class SelectorController {
 			requestRender: () => this.ctx.ui.requestRender(),
 			onClose: done,
 		});
-		const overlayHandle = this.#showFullscreenMenu(dashboard);
+		const menu = this.#claimMenu("usage-dashboard");
+		this.#mountMenu(menu, dashboard, () => this.#showFullscreenMenu(dashboard));
 	}
 
 	showAdvisorConfigure(): void {
@@ -1967,6 +1972,26 @@ export class SelectorController {
 			}
 			await this.ctx.restart(active.sessionPath);
 			return true;
+		}
+		if (
+			process.env.OMS_SERVICE_CHILD === "1" &&
+			this.ctx.sessionManager.isPersistent() &&
+			this.ctx.sessionManager.getEntries().some(entry => entry.type === "message")
+		) {
+			try {
+				if (
+					await spawnServiceSession({
+						cwd: this.ctx.sessionManager.getCwd(),
+						sessionPath: target.sessionPath,
+					})
+				) {
+					return true;
+				}
+			} catch (error) {
+				logger.warn("Could not spawn OMS service session for resumed transcript; switching in-process", {
+					error: String(error),
+				});
+			}
 		}
 		await this.ctx.prepareSessionSwitch();
 		this.ctx.resetObserverRegistry();

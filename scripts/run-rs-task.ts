@@ -1,6 +1,9 @@
 #!/usr/bin/env bun
+// Scope tests with --package/-p (repeatable) and --filterset/-E.
+// Packages select both nextest and doctests; filtersets apply only to nextest.
 
 import * as path from "node:path";
+import { parseArgs } from "node:util";
 import { $ } from "bun";
 
 const RUST_AFFECTING_FILE_NAMES = [
@@ -85,13 +88,44 @@ if (!isRustTaskName(taskName)) {
 	console.error(`Unknown Rust task: ${taskName ?? "(missing)"}`);
 	process.exit(1);
 }
+const args = process.argv.slice(3);
+if (args[0] === "--") args.shift();
+const { values } = parseArgs({
+	args,
+	options: {
+		package: { type: "string", short: "p", multiple: true },
+		filterset: { type: "string", short: "E" },
+	},
+});
+const packages = values.package ?? [];
+const filterset = values.filterset;
+const scoped = packages.length > 0 || filterset !== undefined;
+if (scoped && taskName !== "test:rs") {
+	console.error("--package and --filterset are only supported by test:rs.");
+	process.exit(1);
+}
 
-if (taskName !== "fmt:rs" && !(isCI() || (await hasRustAffectingChanges()))) {
+if (taskName !== "fmt:rs" && !scoped && !(isCI() || (await hasRustAffectingChanges()))) {
 	console.log(`Skipping ${taskName} (not in CI and no Rust-affecting changes were found).`);
 	process.exit(0);
 }
 
-for (const command of TASK_COMMANDS[taskName]) {
+const commands: readonly (readonly string[])[] = TASK_COMMANDS[taskName];
+for (const original of commands) {
+	let command: readonly string[] = original;
+	if (taskName === "test:rs") {
+		if (packages.length > 0) {
+			const workspace = original.indexOf("--workspace");
+			command = [
+				...original.slice(0, workspace),
+				...packages.flatMap(name => ["--package", name]),
+				...original.slice(workspace + 1 + VENDORED_FORK_EXCLUDES.length),
+			];
+		}
+		if (filterset !== undefined && original[1] === "nextest") {
+			command = [...command, "--filterset", filterset];
+		}
+	}
 	const exitCode = await runCommand(command);
 	if (exitCode !== 0) {
 		process.exit(exitCode);

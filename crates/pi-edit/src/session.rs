@@ -4,10 +4,9 @@
 //! Threading and callbacks live in the napi layer; this type is single
 //! threaded and pure apart from file reads and the writer trait.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use async_trait::async_trait;
-use pi_ast::{SupportLang, parse_cache::parse_cached};
 
 use crate::{
 	diff_string::{CompactDiffOptions, build_compact_diff_preview},
@@ -617,11 +616,8 @@ fn prune_snapshots(
 /// errors. Unknown languages never "parse", so they never regress.
 pub fn source_parses(code: &str, path: &str) -> bool {
 	let code = if code.is_empty() { "\n" } else { code };
-	let Some(language) = SupportLang::from_path(Path::new(path)) else {
-		return false;
-	};
-	parse_cached(code, language)
-		.is_ok_and(|tree| tree.is_some_and(|tree| !tree.root_node().has_error()))
+	pi_ast::summary::parse_code_status(code, None, Some(path))
+		.is_ok_and(|language| language.is_some())
 }
 
 /// The persisted bytes differ from what was sent (an editor reformatted on

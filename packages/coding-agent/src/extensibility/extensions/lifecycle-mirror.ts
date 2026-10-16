@@ -19,11 +19,11 @@
  * `collab/host.ts`).
  *
  * The `agent_end` shape mirrors the session's public-notification shape
- * (`#emitAgentEndNotification`): `messages` plus the continuation flag. The
- * session-layer `isTerminal` flag marks a non-final settle — `isTerminal:
- * false` means a continuation is already scheduled on the host and maps to
- * `willContinue: true`; older hosts omit the flag and such settles map without
- * one, matching the pre-flag notification.
+ * (`#emitAgentEndNotification`): `messages` plus the continuation and async-wait
+ * flags. The session-layer `isTerminal: false` marks a non-final settle, either
+ * an automatic continuation or a background-job wait; the latter has
+ * `awaitingAsyncWork: true`. Older hosts omit these flags and such settles
+ * map without them, matching the pre-flag notification.
  */
 import { logger } from "@oh-my-soup/pi-utils";
 import type { AgentMessage } from "@oh-my-soup/pi-agent-core";
@@ -125,6 +125,7 @@ export function extensionEventFromSessionEvent(
 				type: "agent_end",
 				messages: event.messages,
 				willContinue: event.isTerminal === false ? true : undefined,
+				...(event.isTerminal === false && event.awaitingAsyncWork === true ? { awaitingAsyncWork: true } : {}),
 			};
 		case "turn_start":
 			return { type: "turn_start", turnIndex, timestamp: Date.now() };

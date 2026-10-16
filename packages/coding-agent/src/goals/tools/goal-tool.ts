@@ -106,13 +106,7 @@ export class GoalTool implements AgentTool<typeof goalSchema, GoalToolDetails> {
 		}
 		let text: string;
 		if (response.goal) {
-			text = `Goal: ${response.goal.objective}\nStatus: ${response.goal.status}\nTokens: ${response.goal.tokensUsed} used`;
-			if (response.goal.tokenBudget !== undefined) {
-				text += ` / ${response.goal.tokenBudget} budget`;
-			}
-			if (response.remainingTokens !== null) {
-				text += `\nRemaining tokens: ${response.remainingTokens}`;
-			}
+			text = `Goal: ${response.goal.objective}\nStatus: ${response.goal.status}`;
 			if (response.completionBudgetReport) {
 				text += `\n\n${response.completionBudgetReport}`;
 			}

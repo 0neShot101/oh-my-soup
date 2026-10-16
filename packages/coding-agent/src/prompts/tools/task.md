@@ -1,8 +1,11 @@
 {{#if asyncEnabled}}{{#if batchEnabled}}Spawn `tasks[]` concurrently; IDs return immediately.{{else}}Spawn one agent; ID returns immediately.{{/if}}{{#if hasBlockingAgents}} BLOCKING agents return inline.{{/if}}{{else}}{{#if batchEnabled}}Run `tasks[]` synchronously.{{else}}Run one agent synchronously.{{/if}}{{/if}}
-{{#if asyncEnabled}}
+{{#if asyncEnabled}}{{#ifAny structured hasStructuredAgents}}
 
 # Results
-`outputSchema` parsed payload, even invalid: `agent://<id>` (field `/<field>`, nested `/reports/0/data`); invalid preview inline.
+{{#if structured}}`outputSchema`{{else}}STRUCTURED agents'{{/if}} parsed payload, even invalid: `agent://<id>` (field `/<field>`, nested `/reports/0/data`); invalid preview inline.
+{{/ifAny}}
+
+{{asyncGuidance}}
 {{/if}}
 Saved child session notes: `agent://<id>?view=notes` (live, completed, or resumed with retained journal); separate from `outputSchema` payload.
 
@@ -25,8 +28,10 @@ Shared edits need one integration owner{{#if ircEnabled}}; siblings coordinate v
 {{/if}}
 {{#if effortEnabled}}  - `effort`: Scale by how open-ended the problem is: `"lo"`|`"med"`|`"hi"`
 {{/if}}
+{{#if structured}}
   - `outputSchema`: Invocation-specific JSON Schema. Overrides the selected agent and parent-session schemas.
   - `schemaMode`: `"permissive"` (default) accepts a retry-exhausted invalid result with a warning; `"strict"` fails it.
+{{/if}}
   - `model`: Run this spawn on a specific model: `provider/model-id`, a bare model id, or a role name like `smol`. Overrides the agent's default — use it to fan out onto a different model family than the parent model.
 {{#if isolationEnabled}}
 {{#if applyIsolatedChanges}}
@@ -47,8 +52,10 @@ Shared edits need one integration owner{{#if ircEnabled}}; siblings coordinate v
 {{/if}}
 {{#if effortEnabled}}- `effort`: Scale by how open-ended the problem is: `"lo"`|`"med"`|`"hi"`
 {{/if}}
+{{#if structured}}
 - `outputSchema`: Invocation-specific JSON Schema. Overrides the selected agent and parent-session schemas.
 - `schemaMode`: `"permissive"` (default) accepts a retry-exhausted invalid result with a warning; `"strict"` fails it.
+{{/if}}
 - `model`: Run this spawn on a specific model: `provider/model-id`, a bare model id, or a role name like `smol`. Overrides the agent's default — use it to fan out onto a different model family than the parent model.
 {{#if isolationEnabled}}
 {{#if applyIsolatedChanges}}
@@ -67,5 +74,5 @@ Children start blank;{{#if ircEnabled}} parent IRC steers immediately;{{/if}} la
 # Available Agents
 {{#if spawningDisabled}}Agent spawning is currently disabled.
 {{else}}{{#if hasModelMentions}}`m<N>` = user-tagged model (`<model agent="m<N>" name="…"/>`), not specialist; spawn only when user names it.
-{{/if}}{{#list agents join=""}}- `{{name}}`{{#if readOnly}} (READ-ONLY; investigation only, no edits){{/if}}{{#if blocking}} (BLOCKING; inline result){{/if}}: {{description}}
+{{/if}}{{#list agents join=""}}- `{{name}}`{{#if readOnly}} (READ-ONLY; investigation only, no edits){{/if}}{{#if blocking}} (BLOCKING; inline result){{/if}}{{#if structured}} (STRUCTURED; schema result){{/if}}: {{description}}
 {{/list}}{{/if}}

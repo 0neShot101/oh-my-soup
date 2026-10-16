@@ -489,6 +489,8 @@ export interface BinaryReplacementOptions {
 	tempPath: string;
 	backupPath: string;
 	expectedVersion: string;
+	/** Remove a newly created target on failure when there was no previous binary to restore. */
+	removeUnverifiedTarget?: boolean;
 	verifyInstalledVersion: (expectedVersion: string) => Promise<InstalledVersionVerification>;
 }
 
@@ -633,10 +635,15 @@ function isSymlinkPath(p: string): boolean {
 		return false;
 	}
 }
-/** Windows script shims (npm's launchers) that a native executable cannot overwrite. */
+/** Windows script shims, including npm's extensionless Git Bash launcher. */
 function isWindowsScriptLauncherPath(launcherPath: string): boolean {
 	const extension = path.extname(launcherPath).toLowerCase();
-	return extension === ".cmd" || extension === ".ps1" || extension === ".bat";
+	return (
+		extension === ".cmd" ||
+		extension === ".ps1" ||
+		extension === ".bat" ||
+		(process.platform === "win32" && extension === "")
+	);
 }
 
 /**
@@ -759,7 +766,10 @@ function resolveUpdateMethod(
 		ompLinkTarget,
 	} = options;
 	const launcherExtension = path.extname(ompPath).toLowerCase();
-	const isWindowsScriptLauncher = isWindowsScriptLauncherPath(ompPath);
+	// Extensionless npm launchers are regular files; foreign symlinks remain
+	// binary aliases even on Windows.
+	const isWindowsScriptLauncher =
+		isWindowsScriptLauncherPath(ompPath) && (launcherExtension !== "" || ompIsRegularFile);
 	if (isPathInDirectory(ompPath, NIX_STORE_DIR)) return "nix";
 	if (homebrewPrefix && isPathInDirectory(ompPath, path.join(homebrewPrefix, "bin"))) return "brew";
 	if (miseBinDirs.some(dir => isPathInDirectory(ompPath, dir))) return "mise";
@@ -1511,6 +1521,7 @@ export async function sweepStaleUpdateArtifacts(targetPath: string): Promise<voi
  */
 export async function replaceBinaryForUpdate(options: BinaryReplacementOptions): Promise<InstalledVersionVerification> {
 	let backupReady = false;
+	let replacementInstalled = false;
 	try {
 		// `backupPath` is unique per attempt (see updateViaBinaryAt), so this rename
 		// never has to overwrite — or unlink — a possibly-locked leftover from an
@@ -1518,8 +1529,8 @@ export async function replaceBinaryForUpdate(options: BinaryReplacementOptions):
 		// Windows; only deleting its still-mapped image is not.
 		// A missing target is tolerated: repairing a launcher that a failed
 		// package-manager reinstall removed installs the binary at a vacant
-		// path. There is then nothing to restore, so a verification failure
-		// leaves the new binary in place rather than the previous nothing.
+		// path. There is then nothing to restore, so an unverified replacement
+		// is retained unless the caller requires the absent target restored too.
 		try {
 			await fs.promises.rename(options.targetPath, options.backupPath);
 			backupReady = true;
@@ -1527,6 +1538,7 @@ export async function replaceBinaryForUpdate(options: BinaryReplacementOptions):
 			if (!isEnoent(err)) throw err;
 		}
 		await fs.promises.rename(options.tempPath, options.targetPath);
+		replacementInstalled = true;
 
 		const verification = await options.verifyInstalledVersion(options.expectedVersion);
 		if (!verification.ok) {
@@ -1544,8 +1556,10 @@ export async function replaceBinaryForUpdate(options: BinaryReplacementOptions):
 		await removeBackupBestEffort(options.backupPath);
 		return verification;
 	} catch (err) {
-		if (backupReady) {
+		if (backupReady || (replacementInstalled && options.removeUnverifiedTarget)) {
 			await unlinkIfExists(options.targetPath);
+		}
+		if (backupReady) {
 			await fs.promises.rename(options.backupPath, options.targetPath);
 		}
 		await unlinkIfExists(options.tempPath);
@@ -1596,17 +1610,25 @@ function buildVersionedPackageInstallArgs(
  * ({@link SUPPORTED_NATIVE_TAGS}) so unsupported platforms still fail with
  * the original "no matching version" message instead of `EBADPLATFORM`.
  * See #1824.
+ *
+ * `--minimum-release-age=0` overrides an ambient bunfig `minimumReleaseAge`
+ * for this invocation: self-update installs the exact pinned manifests the
+ * version check just advertised, so a supply-chain cooldown must not reject
+ * them (same check-vs-installer divergence class as #1686). Older bun
+ * releases predate the flag and reject unknown options, so callers pass
+ * `supportsReleaseAgeOverride` from a help-text probe.
  */
 export function buildBunInstallArgs(
 	expectedVersion: string,
 	nativeTag: string = currentNativeTag(),
 	packages: ReleasePackages = CURRENT_PACKAGES,
-	options: { registry?: string } = {},
+	options: { registry?: string; supportsReleaseAgeOverride?: boolean } = {},
 ): string[] {
 	return [
 		"install",
 		"-g",
 		"--no-cache",
+		...(options.supportsReleaseAgeOverride !== false ? ["--minimum-release-age=0"] : []),
 		`--registry=${options.registry ?? DEFAULT_NPM_REGISTRY}`,
 		...buildVersionedPackageInstallArgs(expectedVersion, nativeTag, packages),
 	];
@@ -1635,6 +1657,26 @@ export function buildNpmInstallArgs(
 		`--registry=${flags.registry ?? DEFAULT_NPM_REGISTRY}`,
 		...buildVersionedPackageInstallArgs(expectedVersion, nativeTag, packages),
 	];
+}
+
+/**
+ * Env overlay for npm self-update installs. Setting the same key,
+ * `npm_config_min_release_age: "0"`, outranks any ambient `min-release-age`
+ * or `before` from npmrc files on every npm that supports release-age gates
+ * (env beats file sources; age 0 flattens to no cutoff). Do NOT use
+ * `npm_config_before` here: npm 11.10.0-11.14.x declared `before` and
+ * `min-release-age` mutually exclusive across sources and abort config
+ * loading with a TypeError when one comes from env and the other from an
+ * npmrc file, turning the targeted scenario into a hard npm failure.
+ * npm predating the feature warns "Unknown env config" for the key, so
+ * callers pass `supportsReleaseAgeOverride` from a probe.
+ */
+export function buildNpmUpdateEnv(
+	base: Record<string, string | undefined> = process.env,
+	supportsReleaseAgeOverride = true,
+): Record<string, string | undefined> {
+	if (!supportsReleaseAgeOverride) return base;
+	return { ...base, npm_config_min_release_age: "0" };
 }
 
 export function buildHomebrewUpdateArgs(force: boolean): string[] {
@@ -1704,6 +1746,7 @@ function packageManagerMigrationSteps(manager: "bun" | "npm", release: ReleaseIn
 			if (manager === "bun") {
 				const args = buildBunInstallArgs(release.version, nativeTag, release.packages, {
 					registry: release.registry,
+					supportsReleaseAgeOverride: await bunSupportsReleaseAgeOverride(),
 				});
 				return (await $`bun ${args}`.nothrow()).exitCode;
 			}
@@ -1711,7 +1754,9 @@ function packageManagerMigrationSteps(manager: "bun" | "npm", release: ReleaseIn
 				force: true,
 				registry: release.registry,
 			});
-			return (await $`npm ${args}`.nothrow()).exitCode;
+			return (
+				await $`npm ${args}`.env(buildNpmUpdateEnv(process.env, await npmSupportsReleaseAgeOverride())).nothrow()
+			).exitCode;
 		},
 		async removeOld() {
 			// One invocation per package: a single batched remove fails wholesale
@@ -1773,6 +1818,23 @@ export async function migrateRenamedInstall(release: ReleaseInfo, steps: RenameM
 	printVerifiedVersion(release.version);
 }
 
+/** Older bun releases predate `--minimum-release-age` and reject unknown flags, so probe the installed help output before passing it. */
+async function bunSupportsReleaseAgeOverride(): Promise<boolean> {
+	const help = await $`bun install --help`.quiet().nothrow();
+	return help.exitCode === 0 && /--minimum-release-age\b/.test(help.text());
+}
+
+/**
+ * npm predating `min-release-age` (11.10.0, npm/cli#8965) warns "Unknown env
+ * config" for the overlay key and gains nothing from it. Probed from a neutral
+ * directory: inside an npm workspaces checkout the config query exits with
+ * ENOWORKSPACES before it ever reads the key.
+ */
+async function npmSupportsReleaseAgeOverride(): Promise<boolean> {
+	const probe = await $`npm config get min-release-age`.cwd(os.tmpdir()).quiet().nothrow();
+	return probe.exitCode === 0 && probe.text().trim() !== "undefined";
+}
+
 /**
  * Update via package manager.
  *
@@ -1788,6 +1850,7 @@ async function updateViaBun(release: ReleaseInfo): Promise<InstalledVersionVerif
 	} else {
 		const args = buildBunInstallArgs(release.version, currentNativeTag(), release.packages, {
 			registry: release.registry,
+			supportsReleaseAgeOverride: await bunSupportsReleaseAgeOverride(),
 		});
 		const result = await $`bun ${args}`.nothrow();
 		if (result.exitCode !== 0) {
@@ -1815,7 +1878,9 @@ async function updateViaNpm(release: ReleaseInfo): Promise<InstalledVersionVerif
 	const args = buildNpmInstallArgs(release.version, currentNativeTag(), release.packages, {
 		registry: release.registry,
 	});
-	const result = await $`npm ${args}`.nothrow();
+	const result = await $`npm ${args}`
+		.env(buildNpmUpdateEnv(process.env, await npmSupportsReleaseAgeOverride()))
+		.nothrow();
 	if (result.exitCode !== 0) {
 		throw new Error(`npm install failed with exit code ${result.exitCode}`);
 	}
@@ -2094,6 +2159,7 @@ export async function updateViaShimTakeover(
 	const exePath = path.join(launcherDir, `${APP_NAME}.exe`);
 	const attempt = `${Date.now()}.${process.pid}.${updateAttemptSeq++}`;
 	const tempPath = `${exePath}.${attempt}.new`;
+	const backupPath = `${exePath}.${attempt}.bak`;
 	const asset = await getReleaseBinaryAsset(
 		expectedVersion,
 		binaryName,
@@ -2117,39 +2183,51 @@ export async function updateViaShimTakeover(
 	// verification can roll it back.
 	await withFileLock(exePath, async () => {
 		console.log(chalk.dim(`Installing ${APP_NAME}.exe beside the script launcher...`));
-		await fs.promises.rename(tempPath, exePath);
-		// Retire the shims so PATH resolution lands on the new exe. Renamed, not
-		// deleted: restorable on verification failure, and Windows permits
-		// renaming a batch file that is still executing. A shim that cannot be
-		// renamed (held open without delete sharing) is rewritten in place as a
-		// forwarder to the exe — write and rename take different Windows locks,
-		// so one can succeed where the other fails.
-		const backupSuffix = `${attempt}.bak`;
 		const retired: Array<{ launcher: string; backup: string }> = [];
-		for (const ext of ["", ".cmd", ".ps1", ".bat"]) {
-			const launcher = path.join(launcherDir, `${APP_NAME}${ext}`);
-			const backup = `${launcher}.${backupSuffix}`;
-			try {
-				await fs.promises.rename(launcher, backup);
-				retired.push({ launcher, backup });
-			} catch (err) {
-				if (isEnoent(err)) continue;
-				try {
-					const original = await Bun.file(launcher).text();
-					await Bun.write(launcher, SHIM_FORWARDERS[ext]);
-					forwarded.push({ launcher, original });
-				} catch {
-					stuck.push(launcher);
-				}
-			}
-		}
+		try {
+			await replaceBinaryForUpdate({
+				targetPath: exePath,
+				tempPath,
+				backupPath,
+				expectedVersion: asset.version,
+				removeUnverifiedTarget: true,
+				verifyInstalledVersion: async expectedVersion => {
+					// Move an existing exe aside before installing: a forwarder may
+					// have launched it, so Windows still maps its running image.
+					// Retire the shims so PATH resolution lands on the new exe.
+					// Renamed, not deleted: restorable on verification failure.
+					// An immovable shim is rewritten as a forwarder instead.
+					const backupSuffix = `${attempt}.bak`;
+					for (const ext of ["", ".cmd", ".ps1", ".bat"]) {
+						const launcher = path.join(launcherDir, `${APP_NAME}${ext}`);
+						const backup = `${launcher}.${backupSuffix}`;
+						try {
+							await fs.promises.rename(launcher, backup);
+							retired.push({ launcher, backup });
+						} catch (err) {
+							if (isEnoent(err)) continue;
+							try {
+								const original = await Bun.file(launcher).text();
+								await Bun.write(launcher, SHIM_FORWARDERS[ext]);
+								forwarded.push({ launcher, original });
+							} catch {
+								stuck.push(launcher);
+							}
+						}
+					}
 
-		// Verify the exe by its explicit path: $which cached the shim path when
-		// the update target was resolved, and the shim was just renamed away, so
-		// a PATH re-resolution here would test a file that no longer exists.
-		const verify = options.verifyBinary ?? verifyBinaryAtPath;
-		const verification = await verify(exePath, asset.version);
-		if (!verification.ok) {
+					// $which cached the retired shim path; verify the explicit exe.
+					const verify = options.verifyBinary ?? verifyBinaryAtPath;
+					const verification = await verify(exePath, expectedVersion);
+					if (!verification.ok) {
+						throw new Error(
+							`${formatVerificationFailure(verification, expectedVersion)}; restored previous ${APP_NAME} launcher`,
+						);
+					}
+					return verification;
+				},
+			});
+		} catch (err) {
 			for (const { launcher, backup } of retired) {
 				try {
 					await fs.promises.rename(backup, launcher);
@@ -2160,10 +2238,7 @@ export async function updateViaShimTakeover(
 					await Bun.write(launcher, original);
 				} catch {}
 			}
-			await unlinkIfExists(exePath);
-			throw new Error(
-				`${formatVerificationFailure(verification, asset.version)}; restored previous ${APP_NAME} launcher`,
-			);
+			throw err;
 		}
 		for (const { backup } of retired) {
 			await removeBackupBestEffort(backup);

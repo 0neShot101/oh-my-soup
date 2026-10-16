@@ -29,6 +29,18 @@ export interface SSHConnectionTarget {
 	compat?: boolean;
 }
 
+export interface SSHPortForward {
+	type: "local" | "remote" | "dynamic";
+	/** OpenSSH flag: "-L", "-R", or "-D". */
+	flag: "-L" | "-R" | "-D";
+	/** Canonical spec passed to ssh, e.g. "127.0.0.1:8080:127.0.0.1:80" or "127.0.0.1:1080". */
+	spec: string;
+	bindAddress: string;
+	listenPort: number;
+	targetHost?: string;
+	targetPort?: number;
+}
+
 /** Endpoint and credentials, independent of the configured/ad-hoc alias. */
 export function sameSshTarget(left: SSHConnectionTarget, right: SSHConnectionTarget): boolean {
 	return (
@@ -168,6 +180,7 @@ const activeHosts = new Map<string, SSHConnectionTarget>();
 const pendingConnections = new Map<string, { identity: string; promise: Promise<void> }>();
 const hostInfoCache = new Map<string, SSHHostInfo>();
 const connectionEpochs = new Map<string, number>();
+const activeForwards = new Map<string, Map<string, { forward: SSHPortForward; child?: ptree.ChildProcess }>>();
 let allConnectionsEpoch = 0;
 const invalidatingHosts = new Map<string, number>();
 let allConnectionsClosing = 0;
@@ -278,7 +291,7 @@ function buildCommonArgs(host: SSHConnectionTarget, options?: SSHArgsOptions): s
 		args.push("-o", "ControlMaster=auto", "-o", `ControlPath=${CONTROL_PATH}`, "-o", "ControlPersist=3600");
 	}
 
-	args.push("-o", "StrictHostKeyChecking=accept-new", ...authArgs(host));
+	args.push("-o", "LogLevel=ERROR", "-o", "StrictHostKeyChecking=accept-new", ...authArgs(host));
 
 	if (host.port) {
 		args.push("-p", String(host.port));
@@ -1004,7 +1017,137 @@ export async function invalidateHostMetadata(hostNames: Iterable<string>): Promi
 	await invalidateHostMetadataInternal(hostNames, "close");
 }
 
+function forwardKey(forward: Pick<SSHPortForward, "flag" | "spec">): string {
+	return `${forward.flag} ${forward.spec}`;
+}
+
+export function getActivePortForwards(hostName: string): SSHPortForward[] {
+	const map = activeForwards.get(hostName);
+	if (!map) return [];
+	return [...map.values()].map(entry => entry.forward);
+}
+
+export async function startPortForward(host: SSHConnectionTarget, forward: SSHPortForward): Promise<SSHPortForward> {
+	await ensureConnection(host);
+	let map = activeForwards.get(host.name);
+	if (!map) {
+		map = new Map();
+		activeForwards.set(host.name, map);
+	}
+	const key = forwardKey(forward);
+	const existing = map.get(key);
+	if (existing) return existing.forward;
+
+	const target = buildSshTarget(host.username, host.host);
+	if (supportsSshControlMaster()) {
+		const res = await runSshSync(host, [
+			"-O",
+			"forward",
+			forward.flag,
+			forward.spec,
+			...buildCommonArgs(host),
+			target,
+		]);
+		if (res.exitCode !== 0) {
+			const detail = res.stderr ? `: ${res.stderr}` : "";
+			throw new Error(
+				`Failed to establish SSH port forward (${forward.flag} ${forward.spec}) on ${host.name}${detail}`,
+			);
+		}
+		map.set(key, { forward });
+		return forward;
+	}
+
+	await validateKeyPermissions(host.keyPath);
+	const args = [
+		"-N",
+		"-o",
+		"ExitOnForwardFailure=yes",
+		"-o",
+		"ServerAliveInterval=30",
+		forward.flag,
+		forward.spec,
+		...buildCommonArgs(host, { multiplex: false }),
+		target,
+	];
+	const child = spawnSsh(host, args, { stdin: "ignore", detached: true, stderr: "full" });
+	const earlyExit = await Promise.race([
+		child.exited.then(
+			exitCode => ({ settled: true as const, exitCode }),
+			error => ({ settled: true as const, error }),
+		),
+		Bun.sleep(250).then(() => ({ settled: false as const })),
+	]);
+	if (earlyExit.settled) {
+		const stderr = child.peekStderr().trim();
+		const detail =
+			stderr || ("error" in earlyExit && earlyExit.error instanceof Error ? earlyExit.error.message : "");
+		throw new Error(
+			`Failed to establish SSH port forward (${forward.flag} ${forward.spec}) on ${host.name}${detail ? `: ${detail}` : ""}`,
+		);
+	}
+	const hostMap = map;
+	void child.exited.then(
+		() => {
+			if (hostMap.get(key)?.child === child) hostMap.delete(key);
+		},
+		() => {
+			if (hostMap.get(key)?.child === child) hostMap.delete(key);
+		},
+	);
+	map.set(key, { forward, child });
+	return forward;
+}
+
+export async function stopPortForward(
+	host: SSHConnectionTarget,
+	forward: Pick<SSHPortForward, "flag" | "spec">,
+): Promise<boolean> {
+	const map = activeForwards.get(host.name);
+	if (!map) return false;
+	const key = forwardKey(forward);
+	const entry = map.get(key);
+	if (!entry) return false;
+	map.delete(key);
+	if (map.size === 0) activeForwards.delete(host.name);
+	if (entry.child) {
+		entry.child.kill();
+		await entry.child.wait({ allowAbort: true, allowNonZero: true }).catch(() => {});
+		return true;
+	}
+	if (supportsSshControlMaster()) {
+		const target = buildSshTarget(host.username, host.host);
+		await runSshSync(host, ["-O", "cancel", forward.flag, forward.spec, ...buildCommonArgs(host), target]);
+	}
+	return true;
+}
+
+export async function stopAllPortForwards(host: SSHConnectionTarget): Promise<number> {
+	const map = activeForwards.get(host.name);
+	if (!map || map.size === 0) return 0;
+	const entries = [...map.values()];
+	activeForwards.delete(host.name);
+	for (const entry of entries) {
+		if (entry.child) {
+			entry.child.kill();
+			await entry.child.wait({ allowAbort: true, allowNonZero: true }).catch(() => {});
+		} else if (supportsSshControlMaster()) {
+			const target = buildSshTarget(host.username, host.host);
+			await runSshSync(host, [
+				"-O",
+				"cancel",
+				entry.forward.flag,
+				entry.forward.spec,
+				...buildCommonArgs(host),
+				target,
+			]);
+		}
+	}
+	return entries.length;
+}
+
 async function closeConnectionInternal(host: SSHConnectionTarget): Promise<void> {
+	await stopAllPortForwards(host);
 	if (!supportsSshControlMaster()) return;
 	const target = buildSshTarget(host.username, host.host);
 	await runSshSync(host, ["-O", "exit", ...buildCommonArgs(host), target]);

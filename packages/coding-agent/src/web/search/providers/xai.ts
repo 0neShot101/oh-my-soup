@@ -6,6 +6,8 @@ import { pickDefaultAvailableModel, resolveRoleChain } from "../../../config/mod
 import { roleCandidatePool } from "../../../config/model-roles";
 import { cfgModelProviderOrder } from "../../../config/model-settings";
 import type { Settings } from "../../../config/settings";
+import { settings as globalSettings } from "../../../config/settings";
+import { cfgProvidersWebSearchEnginesOnly } from "../../settings";
 import type { XAIHttpTransport } from "../../../lib/xai-http";
 import { resolveConfiguredModelTarget } from "../../../session/role-models";
 import { isXHost, xHandle } from "../../x";
@@ -173,6 +175,11 @@ const XAI_PROVIDERS: ReadonlySet<string> = new Set(["xai", "xai-oauth"]);
  * Gates the X operators in the `web_search` tool description.
  */
 export function xSearchAvailable(modelRegistry: ModelRegistry): boolean {
+	try {
+		if (cfgProvidersWebSearchEnginesOnly.get(globalSettings)) return false;
+	} catch {
+		// Settings may be uninitialized in standalone callers.
+	}
 	return modelRegistry.getAvailableForProviders(XAI_PROVIDERS).some(model => model.webSearch === "xai");
 }
 

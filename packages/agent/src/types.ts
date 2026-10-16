@@ -338,6 +338,13 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * tools finish first.
 	 */
 	hasQueuedAsides?: () => boolean | Promise<boolean>;
+	/**
+	 * Receives a tool's `onUpdate` frames that arrive after this run's event
+	 * stream ended: a call that returned while its background job keeps
+	 * reporting (`details.async`), whose run yielded before the job settled.
+	 * Without it those frames are dropped.
+	 */
+	onDetachedToolUpdate?: (event: Extract<AgentEvent, { type: "tool_execution_update" }>) => void;
 
 	/**
 	 * Returns follow-up messages to process after the agent would otherwise stop.
@@ -1136,6 +1143,11 @@ export interface AgentTool<
 	/** Short one-line summary used for tool discovery indexes. */
 	summary?: string;
 	/**
+	 * Instructions a same-name extension replacement inherits in its description, because results it
+	 * obtains by delegating to this native tool through `ctx.invokeTool` follow this tool's contract.
+	 */
+	readonly delegationGuidance?: string;
+	/**
 	 * On-demand documentation topics (`topic → markdown`), readable as
 	 * `xd://<tool>/<topic>`. Lets a tool keep large sub-surfaces out of its
 	 * description and advertise only a one-line pointer per topic.
@@ -1240,7 +1252,14 @@ export interface AgentContext {
  */
 export type AgentEvent =
 	// Agent lifecycle
-	| { type: "agent_start" }
+	| {
+			type: "agent_start";
+			/**
+			 * Calls of the unpaired assistant tail a continued run executes before its
+			 * first model request. They run without a new assistant `message_end`.
+			 */
+			resumedToolCallIds?: string[];
+	  }
 	| {
 			type: "agent_end";
 			messages: AgentMessage[];

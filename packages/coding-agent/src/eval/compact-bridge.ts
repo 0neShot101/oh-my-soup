@@ -35,9 +35,8 @@ export function runEvalCompact(args: unknown, options: EvalCompactBridgeOptions)
 	const payload = (args && typeof args === "object" ? args : {}) as { op?: unknown; instructions?: unknown };
 	switch (payload.op) {
 		case "status": {
-			return (
-				session.getCompactionStatus?.() ?? { tokens: null, contextWindow: null, percent: null, scheduled: false }
-			);
+			const status = session.getCompactionStatus?.();
+			return { tokens: null, contextWindow: null, percent: null, scheduled: status?.scheduled ?? false };
 		}
 		case "run": {
 			if (payload.instructions !== undefined && typeof payload.instructions !== "string") {

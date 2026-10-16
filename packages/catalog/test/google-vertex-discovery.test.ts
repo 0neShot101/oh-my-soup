@@ -167,7 +167,7 @@ describe("google-vertex model catalog", () => {
 		// Flash/Pro siblings accept 65536 on the same endpoint. The clamp is
 		// owned by the google-vertex limits-patch rule, so the contract is
 		// proven on representative specs through buildModel instead of the
-		// bundled snapshot.
+		// bundled snapshot, which drops the line once upstream retires it.
 		const vertexLite = buildModel(geminiSpec("google-vertex", "google-vertex", "gemini-2.5-flash-lite"));
 		expect(vertexLite.maxTokens).toBe(65_535);
 		expect(buildModel(geminiSpec("google-vertex", "google-vertex", "gemini-2.5-flash")).maxTokens).toBe(65_536);

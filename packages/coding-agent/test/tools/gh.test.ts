@@ -16,6 +16,7 @@ import {
 	resolveDefaultRepoMemoized,
 } from "@oh-my-soup/pi-coding-agent/tools/gh";
 import { parseIssueUrl, parsePullRequestUrl } from "@oh-my-soup/pi-coding-agent/tools/gh-common";
+import { sanitizeRemoteName } from "@oh-my-soup/pi-coding-agent/tools/gh-pr-checkout";
 import { github } from "@oh-my-soup/pi-coding-agent/utils/github";
 import { ToolError } from "@oh-my-soup/pi-tui/tools/tool-errors";
 import { withRepoLock } from "@oh-my-soup/pi-coding-agent/utils/repo-lock";
@@ -241,6 +242,13 @@ async function expectedWorktreePath(home: string, primaryRoot: string, localBran
 	const segment = `${prNumber}-${hashPath(primaryRoot)}`;
 	return fs.realpath(path.join(home, ".oms", "wt", segment));
 }
+
+describe("sanitizeRemoteName", () => {
+	it("prefixes sanitized fork owners and falls back to a bare fork remote", () => {
+		expect(sanitizeRemoteName("Octo_Cat.Org")).toBe("fork-octo-cat-org");
+		expect(sanitizeRemoteName("__")).toBe("fork");
+	});
+});
 
 describe("parsePrUnifiedDiff", () => {
 	it("parses quoted diff headers instead of falling back to unknown paths", () => {

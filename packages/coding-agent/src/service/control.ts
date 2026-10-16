@@ -194,3 +194,16 @@ export async function handoffServiceSession(sessionPath: string): Promise<boolea
 	if (typeof response.handedOff !== "boolean") throw new Error("OMS service sent a malformed handoff reply");
 	return response.handedOff;
 }
+
+/** Spawn a new service-owned PTY and move this child's attached terminal handles to it, keeping this session alive. */
+export async function spawnServiceSession(options?: { cwd?: string; sessionPath?: string }): Promise<boolean> {
+	const response = await requestControl({
+		type: "spawn",
+		pid: process.pid,
+		cwd: options?.cwd,
+		sessionPath: options?.sessionPath,
+	});
+	if (!response) return false;
+	if (typeof response.spawned !== "boolean") throw new Error("OMS service sent a malformed spawn reply");
+	return response.spawned;
+}

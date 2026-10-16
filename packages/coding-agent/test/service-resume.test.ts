@@ -49,25 +49,26 @@ test("a service-owned saved session appears in progress even when its persisted 
 	expect(screen).not.toContain(" done");
 });
 
-test("a live session without a saved JSONL is selectable in its project and the global picker", () => {
+test("hides sessions that have no messages sent, including unsaved live service stubs", () => {
 	const folder = path.join(os.tmpdir(), "oms-live-resume-test", "sessions");
-	const otherFolder = path.join(os.tmpdir(), "oms-other-resume-test", "sessions");
+	const emptySaved: SessionInfo = {
+		path: path.join(folder, "empty.jsonl"),
+		id: "empty-id",
+		cwd: path.dirname(folder),
+		created: new Date("2024-01-01T00:00:00Z"),
+		modified: new Date("2024-01-02T00:00:00Z"),
+		messageCount: 0,
+		size: 128,
+		firstMessage: "(no messages)",
+		allMessagesText: "",
+		status: "error",
+	};
 	const current: LiveServiceSession = {
 		sessionPath: path.join(folder, "new.jsonl"),
 		cwd: path.dirname(folder),
 		pid: 123,
 		id: "new-session-123456",
 	};
-	const other: LiveServiceSession = {
-		sessionPath: path.join(otherFolder, "outside.jsonl"),
-		cwd: path.dirname(otherFolder),
-		pid: 456,
-		id: "outside-session-789",
-	};
-	const scoped = markLiveSessions([], [current, other], folder);
-	const global = markLiveSessions([], [current, other]);
-
-	expect(scoped.map(session => session.path)).toEqual([current.sessionPath]);
-	expect(global.map(session => session.path)).toEqual([current.sessionPath, other.sessionPath]);
-	expect(rendered(scoped)).toContain("in progress");
+	expect(markLiveSessions([emptySaved], [current], folder)).toEqual([]);
+	expect(markLiveSessions([emptySaved], [current])).toEqual([]);
 });

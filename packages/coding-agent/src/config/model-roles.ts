@@ -14,6 +14,7 @@ import { isValidThemeColor } from "@oh-my-soup/pi-tui/theme";
 import type { Settings } from "./settings";
 
 import { cfgCycleOrder, cfgModelTags } from "./model-settings";
+import { cfgProvidersWebSearchEnginesOnly } from "../web/settings";
 
 /** Canonical prefix for a configured model role selector. */
 export const MODEL_ROLE_ALIAS_PREFIX = "@";
@@ -46,6 +47,10 @@ function acceptsTinyOrChat(model: Model): boolean {
 function acceptsWeb(model: Model): boolean {
 	const kind = modelKind(model);
 	return kind === "search" || (kind === "chat" && model.webSearch !== undefined);
+}
+
+function acceptsWebEnginesOnly(model: Model): boolean {
+	return modelKind(model) === "search" && !(model.provider === "web" && model.id === "hosted");
 }
 
 function acceptsJudge(model: Model): boolean {
@@ -136,6 +141,10 @@ export function getRoleInfo(role: string, settings: Settings): RoleInfo {
 	const builtIn = isModelRole(role) ? MODEL_ROLES[role] : undefined;
 	const configuredTags = cfgModelTags.get(settings);
 	const configured = Object.hasOwn(configuredTags, role) ? configuredTags[role] : undefined;
+	const accepts =
+		role === "web" && cfgProvidersWebSearchEnginesOnly.get(settings)
+			? acceptsWebEnginesOnly
+			: (builtIn?.accepts ?? acceptsChat);
 
 	if (configured) {
 		return {
@@ -143,12 +152,12 @@ export function getRoleInfo(role: string, settings: Settings): RoleInfo {
 			name: configured.name || builtIn?.name || role,
 			color: configured.color && isValidThemeColor(configured.color) ? configured.color : builtIn?.color,
 			hidden: configured.hidden ?? builtIn?.hidden,
-			accepts: builtIn?.accepts ?? acceptsChat,
+			accepts,
 			section: builtIn?.section ?? "chat",
 		};
 	}
 
-	if (builtIn) return builtIn;
+	if (builtIn) return accepts === builtIn.accepts ? builtIn : { ...builtIn, accepts };
 
 	return { name: role, color: "muted", accepts: acceptsChat, section: "chat" };
 }

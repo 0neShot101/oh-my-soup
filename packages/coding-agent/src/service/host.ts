@@ -29,6 +29,8 @@ import {
 const MAX_SOCKET_QUEUE_BYTES = 2 * 1024 * 1024;
 const MAX_STARTUP_OUTPUT_BYTES = 256 * 1024;
 const REPAINT_FRAME = encodeServiceFrame(SERVICE_REPAINT, Buffer.alloc(0));
+const STARTUP_PROBE_STRIP_RE =
+	/\x1b7\x1b\[\?7l\x1b\[8m[\s\S]*?\x1b\[28m\x1b\[\?7h\x1b8|\x1b\[[?>=]?[0-9;]*[nc]|\x1b\](?:10|11);\?(?:\x07|\x1b\\)|\x1b\]99;[^\x07\x1b]*(?:\x07|\x1b\\)|\x1b_(?:25a1|tsp);[\s\S]*?\x1b\\|\x1b\[\?[0-9;]*\$p|\x1b\[\?9001[hl]/gu;
 
 interface TerminalSession {
 	pty: PtySession;
@@ -190,14 +192,18 @@ export class TerminalServiceHost {
 						}
 						negotiating = true;
 						if (type === SERVICE_CONTROL) {
-							const response = this.#control(payload, socket);
-							clearTimeout(authTimer);
-							reply(socket, SERVICE_CONTROL, response);
-							ending = true;
-							const watched = this.#watchers.get(socket);
-							if (watched) {
-								if (watched.repaintPending) this.#repaint(watched);
-							} else socket.end();
+							void Promise.resolve()
+								.then(() => this.#control(payload, socket))
+								.then(response => {
+									clearTimeout(authTimer);
+									reply(socket, SERVICE_CONTROL, response);
+									ending = true;
+									const watched = this.#watchers.get(socket);
+									if (watched) {
+										if (watched.repaintPending) this.#repaint(watched);
+									} else socket.end();
+								})
+								.catch(fail);
 						} else {
 							void this.#attach(socket, payload, () => {
 								clearTimeout(authTimer);
@@ -261,33 +267,44 @@ export class TerminalServiceHost {
 		let terminal: TerminalSession;
 		let created = false;
 		if (raw.sessionPath !== undefined) {
-			// A targeted attach never falls through to the launch path, including when the publication vanished.
-			terminal = this.#target(requestPath(raw.sessionPath, "session"));
+			const targetPath = requestPath(raw.sessionPath, "session");
+			if (raw.resume === true && !this.#published.has(pathKey(targetPath))) {
+				const canonicalCwd = await canonicalProjectDir(cwd);
+				if (!(await fs.stat(canonicalCwd)).isDirectory())
+					throw new Error(`Project path is not a directory: ${canonicalCwd}`);
+				terminal = await this.#launch(canonicalCwd, cols, rows, targetPath);
+				created = true;
+			} else {
+				// A targeted attach never falls through to the launch path unless resume=true was requested.
+				terminal = this.#target(targetPath);
+			}
 		} else {
 			const canonicalCwd = await canonicalProjectDir(cwd);
 			if (!(await fs.stat(canonicalCwd)).isDirectory())
 				throw new Error(`Project path is not a directory: ${canonicalCwd}`);
 			const key = pathKey(canonicalCwd);
 			for (;;) {
-				const matching = this.#forCwd(key);
+				const matching = raw.newSession === true ? undefined : this.#forCwd(key);
 				if (matching) {
 					terminal = matching;
 					break;
 				}
-				let pending = this.#launches.get(key);
+				let pending = raw.newSession === true ? undefined : this.#launches.get(key);
 				if (!pending) {
-					pending = this.#launch(canonicalCwd, cols, rows);
-					this.#launches.set(key, pending);
-					const launched = pending;
-					const forget = (): void => {
-						if (this.#launches.get(key) === launched) this.#launches.delete(key);
-					};
-					void launched.then(forget, forget);
+					const launched = this.#launch(canonicalCwd, cols, rows);
+					pending = launched;
+					if (raw.newSession !== true) {
+						this.#launches.set(key, launched);
+						const forget = (): void => {
+							if (this.#launches.get(key) === launched) this.#launches.delete(key);
+						};
+						void launched.then(forget, forget);
+					}
 					created = true;
 				}
 				terminal = await pending;
 				if (!terminal.alive) throw new Error("Interactive OMS exited before attachment");
-				if (pathKey(terminal.cwd) === key) break;
+				if (raw.newSession === true || pathKey(terminal.cwd) === key) break;
 				// A startup/session switch can change cwd while a launch is pending. Its current cwd is authoritative.
 				created = false;
 			}
@@ -318,7 +335,7 @@ export class TerminalServiceHost {
 	#forCwd(key: string): TerminalSession | undefined {
 		let unpublished: TerminalSession | undefined;
 		for (const terminal of this.#terminals.values()) {
-			if (!terminal.alive || pathKey(terminal.cwd) !== key) continue;
+			if (!terminal.alive || terminal.clients.size > 0 || pathKey(terminal.cwd) !== key) continue;
 			if (terminal.session) return terminal;
 			unpublished ??= terminal;
 		}
@@ -349,7 +366,7 @@ export class TerminalServiceHost {
 		}
 	}
 
-	#control(data: Buffer, socket: net.Socket): object {
+	async #control(data: Buffer, socket: net.Socket): Promise<object> {
 		const raw = this.#request(data);
 		if (raw.type === "list") {
 			const sessions: LiveServiceSession[] = [];
@@ -396,32 +413,62 @@ export class TerminalServiceHost {
 		if (raw.type === "handoff") {
 			const target = this.#target(requestPath(raw.sessionPath, "session"));
 			if (target === terminal) return { ok: true, handedOff: false };
-			const reset = encodeServiceFrame(SERVICE_RESET, Buffer.alloc(0));
-			for (const socket of terminal.clients) {
-				if (socket.destroyed) {
-					this.#attachments.delete(socket);
-					continue;
-				}
-				this.#attachments.set(socket, target);
-				target.clients.add(socket);
-				sendFrame(socket, reset);
-			}
-			terminal.clients.clear();
-			this.#repaint(target);
-			target.attachedBefore = true;
-			target.startupOutput.length = 0;
-			target.startupBytes = 0;
+			this.#moveClients(terminal, target);
 			return { ok: true, handedOff: true };
+		}
+		if (raw.type === "spawn") {
+			const targetCwd =
+				raw.cwd === undefined ? terminal.cwd : await canonicalProjectDir(requestPath(raw.cwd, "project"));
+			const targetSessionPath = raw.sessionPath === undefined ? undefined : requestPath(raw.sessionPath, "session");
+			if (targetSessionPath !== undefined) {
+				const existing = this.#published.get(pathKey(targetSessionPath));
+				if (existing?.alive && this.#terminals.get(existing.pid) === existing) {
+					if (existing === terminal) return { ok: true, spawned: false, pid: existing.pid };
+					this.#moveClients(terminal, existing);
+					return { ok: true, spawned: true, pid: existing.pid };
+				}
+			}
+			const spawned = await this.#launch(targetCwd, terminal.cols, terminal.rows, targetSessionPath);
+			this.#moveClients(terminal, spawned, true);
+			return { ok: true, spawned: true, pid: spawned.pid };
 		}
 		throw new Error("Invalid service control request");
 	}
 
-	async #launch(cwd: string, cols: number, rows: number): Promise<TerminalSession> {
+	#moveClients(source: TerminalSession, target: TerminalSession, replayStartup = false): void {
+		const reset = encodeServiceFrame(SERVICE_RESET, Buffer.alloc(0));
+		for (const client of source.clients) {
+			if (client.destroyed) {
+				this.#attachments.delete(client);
+				continue;
+			}
+			this.#attachments.set(client, target);
+			target.clients.add(client);
+			sendFrame(client, reset);
+			if (replayStartup && !target.attachedBefore) {
+				for (const chunk of target.startupOutput) send(client, SERVICE_OUTPUT, chunk);
+			}
+		}
+		source.clients.clear();
+		if (!replayStartup || target.attachedBefore || target.startupTruncated) {
+			this.#repaint(target);
+		}
+		target.attachedBefore = true;
+		target.startupOutput.length = 0;
+		target.startupBytes = 0;
+	}
+
+	async #launch(cwd: string, cols: number, rows: number, sessionPath?: string): Promise<TerminalSession> {
 		const argv = resolveCliEntryCmd();
 		const application = argv[0];
 		if (!application) throw new Error("OMS executable is unavailable");
 		const profile = getActiveProfile();
-		const args = [...argv.slice(1), ...(profile ? ["--profile", profile] : []), "--standalone"];
+		const args = [
+			...argv.slice(1),
+			...(profile ? ["--profile", profile] : []),
+			"--standalone",
+			...(sessionPath ? ["--session", sessionPath] : []),
+		];
 		const pty = new PtySession();
 		this.#ptys.add(pty);
 		const terminal: TerminalSession = {
@@ -464,6 +511,7 @@ export class TerminalServiceHost {
 				(error, chunk) => {
 					if (error) process.stderr.write(`OMS service PTY error: ${error.message}\n`);
 					if (!chunk) return;
+					let sanitizedChunk = chunk;
 					if (terminal.clients.size === 0) {
 						const response = responder.feed(chunk);
 						if (response)
@@ -471,8 +519,10 @@ export class TerminalServiceHost {
 								pty.write(response);
 							} catch {}
 						if (terminal.attachedBefore) return;
+						sanitizedChunk = chunk.replace(STARTUP_PROBE_STRIP_RE, "");
+						if (!sanitizedChunk) return;
 					}
-					const bytes = Buffer.from(chunk);
+					const bytes = Buffer.from(sanitizedChunk);
 					if (terminal.clients.size > 0) {
 						for (let offset = 0; offset < bytes.byteLength; offset += SERVICE_MAX_FRAME_BYTES) {
 							const frame = encodeServiceFrame(

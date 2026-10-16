@@ -19,9 +19,14 @@ import {
 	closeConnection,
 	ensureConnection,
 	ensureHostInfo,
+	getActivePortForwards,
 	getCachedHostInfoSync,
 	type SSHConnectionTarget,
 	type SSHHostInfo,
+	type SSHPortForward,
+	startPortForward,
+	stopAllPortForwards,
+	stopPortForward,
 } from "./connection-manager";
 
 // `tools/path-utils` (home of expandTilde) pulls in the internal-url router,
@@ -32,6 +37,16 @@ function expandHome(filePath: string): string {
 		? path.join(os.homedir(), filePath.slice(2))
 		: filePath;
 }
+
+export type SSHPortForwardInput =
+	| string
+	| {
+			type?: "local" | "remote" | "dynamic";
+			localPort?: number;
+			localHost?: string;
+			remotePort?: number;
+			remoteHost?: string;
+	  };
 
 /** What the agent supplies to open a session; everything but `host` is optional. */
 export interface SSHSessionRequest {
@@ -46,6 +61,8 @@ export interface SSHSessionRequest {
 	password?: string;
 	/** Windows hosts: run commands under a POSIX compat shell when one is found (default on). */
 	compat?: boolean;
+	/** Optional port forwards to establish on connect. */
+	forwards?: readonly SSHPortForwardInput[];
 }
 
 export interface SSHSessionInfo {
@@ -57,6 +74,8 @@ export interface SSHSessionInfo {
 	hostInfo?: SSHHostInfo;
 	/** True for sessions opened in this process; false for configured `ssh.json` hosts. */
 	adHoc: boolean;
+	/** Active port forwards / tunnels on this session or host. */
+	forwards?: SSHPortForward[];
 }
 
 const sessions = new Map<string, SSHConnectionTarget>();
@@ -111,7 +130,159 @@ function authKind(target: SSHConnectionTarget): SSHSessionInfo["auth"] {
 }
 
 function toInfo(target: SSHConnectionTarget, adHoc: boolean, hostInfo?: SSHHostInfo): SSHSessionInfo {
-	return { name: target.name, address: formatSshAddress(target), auth: authKind(target), hostInfo, adHoc };
+	const forwards = getActivePortForwards(target.name);
+	return {
+		name: target.name,
+		address: formatSshAddress(target),
+		auth: authKind(target),
+		hostInfo,
+		adHoc,
+		...(forwards.length > 0 ? { forwards } : {}),
+	};
+}
+
+function formatForwardHost(host: string): string {
+	const trimmed = host.trim() || "127.0.0.1";
+	if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
+	return trimmed.includes(":") ? `[${trimmed}]` : trimmed;
+}
+
+function validatePortNumber(port: number, label: string): number {
+	if (!Number.isInteger(port) || port < 1 || port > 65535) {
+		throw new Error(`Invalid SSH ${label} port "${port}": must be an integer between 1 and 65535`);
+	}
+	return port;
+}
+
+function splitForwardTokens(spec: string): string[] {
+	const tokens: string[] = [];
+	let current = "";
+	let inBrackets = false;
+	for (let i = 0; i < spec.length; i++) {
+		const ch = spec[i]!;
+		if (ch === "[") {
+			inBrackets = true;
+			current += ch;
+		} else if (ch === "]") {
+			inBrackets = false;
+			current += ch;
+		} else if (ch === ":" && !inBrackets) {
+			tokens.push(current);
+			current = "";
+		} else {
+			current += ch;
+		}
+	}
+	tokens.push(current);
+	return tokens;
+}
+
+/** Parse a shorthand string or structured port-forward request into a canonical OpenSSH forward spec. */
+export function parsePortForward(
+	input: SSHPortForwardInput,
+	defaultType: "local" | "remote" | "dynamic" = "local",
+): SSHPortForward {
+	if (typeof input === "string") {
+		let rest = input.trim();
+		let type = defaultType;
+		const prefixMatch = /^(?:-(L|R|D)\s*|(L|R|D|local|remote|dynamic):)/i.exec(rest);
+		if (prefixMatch) {
+			const token = (prefixMatch[1] ?? prefixMatch[2] ?? "").toLowerCase();
+			if (token === "l" || token === "local") type = "local";
+			else if (token === "r" || token === "remote") type = "remote";
+			else if (token === "d" || token === "dynamic") type = "dynamic";
+			rest = rest.slice(prefixMatch[0].length).trim();
+		}
+		const parts = splitForwardTokens(rest);
+		if (type === "dynamic") {
+			if (parts.length === 1 && /^\d+$/.test(parts[0]!)) {
+				const listenPort = validatePortNumber(Number(parts[0]), "dynamic listen");
+				const bindAddress = "127.0.0.1";
+				return { type, flag: "-D", spec: `${bindAddress}:${listenPort}`, bindAddress, listenPort };
+			}
+			if (parts.length === 2 && /^\d+$/.test(parts[1]!)) {
+				const bindAddress = formatForwardHost(parts[0]!);
+				const listenPort = validatePortNumber(Number(parts[1]), "dynamic listen");
+				return { type, flag: "-D", spec: `${bindAddress}:${listenPort}`, bindAddress, listenPort };
+			}
+			throw new Error(
+				`Invalid dynamic SSH forward "${input}": expected "[bind_address:]port" (e.g. "1080" or "127.0.0.1:1080")`,
+			);
+		}
+		const flag = type === "remote" ? "-R" : "-L";
+		if (parts.length === 3 && /^\d+$/.test(parts[0]!) && /^\d+$/.test(parts[2]!)) {
+			const listenPort = validatePortNumber(Number(parts[0]), "listen");
+			const bindAddress = "127.0.0.1";
+			const targetHost = formatForwardHost(parts[1]!);
+			const targetPort = validatePortNumber(Number(parts[2]), "target");
+			return {
+				type,
+				flag,
+				spec: `${bindAddress}:${listenPort}:${targetHost}:${targetPort}`,
+				bindAddress,
+				listenPort,
+				targetHost,
+				targetPort,
+			};
+		}
+		if (parts.length === 4 && /^\d+$/.test(parts[1]!) && /^\d+$/.test(parts[3]!)) {
+			const bindAddress = formatForwardHost(parts[0]!);
+			const listenPort = validatePortNumber(Number(parts[1]), "listen");
+			const targetHost = formatForwardHost(parts[2]!);
+			const targetPort = validatePortNumber(Number(parts[3]), "target");
+			return {
+				type,
+				flag,
+				spec: `${bindAddress}:${listenPort}:${targetHost}:${targetPort}`,
+				bindAddress,
+				listenPort,
+				targetHost,
+				targetPort,
+			};
+		}
+		throw new Error(
+			`Invalid SSH port forward "${input}": expected "[bind_address:]port:host:hostport" (e.g. "8080:127.0.0.1:80")`,
+		);
+	}
+
+	const type = input.type ?? defaultType;
+	if (type === "dynamic") {
+		if (input.localPort === undefined) {
+			throw new Error("Dynamic SSH port forward (-D) requires local_port");
+		}
+		const listenPort = validatePortNumber(input.localPort, "local");
+		const bindAddress = formatForwardHost(input.localHost ?? "127.0.0.1");
+		return { type, flag: "-D", spec: `${bindAddress}:${listenPort}`, bindAddress, listenPort };
+	}
+	if (input.localPort === undefined || input.remotePort === undefined) {
+		throw new Error(
+			`${type === "remote" ? "Remote (-R)" : "Local (-L)"} SSH port forward requires both local_port and remote_port`,
+		);
+	}
+	const localPort = validatePortNumber(input.localPort, "local");
+	const remotePort = validatePortNumber(input.remotePort, "remote");
+	const localHost = formatForwardHost(input.localHost ?? "127.0.0.1");
+	const remoteHost = formatForwardHost(input.remoteHost ?? "127.0.0.1");
+	if (type === "remote") {
+		return {
+			type,
+			flag: "-R",
+			spec: `${remoteHost}:${remotePort}:${localHost}:${localPort}`,
+			bindAddress: remoteHost,
+			listenPort: remotePort,
+			targetHost: localHost,
+			targetPort: localPort,
+		};
+	}
+	return {
+		type: "local",
+		flag: "-L",
+		spec: `${localHost}:${localPort}:${remoteHost}:${remotePort}`,
+		bindAddress: localHost,
+		listenPort: localPort,
+		targetHost: remoteHost,
+		targetPort: remotePort,
+	};
 }
 
 /** The target a session request resolves to, before any connection is made. */
@@ -171,6 +342,11 @@ export async function openSession(request: SSHSessionRequest, cwd?: string): Pro
 	await ensureConnection(target);
 	sessions.set(target.name, target);
 	const hostInfo = await ensureHostInfo(target);
+	if (request.forwards?.length) {
+		for (const item of request.forwards) {
+			await startPortForward(target, parsePortForward(item));
+		}
+	}
 	return toInfo(target, true, hostInfo);
 }
 
@@ -230,6 +406,59 @@ export async function resolveSessionTarget(name: string, cwd?: string): Promise<
 	if (open) return open;
 	const configured = (await loadConfiguredHosts(cwd)).find(host => host.name === name);
 	return configured ? configuredTarget(configured) : undefined;
+}
+
+/** Establish one or more SSH port forwards on an open session or configured host. */
+export async function forwardSessionPorts(
+	name: string,
+	inputs: readonly SSHPortForwardInput[],
+	cwd?: string,
+): Promise<{ session: SSHSessionInfo; forwards: SSHPortForward[] }> {
+	if (inputs.length === 0) {
+		throw new Error("forward requires at least one port forward specification");
+	}
+	const target = await resolveSessionTarget(name, cwd);
+	if (!target) {
+		throw new Error(
+			`Unknown SSH target "${name}". Open a session first (op="connect") or pass a configured ssh.json host name.`,
+		);
+	}
+	const parsed = inputs.map(item => parsePortForward(item));
+	const established: SSHPortForward[] = [];
+	for (const forward of parsed) {
+		established.push(await startPortForward(target, forward));
+	}
+	const adHoc = sessions.has(target.name);
+	return {
+		session: toInfo(target, adHoc, getCachedHostInfoSync(target)),
+		forwards: established,
+	};
+}
+
+/** Cancel specific port forwards (or all active forwards when `inputs` is empty) on a session or host. */
+export async function unforwardSessionPorts(
+	name: string,
+	inputs: readonly SSHPortForwardInput[] = [],
+	cwd?: string,
+): Promise<{ session: SSHSessionInfo; removed: number }> {
+	const target = await resolveSessionTarget(name, cwd);
+	if (!target) {
+		throw new Error(`Unknown SSH target "${name}".`);
+	}
+	let removed = 0;
+	if (inputs.length === 0) {
+		removed = await stopAllPortForwards(target);
+	} else {
+		const parsed = inputs.map(item => parsePortForward(item));
+		for (const forward of parsed) {
+			if (await stopPortForward(target, forward)) removed++;
+		}
+	}
+	const adHoc = sessions.has(target.name);
+	return {
+		session: toInfo(target, adHoc, getCachedHostInfoSync(target)),
+		removed,
+	};
 }
 
 /** Close every ad hoc session (process shutdown). */

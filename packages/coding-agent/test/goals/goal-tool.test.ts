@@ -125,7 +125,7 @@ describe("GoalTool", () => {
 		});
 		expect(completed.content[0]).toEqual({
 			type: "text",
-			text: "Goal: Complete route\nStatus: complete\nTokens: 7 used / 10 budget\nRemaining tokens: 3\n\nGoal achieved. Report final budget usage to the user: tokens used: 7 of 10; time used: 3 seconds.",
+			text: "Goal: Complete route\nStatus: complete\n\nGoal achieved. Time used: 3 seconds.",
 		});
 	});
 

@@ -316,7 +316,7 @@ test("concurrent terminal handles share output and input; independent detach and
 	first.peer.input("earlier");
 	await first.peer.waitForOutput(`INPUT:${first.reply.pid}:earlier`);
 	const firstOffset = first.peer.output.length;
-	const second = await attach(fixture, fixture.dir);
+	const second = await attach(fixture, fixture.dir, path.join(fixture.dir, `session-${first.reply.pid}.jsonl`));
 	expect(second.reply).toEqual({ ok: true, created: false, pid: first.reply.pid });
 	await Promise.all([
 		first.peer.waitForOutput(`REPAINT:${first.reply.pid}`, firstOffset),
@@ -362,6 +362,11 @@ test("concurrent terminal handles share output and input; independent detach and
 	expect(third.reply).toEqual({ ok: true, created: false, pid: first.reply.pid });
 	await third.peer.waitForOutput(`REPAINT:${first.reply.pid}`);
 	expect(third.peer.output).not.toContain("still-running");
+	const fourth = await attach(fixture, fixture.dir);
+	expect(fourth.reply.ok).toBeTrue();
+	expect(fourth.reply.created).toBeTrue();
+	expect(fourth.reply.pid).not.toBe(first.reply.pid);
+	await fourth.peer.waitForOutput(`READY:${fourth.reply.pid}`);
 }, 30_000);
 
 test("published preallocated files and current cwd are authoritative for exact and ordinary attachments", async () => {
@@ -386,6 +391,10 @@ test("published preallocated files and current cwd are authoritative for exact a
 	const normalizedTarget = `${otherCwd}${path.sep}unused${path.sep}..${path.sep}saved.jsonl`;
 	const targeted = await attach(fixture, fixture.dir, normalizedTarget);
 	expect(targeted.reply).toEqual({ ok: true, created: false, pid: first.reply.pid });
+	first.peer.socket.destroy();
+	await first.peer.waitFor(() => first.peer.closed || undefined, "first detach before cwd reattach");
+	targeted.peer.socket.destroy();
+	await targeted.peer.waitFor(() => targeted.peer.closed || undefined, "targeted detach before cwd reattach");
 	const currentCwd = await attach(fixture, otherCwd);
 	expect(currentCwd.reply).toEqual({ ok: true, created: false, pid: first.reply.pid });
 	const oldCwd = await attach(fixture, fixture.dir);
@@ -404,7 +413,7 @@ test("a child handoff moves every handle and leaves the source running without a
 	await fs.mkdir(targetCwd);
 	const first = await attach(fixture, fixture.dir);
 	await first.peer.waitForOutput(`READY:${first.reply.pid}`);
-	const second = await attach(fixture, fixture.dir);
+	const second = await attach(fixture, fixture.dir, path.join(fixture.dir, `session-${first.reply.pid}.jsonl`));
 	await second.peer.waitForOutput(`REPAINT:${first.reply.pid}`);
 	const target = await attach(fixture, targetCwd);
 	await target.peer.waitForOutput(`READY:${target.reply.pid}`);

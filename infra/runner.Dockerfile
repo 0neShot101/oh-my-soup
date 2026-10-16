@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Preloaded oms-kata runner image.
+# Preloaded omp-kata runner image.
 #
 # Stock GitHub Actions runner (Ubuntu 24.04) with the dependencies CI installs
 # on every job baked in, so each ephemeral Kata microVM boots with them already
@@ -14,13 +14,13 @@
 #   - rust nightly (pinned) + clippy/rustfmt/rust-analyzer + the rust-toolchain.toml
 #     targets (linux-x64, windows-msvc x64/arm64) and linux-arm64 for zigbuild
 #
-# Rebuild + reimport (see /root/oms-kata-runner.md) after bumping the ARGs below
+# Rebuild + reimport (see /root/omp-kata-runner.md) after bumping the ARGs below
 # or the apt set. No CI job requires the apt tools any more; they stay baked
 # for interactive/agent use on the runner.
 FROM ghcr.io/actions/actions-runner:latest
 
 ARG RUST_NIGHTLY=nightly-2026-10-06
-ARG BUN_VERSION=1.4.2
+ARG BUN_VERSION=1.4.3
 ARG SCCACHE_VERSION=0.18.0
 ARG ZIG_VERSION=0.16.0
 ARG CMAKE_VERSION=4.4.3
@@ -89,7 +89,7 @@ RUN arch="$(dpkg --print-architecture)" \
 RUN chmod -R a+rX "$BAZELISK_HOME" \
  && rm -rf /root/.cache/bazel /root/.bazelrc
 # Pre-own ~/.cache for the runner user: kubelet otherwise creates it root-owned
-# as the parent of the oms-bazel-repo subPath mountpoint, breaking sibling dirs
+# as the parent of the omp-bazel-repo subPath mountpoint, breaking sibling dirs
 # like bazel's default output_user_root.
 RUN install -d -o 1001 -g 1001 -m 0755 /home/runner/.cache
 

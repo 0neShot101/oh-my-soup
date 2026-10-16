@@ -1544,6 +1544,11 @@ export class Settings {
 		return this.#agentDir;
 	}
 
+	/** Resolved absolute paths of the config overlays supplied to this instance. */
+	getConfigFiles(): readonly string[] {
+		return [...this.#configFiles];
+	}
+
 	/**
 	 * Monotonic revision for consumers caching derived effective settings.
 	 * Changes after every merged-layer or cwd-scope rebuild, including overlays
@@ -3508,6 +3513,26 @@ export class Settings {
 			delete raw["exa.enableSearch"];
 			delete raw["exa.enableResearcher"];
 			delete raw["exa.enableWebsets"];
+		}
+
+		const webSearchObj = isRecord(raw.web_search) ? raw.web_search : undefined;
+		const legacyEnginesOnly =
+			typeof raw["web_search.enginesOnly"] === "boolean"
+				? raw["web_search.enginesOnly"]
+				: typeof webSearchObj?.enginesOnly === "boolean"
+					? webSearchObj.enginesOnly
+					: undefined;
+		if (legacyEnginesOnly !== undefined) {
+			const providersRoot = isRecord(raw.providers) ? raw.providers : {};
+			if (!("providers.webSearchEnginesOnly" in raw) && typeof providersRoot.webSearchEnginesOnly !== "boolean") {
+				providersRoot.webSearchEnginesOnly = legacyEnginesOnly;
+				raw.providers = providersRoot;
+			}
+			delete raw["web_search.enginesOnly"];
+			if (webSearchObj) {
+				delete webSearchObj.enginesOnly;
+				if (Object.keys(webSearchObj).length === 0) delete raw.web_search;
+			}
 		}
 
 		// computer.backend and model-specific controller routing were removed

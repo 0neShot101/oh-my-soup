@@ -35,6 +35,7 @@ describe("default web chain", () => {
 	let attempted: string[];
 
 	beforeEach(async () => {
+		resetSettingsForTest();
 		const settings = await Settings.init({ inMemory: true });
 		authStorage = createInMemoryAuthStorage();
 		// Paid credentials the chain must never spend unless the session already runs on them.
@@ -60,18 +61,15 @@ describe("default web chain", () => {
 		return model;
 	}
 
-	it("searches through the session model in place of web/hosted and never reaches paid engines", async () => {
+	it("tries dedicated web engines before web/hosted and never reaches paid engines", async () => {
 		await runSearchQuery(
 			{ query: "anything" },
 			{ authStorage, modelRegistry, sessionModel: sessionModel("anthropic", "claude-sonnet-4-5") },
 		);
 
-		// The cheaper same-provider swap runs first; its failure falls back to the session model as-is.
-		expect(attempted.slice(0, 3)).toEqual([
-			"web/parallel",
-			"anthropic/claude-haiku-4-5",
-			"anthropic/claude-sonnet-4-5",
-		]);
+		// Dedicated free web engines run first; web/hosted (swap then session model) runs last.
+		expect(attempted.slice(0, 3)).toEqual(["web/parallel", "web/exa", "web/public"]);
+		expect(attempted.slice(-2)).toEqual(["anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-5"]);
 		expect(attempted.filter(selector => !selector.startsWith("web/"))).toEqual([
 			"anthropic/claude-haiku-4-5",
 			"anthropic/claude-sonnet-4-5",
@@ -79,6 +77,32 @@ describe("default web chain", () => {
 		for (const paid of ["web/perplexity", "web/tavily", "web/kagi", "web/brave", "web/zai"]) {
 			expect(attempted).not.toContain(paid);
 		}
+	});
+
+	it("disables all chat/LLM models from web search when providers.webSearchEnginesOnly is true", async () => {
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true, overrides: { "providers.webSearchEnginesOnly": true } });
+
+		await runSearchQuery(
+			{ query: "anything" },
+			{ authStorage, modelRegistry, sessionModel: sessionModel("anthropic", "claude-sonnet-4-5") },
+		);
+
+		expect(attempted.length).toBeGreaterThan(0);
+		expect(attempted.every(selector => selector.startsWith("web/"))).toBe(true);
+		expect(attempted).not.toContain("web/hosted");
+
+		const blockedProvider = await runSearchQuery(
+			{ query: "anything", provider: "anthropic" },
+			{ authStorage, modelRegistry, sessionModel: sessionModel("anthropic", "claude-sonnet-4-5") },
+		);
+		expect(blockedProvider.details.error).toContain("providers.webSearchEnginesOnly");
+
+		const blockedModel = await runSearchQuery(
+			{ query: "anything", model: "web/hosted" },
+			{ authStorage, modelRegistry, sessionModel: sessionModel("anthropic", "claude-sonnet-4-5") },
+		);
+		expect(blockedModel.details.error).toContain("providers.webSearchEnginesOnly");
 	});
 
 	it("uses the session model as-is when its host does not expose the swap target", async () => {

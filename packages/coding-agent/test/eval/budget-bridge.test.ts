@@ -39,43 +39,14 @@ function usage(output: number): UsageStatistics {
 }
 
 describe("runEvalBudget", () => {
-	it("prefers an active +Nk turn directive over Goal Mode", async () => {
+	it("disallows agents from inspecting the remaining token budget", async () => {
 		const session = makeSession({
 			turn: { total: 200_000, spent: 5_000, hard: true },
 			goal: goalState({ tokenBudget: 100_000, tokensUsed: 4_200 }),
+			usage: usage(777),
 		});
-		expect(await runEvalBudget({}, { session })).toEqual({ total: 200_000, spent: 5_000, hard: true });
-	});
-
-	it("reports an advisory turn budget as hard:false", async () => {
-		const session = makeSession({ turn: { total: 50_000, spent: 1_000, hard: false } });
-		expect(await runEvalBudget({}, { session })).toEqual({ total: 50_000, spent: 1_000, hard: false });
-	});
-
-	it("falls through to Goal Mode when no turn directive set a ceiling", async () => {
-		const session = makeSession({
-			turn: { total: null, spent: 7_777, hard: false },
-			goal: goalState({ tokenBudget: 100_000, tokensUsed: 4_200 }),
-		});
-		expect(await runEvalBudget({}, { session })).toEqual({ total: 100_000, spent: 4_200, hard: true });
-	});
-
-	it("treats a Goal Mode budget as hard, and a budgetless goal as no ceiling", async () => {
-		const withBudget = makeSession({ goal: goalState({ tokenBudget: 80_000, tokensUsed: 9_000 }) });
-		expect(await runEvalBudget({}, { session: withBudget })).toEqual({ total: 80_000, spent: 9_000, hard: true });
-
-		const noBudget = makeSession({ goal: goalState({ tokenBudget: undefined, tokensUsed: 1_234 }) });
-		expect(await runEvalBudget({}, { session: noBudget })).toEqual({ total: null, spent: 1_234, hard: false });
-	});
-
-	it("reports no ceiling but still surfaces spend", async () => {
-		const fromTurn = makeSession({ turn: { total: null, spent: 333, hard: false } });
-		expect(await runEvalBudget({}, { session: fromTurn })).toEqual({ total: null, spent: 333, hard: false });
-
-		const fromUsage = makeSession({ usage: usage(777) });
-		expect(await runEvalBudget({}, { session: fromUsage })).toEqual({ total: null, spent: 777, hard: false });
-
-		const empty = makeSession({});
-		expect(await runEvalBudget({}, { session: empty })).toEqual({ total: null, spent: 0, hard: false });
+		await expect(runEvalBudget({}, { session })).rejects.toThrow(
+			"Inspecting the remaining token budget is disabled.",
+		);
 	});
 });

@@ -259,6 +259,31 @@ describe("Parallel web search", () => {
 		});
 	});
 
+	it("demotes site:host/path into bare site:host plus path keywords so Parallel MCP does not zero-match", async () => {
+		delete process.env.PARALLEL_API_KEY;
+		const fetchMock = mockMcpFetch({
+			result: { structuredContent: { search_id: "search-parallel-mcp-path", results: [] } },
+		});
+
+		await searchParallel(
+			{
+				query: 'site:pve.proxmox.com/pve-docs/qm.conf.5.html "args" "cpulimit"',
+				fetch: fetchMock,
+			},
+			fakeAuthStorage,
+		);
+
+		expect(capturedRequestBody).toMatchObject({
+			params: {
+				name: "web_search",
+				arguments: {
+					objective: '"args" "cpulimit" pve-docs qm.conf.5.html',
+					search_queries: ['"args" "cpulimit" pve-docs qm.conf.5.html site:pve.proxmox.com'],
+				},
+			},
+		});
+	});
+
 	it("maps recency onto an after: operator when using anonymous MCP", async () => {
 		delete process.env.PARALLEL_API_KEY;
 		setSystemTime(new Date("2026-08-10T12:00:00Z"));
