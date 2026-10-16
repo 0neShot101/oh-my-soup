@@ -2,40 +2,6 @@
 
 ## [Unreleased]
 
-## [18.8.9] - 2026-10-10
-
-### Fixed
-
-- Fixed cross-platform release builds failing to verify Apple Foundation Models support.
-
-## [18.8.8] - 2026-10-10
-
-### Added
-
-- Added TRAMP-style SSH paths to the embedded shell filesystem, preserving literal filenames and remote-home-relative paths.
-
-### Fixed
-
-- Fixed the pi-natives version sentinel emitting "reinstall to re-sync" when a long-lived process survives an in-place upgrade: the loader now detects that the resident addon exposes a _prior_ release's sentinel and reports "oms was upgraded while this session was running — restart to pick up the new version (disk is already consistent)" instead of misdiagnosing it as a stale on-disk file ([#4812](https://github.com/can1357/oh-my-pi/issues/4812)).
-- Fixed native shell execution reporting `unterminated here document sequence` for a multi-command line that contains a here-doc with a quoted or escaped delimiter (`<<'TAG'`, `<<"TAG"`, `<<\TAG`) followed by another command (e.g. a `sqlite3 … <<'SQL' … SQL` query followed by an `echo`/second command). The output minimizer's segmented-chain runner rebuilds each `&&`/`;`/newline segment from the brush-parser AST via `pipeline.to_string()`, and that `Display` impl re-emits a quoted/escaped here-doc's *closing* delimiter with its quotes intact (`'SQL'` instead of the required bare `SQL`) — an invalid close tag that the re-run segment never matches. Here-doc-bearing pipelines are now ineligible for segmentation, so the command runs whole via the unsegmented path (where the executor parses it correctly); a lone here-doc was unaffected because it was never segmented.
-- Fixed native addon loading leaving stale `~/.oms/natives/<version>` cache directories behind after updates; successful loads now remove older version directories best-effort.
-
-### Added
-
-- Added `parseCodeStatus` to check code syntax and its resolved language without generating a summary ([#15904](https://github.com/can1357/oh-my-pi/pull/15904) by [@iliaal](https://github.com/iliaal)).
-
-### Changed
-
-- Reduced idle memory on GNU/Linux: once native work has been quiet for 5 seconds, freed native heap pages are returned to the OS without evicting caches ([#15905](https://github.com/can1357/oh-my-pi/pull/15905) by [@iliaal](https://github.com/iliaal))
-- Reduced memory held by cached code-structure parses: the cache now caps estimated syntax-tree memory instead of source size, keeps only a file's current and previous parse, and reparses edited files incrementally ([#15886](https://github.com/can1357/oh-my-pi/pull/15886) by [@H4vC](https://github.com/H4vC))
-- Changed `warmBlockParse` to skip files over 2 MiB (was 4 MiB), the size above which a typical parse no longer fits the cache ([#15886](https://github.com/can1357/oh-my-pi/pull/15886) by [@H4vC](https://github.com/H4vC))
-
-### Fixed
-
-- Fixed `listWorkspace({ reportDirectoryErrors: true, maxDepth: 0 })` returning an empty result for an unreadable root instead of failing the scan ([#15789](https://github.com/can1357/oh-my-pi/pull/15789))
-- Minimized cargo output now keeps one "Blocking waiting for file lock on …" line, so a build stuck behind another cargo process says why ([#14631](https://github.com/can1357/oh-my-pi/pull/14631) by [@jorgoose](https://github.com/jorgoose))
-- Fixed `grep` ignoring `maxCountPerFile` when the path is a single file, and single-file count mode stopping at the `maxCount` content cap ([#14162](https://github.com/can1357/oh-my-pi/issues/14162), [#14327](https://github.com/can1357/oh-my-pi/pull/14327) by [@F0Rextasy](https://github.com/F0Rextasy))
-
 ## [18.11.1] - 2026-10-15
 
 ### Added
@@ -123,6 +89,34 @@
 - Fixed macOS accessibility and window-management operations requiring Screen Recording permission; only screenshots and display listing now require that permission, and window listing includes windows beyond the frontmost 48. Window titles from other applications remain unavailable without Screen Recording permission.
 - Fixed macOS menu inspection and selection for menus containing items whose titles cannot be read; those items are now skipped safely.
 - Fixed syntax highlighting and language detection for several languages, including TOML, PowerShell, SCSS, Less, Vim script, GraphQL, Protobuf, Terraform/HCL, Dockerfile, CMake, INI, gitignore, Kotlin, Swift, Elixir, Sass, Python f-strings, Julia interpolations, and Elixir interpolations.
+
+## [18.8.9] - 2026-10-10
+
+### Fixed
+
+- Fixed cross-platform release builds failing to verify Apple Foundation Models support.
+
+## [18.8.8] - 2026-10-10
+
+### Added
+
+- Added TRAMP-style SSH paths to the embedded shell filesystem, preserving literal filenames and remote-home-relative paths.
+- Added `parseCodeStatus` to check code syntax and its resolved language without generating a summary ([#15904](https://github.com/can1357/oh-my-pi/pull/15904) by [@iliaal](https://github.com/iliaal)).
+
+### Fixed
+
+- Fixed the pi-natives version sentinel emitting "reinstall to re-sync" when a long-lived process survives an in-place upgrade: the loader now detects that the resident addon exposes a _prior_ release's sentinel and reports "oms was upgraded while this session was running — restart to pick up the new version (disk is already consistent)" instead of misdiagnosing it as a stale on-disk file ([#4812](https://github.com/can1357/oh-my-pi/issues/4812)).
+- Fixed native shell execution reporting `unterminated here document sequence` for a multi-command line that contains a here-doc with a quoted or escaped delimiter (`<<'TAG'`, `<<"TAG"`, `<<\TAG`) followed by another command (e.g. a `sqlite3 … <<'SQL' … SQL` query followed by an `echo`/second command). The output minimizer's segmented-chain runner rebuilds each `&&`/`;`/newline segment from the brush-parser AST via `pipeline.to_string()`, and that `Display` impl re-emits a quoted/escaped here-doc's *closing* delimiter with its quotes intact (`'SQL'` instead of the required bare `SQL`) — an invalid close tag that the re-run segment never matches. Here-doc-bearing pipelines are now ineligible for segmentation, so the command runs whole via the unsegmented path (where the executor parses it correctly); a lone here-doc was unaffected because it was never segmented.
+- Fixed native addon loading leaving stale `~/.oms/natives/<version>` cache directories behind after updates; successful loads now remove older version directories best-effort.
+- Fixed `listWorkspace({ reportDirectoryErrors: true, maxDepth: 0 })` returning an empty result for an unreadable root instead of failing the scan ([#15789](https://github.com/can1357/oh-my-pi/pull/15789))
+- Minimized cargo output now keeps one "Blocking waiting for file lock on …" line, so a build stuck behind another cargo process says why ([#14631](https://github.com/can1357/oh-my-pi/pull/14631) by [@jorgoose](https://github.com/jorgoose))
+- Fixed `grep` ignoring `maxCountPerFile` when the path is a single file, and single-file count mode stopping at the `maxCount` content cap ([#14162](https://github.com/can1357/oh-my-pi/issues/14162), [#14327](https://github.com/can1357/oh-my-pi/pull/14327) by [@F0Rextasy](https://github.com/F0Rextasy))
+
+### Changed
+
+- Reduced idle memory on GNU/Linux: once native work has been quiet for 5 seconds, freed native heap pages are returned to the OS without evicting caches ([#15905](https://github.com/can1357/oh-my-pi/pull/15905) by [@iliaal](https://github.com/iliaal))
+- Reduced memory held by cached code-structure parses: the cache now caps estimated syntax-tree memory instead of source size, keeps only a file's current and previous parse, and reparses edited files incrementally ([#15886](https://github.com/can1357/oh-my-pi/pull/15886) by [@H4vC](https://github.com/H4vC))
+- Changed `warmBlockParse` to skip files over 2 MiB (was 4 MiB), the size above which a typical parse no longer fits the cache ([#15886](https://github.com/can1357/oh-my-pi/pull/15886) by [@H4vC](https://github.com/H4vC))
 
 ## [18.8.8] - 2026-10-10
 

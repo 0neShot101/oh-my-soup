@@ -6533,7 +6533,7 @@ fn apply_hunks(
 			&& !hunk.old_lines.is_empty()
 			&& hunk.old_start_line.is_none()
 			&& !hunk.is_end_of_file
-			&& let Some((mut next, warnings)) = character_match(
+			&& let Some(matched) = character_match(
 				content,
 				path,
 				hunk,
@@ -6542,12 +6542,7 @@ fn apply_hunks(
 				first_match,
 				record.as_deref_mut(),
 			)? {
-			if had_newline && !next.ends_with('\n') {
-				next.push('\n');
-			} else if !had_newline {
-				next.truncate(next.trim_end_matches('\n').len());
-			}
-			return Ok((next, warnings));
+			return Ok(matched);
 		}
 	}
 	let lines = patch_rows(content).collect::<Vec<_>>();

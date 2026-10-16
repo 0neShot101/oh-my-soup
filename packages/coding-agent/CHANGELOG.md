@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.11.1] - 2026-10-16
+
 ### Added
 
 - Added `lsp.requestTimeout` setting to configure wait durations for language server diagnostics and requests
@@ -15,6 +17,9 @@
 - Agents now send `todo` updates alongside their next tool call instead of spending a separate model turn on them ([#15402](https://github.com/can1357/oh-my-pi/pull/15402) by [@will-bogusz](https://github.com/will-bogusz))
 - The Shared Language Servers setting now says what it does: each connection gets its own server, and a released one is reused while another oms instance keeps the project's mux running ([#14633](https://github.com/can1357/oh-my-pi/pull/14633) by [@jorgoose](https://github.com/jorgoose))
 - Memories saved explicitly through the extension `memory.save` API are now stored as `stated` rather than `unknown`, so they rank as deliberate memories in Mnemopi recall ([#13824](https://github.com/can1357/oh-my-pi/pull/13824) by [@sjawhar](https://github.com/sjawhar))
+- Updated `/usage`, `oms usage`, and the status line to display authoritative OpenCode Go quota usage directly from the official endpoint, replacing estimated costs with actual usage across three time windows (5h, 7d, and monthly).
+- Documented the source-available local protocol relay and clarified that production collaboration relay binaries are not currently published.
+- Enabled bounded Anthropic prompt-cache refreshes for the main agent loop while isolating advisor and side-channel requests from the shared refresh timer.
 
 ### Fixed
 
@@ -57,6 +62,44 @@
 - Fixed cancelling a bash job hard-killing it before its TERM cleanup handlers could run; it now gets up to one second to clean up before termination is forced ([#15709](https://github.com/can1357/oh-my-pi/pull/15709) by [@mg-mg-mg](https://github.com/mg-mg-mg))
 - Fixed the transcript collapsing to one line per entry after switching between a subagent and the main session mid-turn when an earlier turn left a tool call without a result ([#12247](https://github.com/can1357/oh-my-pi/issues/12247), [#15466](https://github.com/can1357/oh-my-pi/pull/15466) by [@shgew](https://github.com/shgew))
 - Fixed a retried tool losing its transcript card when the view was rebuilt (subagent focus switch, overlay close) while the tool was still running
+- Fixed Windows ARM64 installations selecting an x64 executable, including when running PowerShell under emulation.
+- Fixed `oms update` to upgrade Soup's Homebrew formula instead of targeting the upstream tap.
+- Fixed updates from Bun/npm installations attempting to install unpublished packages; Soup releases now explicitly select verified standalone binaries.
+- RPC clients now receive typed Beads reminders, including issue dependencies and mixed blocker references.
+- Fixed circular IRC waits between agents, including chains through the main agent, by reporting the cycle instead of waiting for a timeout.
+- Fixed subagents losing selected tools after compaction, parking, or restart, while preserving their permission ceilings and rejecting unavailable capability sources.
+- Fixed `--no-session --resume` to load saved history by ID, path, or picker without modifying the original transcript.
+- Fixed false "never displayed" edit rejections for previously read lines whose content and line numbers survive an edit, including unchanged preview rows after formatting.
+- Fixed repeated seen-line rejections after inline reveals when multiple snapshots share a tag, without authorizing content from a colliding snapshot.
+- Fixed edits on lines displayed by `@`-mentioned files after an earlier partial read; truncated mentions no longer number their notices as file content.
+- `oms plugin upgrade <name>` now upgrades npm- and git-installed plugins (e.g. `ida-mcp` installed from `github:HexRaysSA/ida-mcp#latest`, which `hcli mcp install` relies on) and resolves a bare marketplace plugin name, instead of failing with "Invalid plugin ID"; the plugin's enabled state and feature selection are kept ([#13812](https://github.com/can1357/oh-my-pi/pull/13812) by [@H4vC](https://github.com/H4vC))
+- Fixed multiple Language Server Protocol (LSP) issues, including concurrent sessions sharing backend overlays, stale document overlays after workspace edits, incorrect transactional edit advertisements, unhandled snippet placeholders in rust-analyzer, and failing to restore overwritten targets during failed file renames.
+- Fixed LSP `diagnostics` incorrectly reporting success when all language servers failed.
+- Fixed Hindsight memory scoping splitting repositories across multiple scopes on case-sensitive filesystems by lowercasing the project label.
+- Fixed the CLI crashing at startup with a raw `AuthBrokerError` when the configured auth broker is unreachable, replacing it with an actionable error message.
+- Fixed various resource and process leaks, including idle launch brokers staying alive indefinitely, stale MCP connections leaving child processes open, and undrained stdout in DAP `runInTerminal` requests.
+- Fixed custom STB-backed vision providers failing to decode WebP images by automatically detecting image formats from bytes and normalizing WebP blocks.
+- Fixed command-backed provider API keys (`!command`) staying pinned to cached values after receiving an HTTP 401 error.
+- Fixed the `/agents` Control Center failing to open when model overrides are configured as YAML arrays.
+- Fixed session-title generation regressions by restoring plain-sentence phrasing and name-fidelity instructions.
+- Fixed agent-facing prompts and system instructions mentioning tools that are absent from the current session catalog.
+- Fixed manual `/shake` discarding all tool results; it now retains a small recent tail of results to preserve active working context.
+- Fixed `oms install` failing validation for extensions importing legacy `is<Tool>ToolResult` event guards.
+- Fixed profile aliases generated by standalone binaries invoking Bun's embedded virtual script instead of the installed `oms` command.
+- Fixed `/skill:<name>` tokens in `/plan` or `/vibe` inline prompts being treated as literal text instead of executing the skill.
+- Fixed long streaming `write` previews stalling the TUI by optimizing file scanning and splitting.
+- Fixed the Windows console disappearing when running commands like `/stats`.
+- Fixed retry-fallback selection switching to a fallback model with a context window too small to hold the current session context.
+- Fixed OpenCode discovery ignoring `opencode.jsonc` files and rejecting comments in `opencode.json`.
+- Fixed WSL2 startup hanging forever when the Windows interop pipe is wedged: the WSL host-home discovery probes (`cmd.exe`, `wslpath`) now run under a 500ms hard timeout and fall back to the Linux `$HOME`/`~/.oms` candidates ([#8402](https://github.com/can1357/oh-my-pi/issues/8402)).
+- Fixed a hang in headless `oms -p` runs when `plan.defaultOnStartup: true` is enabled by disabling the startup default in print mode.
+- Fixed `display.hideToolActivity` failing to hide certain activity blocks, such as reminders, diagnostics, and completions.
+- Fixed several issues in the MCP Streamable HTTP transport, including updating the negotiated protocol version to `2025-11-25`, resolving connection drops and SSE resumption gaps, and preventing double-execution of tools during auth refreshes.
+- Fixed `/handoff` losing local artifacts (plans, scratch files, research notes) by copying them across the handoff session boundary.
+- Replaced libarchive-based tar parsing with a hardened, in-process tar reader to prevent crashes and safely handle complex archive structures, symlinks, and sparse metadata.
+- Fixed `Ctrl+O` tool-output expansion failing to reach launch-completion messages wrapped in the hidden tool activity container.
+
+Older entries are archived in [packages/coding-agent/CHANGELOG.md@b541d61d3f56](https://github.com/pickpocket/oh-my-soup/blob/b541d61d3f56351cad006223da4367eec8fbb667/packages/coding-agent/CHANGELOG.md).
 
 ## [18.11.1] - 2026-10-15
 
@@ -396,6 +439,17 @@
 
 - Fixed table charts failing on a table cell such as `3 constructor` or `2 valueOf calls`
 
+## [18.8.9] - 2026-10-10
+
+### Fixed
+
+- Fixed extension lifecycle events being delivered twice after the upstream merge.
+- Fixed switching models retaining the previous model's inline tool-description policy.
+- Fixed an empty native HUD row remaining visible when only the separate todo activity line was populated.
+- Fixed identical streamed replacements incorrectly aborting the assistant turn as a missing-match error.
+- Fixed `wait` omitting peer activity and failing to report accepted child runs that still need cleanup.
+- Fixed archive reads returning stale listings after rapid same-size rewrites with restored modification times.
+
 ## [18.8.8] - 2026-10-10
 
 ### Added
@@ -421,17 +475,6 @@
 - Fixed ordinary subagent launches failing when an interactive parent's inherited tools included parent-only or disabled child capabilities such as `ask` and `lsp`; missing custom tools still fail closed.
 - Fixed Windows `edit` path resolution and snapshot recovery for `file:///C:/…` targets and junction-backed or differently cased working directories.
 - Fixed Windows `oms update` from an extensionless Git Bash npm shim and preserved existing `oms.exe` launchers across running-process replacement and rollback.
-
-## [18.8.9] - 2026-10-10
-
-### Fixed
-
-- Fixed extension lifecycle events being delivered twice after the upstream merge.
-- Fixed switching models retaining the previous model's inline tool-description policy.
-- Fixed an empty native HUD row remaining visible when only the separate todo activity line was populated.
-- Fixed identical streamed replacements incorrectly aborting the assistant turn as a missing-match error.
-- Fixed `wait` omitting peer activity and failing to report accepted child runs that still need cleanup.
-- Fixed archive reads returning stale listings after rapid same-size rewrites with restored modification times.
 
 ## [18.8.8] - 2026-10-10
 
@@ -461,50 +504,9 @@
 - SSH commands now retain POSIX shell variables, functions, and working directories per agent and authenticated destination, including on Windows clients.
 - A `/models` compaction limit set past a model's standard context window now runs that model on its extended window instead of being silently clamped; the hub warns (noting long-context pricing) and saves on a second Enter, in the terminal and in Tern, and rejects limits past the model's largest window ([#15048](https://github.com/can1357/oh-my-pi/pull/15048) by [@H4vC](https://github.com/H4vC))
 - A token compaction limit set in `/models` (or `compaction.modelThresholds`) is now the base oms scales with its usual policy, as if it were the model's window (85% of it by default for bases above ~109k, or `compaction.thresholdPercent` of it), instead of the exact point. Plain numbers saved since 18.8.5 therefore compact earlier; rewrite one as `"f<tokens>"` (or type `f400k` in the hub) to keep it an exact trigger. The `/models` limit field shows where the model would compact as you type (`compacts at 340K · 85% of 400K base`), the preview's **Compacts at** row says why, and the saved message repeats it ([#15065](https://github.com/can1357/oh-my-pi/pull/15065) by [@H4vC](https://github.com/H4vC))
-- Updated `/usage`, `oms usage`, and the status line to display authoritative OpenCode Go quota usage directly from the official endpoint, replacing estimated costs with actual usage across three time windows (5h, 7d, and monthly).
-- Documented the source-available local protocol relay and clarified that production collaboration relay binaries are not currently published.
-- Enabled bounded Anthropic prompt-cache refreshes for the main agent loop while isolating advisor and side-channel requests from the shared refresh timer.
 
 ### Fixed
 
-- Fixed Windows ARM64 installations selecting an x64 executable, including when running PowerShell under emulation.
-- Fixed `oms update` to upgrade Soup's Homebrew formula instead of targeting the upstream tap.
-- Fixed updates from Bun/npm installations attempting to install unpublished packages; Soup releases now explicitly select verified standalone binaries.
-- RPC clients now receive typed Beads reminders, including issue dependencies and mixed blocker references.
-- Fixed circular IRC waits between agents, including chains through the main agent, by reporting the cycle instead of waiting for a timeout.
-- Fixed subagents losing selected tools after compaction, parking, or restart, while preserving their permission ceilings and rejecting unavailable capability sources.
-- Fixed `--no-session --resume` to load saved history by ID, path, or picker without modifying the original transcript.
-- Fixed false "never displayed" edit rejections for previously read lines whose content and line numbers survive an edit, including unchanged preview rows after formatting.
-- Fixed repeated seen-line rejections after inline reveals when multiple snapshots share a tag, without authorizing content from a colliding snapshot.
-- Fixed edits on lines displayed by `@`-mentioned files after an earlier partial read; truncated mentions no longer number their notices as file content.
-- `oms plugin upgrade <name>` now upgrades npm- and git-installed plugins (e.g. `ida-mcp` installed from `github:HexRaysSA/ida-mcp#latest`, which `hcli mcp install` relies on) and resolves a bare marketplace plugin name, instead of failing with "Invalid plugin ID"; the plugin's enabled state and feature selection are kept ([#13812](https://github.com/can1357/oh-my-pi/pull/13812) by [@H4vC](https://github.com/H4vC))
-- Fixed multiple Language Server Protocol (LSP) issues, including concurrent sessions sharing backend overlays, stale document overlays after workspace edits, incorrect transactional edit advertisements, unhandled snippet placeholders in rust-analyzer, and failing to restore overwritten targets during failed file renames.
-- Fixed LSP `diagnostics` incorrectly reporting success when all language servers failed.
-- Fixed Hindsight memory scoping splitting repositories across multiple scopes on case-sensitive filesystems by lowercasing the project label.
-- Fixed the CLI crashing at startup with a raw `AuthBrokerError` when the configured auth broker is unreachable, replacing it with an actionable error message.
-- Fixed various resource and process leaks, including idle launch brokers staying alive indefinitely, stale MCP connections leaving child processes open, and undrained stdout in DAP `runInTerminal` requests.
-- Fixed custom STB-backed vision providers failing to decode WebP images by automatically detecting image formats from bytes and normalizing WebP blocks.
-- Fixed command-backed provider API keys (`!command`) staying pinned to cached values after receiving an HTTP 401 error.
-- Fixed the `/agents` Control Center failing to open when model overrides are configured as YAML arrays.
-- Fixed session-title generation regressions by restoring plain-sentence phrasing and name-fidelity instructions.
-- Fixed agent-facing prompts and system instructions mentioning tools that are absent from the current session catalog.
-- Fixed manual `/shake` discarding all tool results; it now retains a small recent tail of results to preserve active working context.
-- Fixed `oms install` failing validation for extensions importing legacy `is<Tool>ToolResult` event guards.
-- Fixed profile aliases generated by standalone binaries invoking Bun's embedded virtual script instead of the installed `oms` command.
-- Fixed `/skill:<name>` tokens in `/plan` or `/vibe` inline prompts being treated as literal text instead of executing the skill.
-- Fixed long streaming `write` previews stalling the TUI by optimizing file scanning and splitting.
-- Fixed the Windows console disappearing when running commands like `/stats`.
-- Fixed retry-fallback selection switching to a fallback model with a context window too small to hold the current session context.
-- Fixed OpenCode discovery ignoring `opencode.jsonc` files and rejecting comments in `opencode.json`.
-- Fixed WSL2 startup hanging forever when the Windows interop pipe is wedged: the WSL host-home discovery probes (`cmd.exe`, `wslpath`) now run under a 500ms hard timeout and fall back to the Linux `$HOME`/`~/.oms` candidates ([#8402](https://github.com/can1357/oh-my-pi/issues/8402)).
-- Fixed a hang in headless `oms -p` runs when `plan.defaultOnStartup: true` is enabled by disabling the startup default in print mode.
-- Fixed `display.hideToolActivity` failing to hide certain activity blocks, such as reminders, diagnostics, and completions.
-- Fixed several issues in the MCP Streamable HTTP transport, including updating the negotiated protocol version to `2025-11-25`, resolving connection drops and SSE resumption gaps, and preventing double-execution of tools during auth refreshes.
-- Fixed `/handoff` losing local artifacts (plans, scratch files, research notes) by copying them across the handoff session boundary.
-- Replaced libarchive-based tar parsing with a hardened, in-process tar reader to prevent crashes and safely handle complex archive structures, symlinks, and sparse metadata.
-- Fixed `Ctrl+O` tool-output expansion failing to reach launch-completion messages wrapped in the hidden tool activity container.
-
-Older entries are archived in [packages/coding-agent/CHANGELOG.md@b541d61d3f56](https://github.com/pickpocket/oh-my-soup/blob/b541d61d3f56351cad006223da4367eec8fbb667/packages/coding-agent/CHANGELOG.md).
 - Fixed `/usage` (or clicking the status-line cost) while the usage dashboard was already open stacking a second dashboard on top; it now focuses the open one ([#15145](https://github.com/can1357/oh-my-pi/pull/15145) by [@H4vC](https://github.com/H4vC))
 - Fixed the browser tool prompt not documenting `observe()`'s `viewportOnly` and `includeAll` options, or that `open`/`close`/`run` timeouts are seconds clamped to 1–300 while `waitFor*` timeouts are milliseconds ([#15104](https://github.com/can1357/oh-my-pi/pull/15104) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed browser relay pages opened in the background (`browser.newPage({ background: true })` in `tab.run`) taking over the user's selected tab; they now open unselected once the relay extension is reinstalled ([#15109](https://github.com/can1357/oh-my-pi/pull/15109) by [@will-bogusz](https://github.com/will-bogusz))
@@ -1585,270 +1587,4 @@ Older entries are archived in [packages/coding-agent/CHANGELOG.md@b541d61d3f56](
 
 - Updated the Anthropic OAuth Claude Code fingerprint to 2.1.280 so models that reject older Claude Code clients can be used.
 
-## [18.4.1] - 2026-09-28
-
-### Changed
-
-- With LSP disabled (`--no-lsp` or `lsp.enabled: false`), startup skips language-server discovery and warmup, and the welcome screen no longer shows the LSP Servers section
-- The first frame's status bar now renders live at the current terminal width from the cached model, thinking level, and status-line settings instead of replaying an `…`-filled snapshot: path and git branch are always current, the context gauge shows the window without a stale percent, git dirty counts no longer blank out when the session bar takes over, and folders that never ran oms paint the bar (and your theme) too.
-- Moved the composer startup cache (theme, welcome, recent sessions, LSP rows, status bar) from per-project JSON files under `cache/composer/` to a single `cache/composer.db`; the old directory is no longer read and can be deleted.
-- Improved interactive startup: the session status bar appears sooner because `retry.fallbackChains` validation, the background model-catalog refresh, and project daemon registration no longer block the first session frame.
-- Reduced CPU use from subagent HUD repaints during active sessions ([#13245](https://github.com/can1357/oh-my-pi/pull/13245) by [@iliaal](https://github.com/iliaal)).
-- Clarified which provider transports honor `thinkingBudgets` and that local OpenAI-compatible models use effort controls instead ([#13503](https://github.com/can1357/oh-my-pi/issues/13503)).
-- `/fork` now prints how to resume the session it leaves behind (`oms --resume <id>` or `/resume <id>`) instead of the new transcript's filename ([#13338](https://github.com/can1357/oh-my-pi/pull/13338) by [@LlemonDuck](https://github.com/LlemonDuck))
-- `/vibe` status checks no longer redraw every worker the director killed: `vibe_wait` and `vibe_list` leave killed sessions off the wall with a `N killed hidden` count, and `vibe_list` collapses them to one trailing line naming the most recent (transcripts stay at `history://<id>`) ([#13073](https://github.com/can1357/oh-my-pi/pull/13073) by [@igasmi](https://github.com/igasmi)).
-
-### Fixed
-
-- Fixed `find` exhausting memory on trees with many matching lines: its keyword scan now counts matches as they stream in, holding a few hundred MiB where a 5-million-line tree took several GiB, and finishes faster ([#13495](https://github.com/can1357/oh-my-pi/issues/13495))
-- Fixed a native compaction speculation that failed for good turning off background compaction for the rest of the cycle. With `compaction.methodOrder` such as `["remote", "soft"]`, speculation now moves to the next configured method and the threshold pass keeps deferring to it, instead of running that method on the blocking path ([#13478](https://github.com/can1357/oh-my-pi/pull/13478) by [@andrebrait](https://github.com/andrebrait)).
-- Extensions that register bash through the legacy `createBashTool`/`createBashToolDefinition` with a `spawnHook` no longer make every bash call fail with `ready and env require a service name.` ([#13461](https://github.com/can1357/oh-my-pi/pull/13461) by [@sjawhar](https://github.com/sjawhar))
-- Fixed `/new` with automatic thinking starting the new session at the previous session's classified effort instead of the provisional level, both in its first `thinking_level_change` entry and on the wire ([#13383](https://github.com/can1357/oh-my-pi/issues/13383))
-- Fixed a corrupt `agent.db` crashing every launch with `no such table` (for example `hint_usage`) instead of being preserved and recreated ([#13530](https://github.com/can1357/oh-my-pi/pull/13530) by [@Hunter-124](https://github.com/Hunter-124))
-- Fixed `edit` rejecting a one-line replacement of an `if` opener, `case` label, or function signature with another of the same shape as an "ambiguous boundary" whenever another edit in the same batch broke the file's syntax; it now applies with the usual syntax-error warning. ([#13522](https://github.com/can1357/oh-my-pi/pull/13522))
-- Jujutsu status and diffs now report renames and copies (`R`/`C`, `rename from`/`rename to`) the way `jj status` and `jj diff` do, instead of a delete plus an add ([#13406](https://github.com/can1357/oh-my-pi/pull/13406) by [@sjawhar](https://github.com/sjawhar)).
-- Fixed a subagent that finished before a later step failed (such as the isolation merge) losing its evidence: the `task` result now names the child's exit status and `agent://` output, keeps that output on disk, and is marked as an error ([#13557](https://github.com/can1357/oh-my-pi/pull/13557) by [@aktanazat](https://github.com/aktanazat))
-- Fixed SDK sessions created with `agentDir` loading user rules (`rules/`, `RULES.md`) and custom tools from the default agent dir instead of that `agentDir`; `discoverCustomToolPaths` and `discoverAndLoadCustomTools` accept an `agentDir` argument ([#13558](https://github.com/can1357/oh-my-pi/pull/13558) by [@aktanazat](https://github.com/aktanazat))
-- Reduced daemon broker metadata writes for historical services when owners reconnect or the broker restarts ([#13471](https://github.com/can1357/oh-my-pi/pull/13471) by [@Dante-dan](https://github.com/Dante-dan)).
-- Fixed compaction re-emitting the whole transcript into native scrollback when `display.collapseCompacted` is off, for both the automatic compaction-end and the manual `/compact` path ([#12140](https://github.com/can1357/oh-my-pi/issues/12140), [#13235](https://github.com/can1357/oh-my-pi/pull/13235) by [@holny](https://github.com/holny))
-- Subagents can submit their preceding report with a data-less yield after a finish reminder ([#12837](https://github.com/can1357/oh-my-pi/pull/12837) by [@iliaal](https://github.com/iliaal)).
-- Fixed session dispose losing the final message and exit record on SQL/indexed session storage ([#13415](https://github.com/can1357/oh-my-pi/pull/13415) by [@sjawhar](https://github.com/sjawhar))
-- Fixed the `recall`, `reflect`, and `memory_edit` tool descriptions naming each other by bare name when those tools are reachable only as `xd://` devices ([#13207](https://github.com/can1357/oh-my-pi/pull/13207) by [@andrebrait](https://github.com/andrebrait)).
-- Listed the directories searched for agent files in the `task` tool's unknown-agent error, with the home directory shortened to `~`
-- Fixed sessions and subagents of the same agent in different working directories (such as one git worktree per task) never sharing the cached Anthropic system prompt: context files, workspace tree, workspace roots, and other directory-specific sections now come after the static system prompt, which stays a cache hit across directories ([#13104](https://github.com/can1357/oh-my-pi/issues/13104))
-- Fixed the startup "What's New" heading and config warnings keeping the dark palette on a light terminal: they were colored before the terminal reported its background, so the heading rendered near-white on white. Both now resolve their color at render time and follow the auto theme switch
-- Fixed idle `display: true` custom messages (such as extension `pi.sendMessage` notices sent without starting a turn) not appearing in the transcript until the session was reloaded ([#12718](https://github.com/can1357/oh-my-pi/pull/12718) by [@Broglah1](https://github.com/Broglah1)).
-- Fixed `oms usage` ignoring usage providers registered by extensions, which left those accounts listed as having no usage data; `oms usage` now also accepts `-e`/`--extension` and `--no-extensions` ([#13579](https://github.com/can1357/oh-my-pi/issues/13579))
-- Fixed a task model saved in `/agents` being ignored for the rest of the session after an Alt+P session-only pick ([#13345](https://github.com/can1357/oh-my-pi/issues/13345)).
-- Fixed tool calls made through an `xd://` alias being recorded under the alias, which made OpenAI/OpenRouter Responses replay reject every later request ([#13352](https://github.com/can1357/oh-my-pi/issues/13352)).
-- Fixed pasted images in skill invocations not reaching the configured vision model when the main model supports only text ([#13480](https://github.com/can1357/oh-my-pi/issues/13480)).
-- A provider listed in `disabledProviders` no longer answers through a retry fallback chain, an advisor or a restored model, and gets no credential however one of its models was selected ([#13194](https://github.com/can1357/oh-my-pi/pull/13194) by [@sjawhar](https://github.com/sjawhar)).
-- Fixed `glob` silently clamping `limit` above 200 while advising `Use limit=<clamped>` retries: a clamped request is now disclosed up front and the "Use limit=" advice is dropped once the hard cap is reached ([#13263](https://github.com/can1357/oh-my-pi/issues/13263))
-- Fixed subagents that stop to wait for their own background job failing with a missing yield instead of waiting for the job ([#13305](https://github.com/can1357/oh-my-pi/issues/13305)).
-- Fixed a failed session append leaving partial bytes behind on Windows, where ftruncate is refused on the append handle: the rollback now reopens the file without O_APPEND and verifies it is still the same file before truncating ([#13362](https://github.com/can1357/oh-my-pi/pull/13362) by [@jchanghong023](https://github.com/jchanghong023))
-- Fixed plugin installation failing on Windows outside developer mode by linking the plugin through a directory junction, matching the marketplace link ([#13364](https://github.com/can1357/oh-my-pi/pull/13364) by [@jchanghong023](https://github.com/jchanghong023))
-- Fixed the grep tool searching subdirectories for globs whose base path merely resolved to the cwd: only globs spelled without a directory prefix (like `*.ts`) now match at any depth, while `./*.ts` and absolute paths stay scoped to their directory ([#13360](https://github.com/can1357/oh-my-pi/pull/13360) by [@jchanghong023](https://github.com/jchanghong023))
-- Fixed the `ask` tool's "Other (type your own)" prompt sending RPC and SDK clients a terminal-rendered title (options with icon glyphs, lines clipped to the terminal width) instead of the question text; the interactive TUI's own ask dialog is unaffected ([#13477](https://github.com/can1357/oh-my-pi/pull/13477) by [@andrebrait](https://github.com/andrebrait))
-- Fixed prewalk targets registered by extensions resolving before their provider was loaded. The hand-off now retries after extension registration, preserves role fallback order, and refreshes a cold runtime provider when needed.
-- Fixed saving settings on Windows through a symlinked `config.yml` whose target contains `..` writing a file other than the one the link reads, and `agent.db` staying open after its storage is closed ([#13351](https://github.com/can1357/oh-my-pi/pull/13351) by [@Vortex727](https://github.com/Vortex727))
-- Fixed grep line ranges (`path:N-M`) returning out-of-range lines for absolute paths with `./` or `..` segments ([#13296](https://github.com/can1357/oh-my-pi/pull/13296) by [@pedropaulovc](https://github.com/pedropaulovc)).
-- Fixed service requests the project's service broker cannot parse, such as commands added by a newer oms after an update, waiting 30 seconds to time out; the broker now rejects them immediately with the reason ([#13301](https://github.com/can1357/oh-my-pi/pull/13301) by [@eggpeat](https://github.com/eggpeat)).
-- Fixed sessions stopping on "Anthropic stream stalled while waiting for the next event" (and other mid-stream stalls, HTTP/2 resets, premature closes, or sockets closed mid-response) when the connection died after the reply's text had already rendered. Replay was refused to avoid duplicating shown text and the tool-turn continuation needed a tool call, so text-only turns had no recovery; the partial turn is now kept and the model is asked to continue from where it stopped, up to 3 times per prompt when `retry.enabled` is on ([#13333](https://github.com/can1357/oh-my-pi/pull/13333) by [@jerryfane](https://github.com/jerryfane))
-- Fixed editing one fallback chain in the model hub, or one agent in `/agents`, saving every chain or agent a `--config` overlay supplies into `config.yml` ([#13308](https://github.com/can1357/oh-my-pi/pull/13308) by [@Vortex727](https://github.com/Vortex727))
-- Fixed `oms install --dry-run <local-path>` and `oms plugin link --dry-run` linking the plugin and writing the lockfile instead of only previewing ([#13241](https://github.com/can1357/oh-my-pi/pull/13241)).
-- Sessions containing assistant messages with no recorded usage now open with that usage counted as zero, instead of crashing on load with `undefined is not an object (evaluating 'usage.cacheRead')` ([#13386](https://github.com/can1357/oh-my-pi/pull/13386) by [@ParadaCarleton](https://github.com/ParadaCarleton)).
-- Fixed rules with an `astCondition` and `interruptMode: always` letting the matching `write` or `edit` run before the interrupt, so the file changed on disk even though the rule fired; the call is now blocked before it executes ([#13303](https://github.com/can1357/oh-my-pi/pull/13303) by [@JYeswak](https://github.com/JYeswak))
-- Fixed rules not applying to tool calls made from inside `eval` (for example `tool.write(...)`), which ran without any rule check; they are now checked the same way as direct calls ([#13316](https://github.com/can1357/oh-my-pi/pull/13316) by [@JYeswak](https://github.com/JYeswak))
-- Fixed bash calls whose optional fields arrive filled with empty values being rejected as service starts ([#13182](https://github.com/can1357/oh-my-pi/issues/13182)).
-- Fixed keyless vLLM providers failing every request with "No API key found" ([#13246](https://github.com/can1357/oh-my-pi/issues/13246)).
-- Fixed the Agent Hub usage gauge measuring a subagent against its startup model's context window after a fallback model swap ([#13061](https://github.com/can1357/oh-my-pi/pull/13061)).
-- Fixed HTML session exports failing to render offline or under a strict script CSP; the viewer libraries are now inlined ([#12948](https://github.com/can1357/oh-my-pi/issues/12948)).
-- Fixed hashline edits rejecting files whose names contain `#` (such as yadm alternate files) ([#13428](https://github.com/can1357/oh-my-pi/pull/13428)).
-- Fixed a module created with `write` leaving the importing file stuck on TS2307 in typescript-language-server ([#12925](https://github.com/can1357/oh-my-pi/pull/12925)).
-- Fixed startup waiting up to 10s on an unresponsive LM Studio loopback probe; the probe now gives up after 250ms like Ollama and llama.cpp ([#12945](https://github.com/can1357/oh-my-pi/issues/12945)).
-- The interactive `/usage` dashboard keeps connected accounts visible when some or all usage lookups fail, showing unavailable usage instead of hiding accounts ([#13476](https://github.com/can1357/oh-my-pi/pull/13476) by [@aktanazat](https://github.com/aktanazat)).
-- Fixed multiline pastes splitting into separate submissions after a terminal drops bracketed-paste mode, and text typed right after Enter being erased by the post-submit clear ([#13440](https://github.com/can1357/oh-my-pi/pull/13440) by [@Dante-dan](https://github.com/Dante-dan)).
-- Fixed subagents never compacting when the parent sets `compaction.midTurnEnabled: false`; a subagent's run is a single turn, so subagents keep mid-run compaction on unless a spawn overrides it ([#13212](https://github.com/can1357/oh-my-pi/pull/13212)).
-- Fixed the exit resume hint so the `oms --resume <id>` command prints on its own line, letting triple-click select just the command ([#12748](https://github.com/can1357/oh-my-pi/pull/12748) by [@F0Rextasy](https://github.com/F0Rextasy)).
-
-## [18.4.0] - 2026-09-21
-
-### Added
-
-- Beads notes: the `notes` tool gained `project` and `issue` scopes backed by the Beads store (`scope: "session" | "project" | "issue"`, or `issue: "<id>"`). Project notes are a shared, synchronized board for the workspace; issue notes travel with the issue across sessions and machines. Deletions are tombstoned so they win over stale copies after a merge, and a new `.beads/oms-notes.jsonl` interchange file is synchronized alongside issues and memories. Session-scoped notes are unchanged.
-- Beads derived code graph: a new `beads` `index` operation maintains a rebuildable, never-synchronized `.beads/oms-graph.sqlite` file index (content-hash skip, batched writes, abandoned-run takeover, partial-coverage reporting) as the foundation for code-aware issue context. Controlled by `beads.graph.enabled`, `beads.graph.include`, `beads.graph.exclude`, `beads.graph.maxFiles`, and `beads.graph.maxFileBytes`.
-- Beads session tracking: sessions in a Beads-managed workspace now receive a static system-prompt section, a hidden first-turn and post-compaction prelude listing held claims, reminders folded into `todo` results on transitions, a mid-run nudge after sustained mutations without touching Beads, and a bounded stop-time reminder when an issue was claimed but never closed or annotated. Claims move with `/fork` and `/tan`, subagents are exempt, and calls made through `write xd://beads` are tracked like direct calls. Controlled by `beads.eager`, `beads.reminders`, and `beads.remindersMax`; a `beads_reminder` event reaches RPC clients, extensions, and hooks.
-
-### Fixed
-
-- Native Beads no longer fails to close its SQLite store with "database is locked" after issuing many distinct statements: the repository now owns and finalizes its prepared statements instead of relying on Bun's bounded query cache, which also left the database file mapped on Windows.
-- Beads interchange import and `sync` merges no longer reject foreign data: notes attached to an issue that no longer exists locally are dropped instead of aborting the import, and per-scope note limits apply only to local writes.
-
-## [18.4.0] - 2026-09-28
-
-### Added
-
-- Added the `telemetry.otlpExportEnabled` setting under Settings → Providers → Privacy to disable OTLP trace, log, and metric export even when `OTEL_*` endpoints are configured; exporting remains enabled by default.
-- Added a first-launch warning when Python evaluation is enabled but no working Python interpreter is available, with guidance for configuring `python.interpreter` and checking the installation with `oms setup python --check`.
-
-### Changed
-
-- Updated `oms stats` and `/stats` to open the redesigned dashboard immediately while session data synchronizes in the background with live progress; `--json` and `--summary` continue to synchronize before producing output.
-- Replaced the stats dashboard’s Behavior page with a Frustration page that can classify messages using the `judge` model role, showing an estimated cost before analysis and recording `/stats` spending in the current session.
-- Clarified the `eval` tool documentation to explain that its kernel may be shared with the parent session and concurrent task subagents.
-
-### Fixed
-
-- Fixed `/tree` reopening saved Ask results instead of navigating past them when an optional preview was saved as `null`.
-- Fixed the legacy `createGrepTool()` API when searching with both a file path and a `glob` filter.
-- Improved task and subagent reliability: eligible saved usage resets are now redeemed automatically when polling is throttled or transient failures occur, concurrent tasks share confirmed resets, headless subagents retain assignments across session transitions, tagged `^model` agents are available to nested subagents, and `wait` returns promptly with information about still-running work when no owned jobs are available.
-- Fixed SDK requests using `ApiKeyResolver` to wait for a nearby healthy credential when a drained account’s quota block is about to expire, instead of immediately failing with a multi-hour quota error.
-- Fixed Anthropic requests failing after native compaction when experimental context notes were enabled.
-- Fixed Windows path handling for 8.3 short paths, including project-directory detection and home-directory display in status, tool labels, and errors.
-- Fixed `edit` `PUT >N` producing syntactically invalid code when inserting shallower constructs near closing braces.
-- Fixed Windows one-shot commands, including `oms update`, incorrectly reporting successful completion as an error; also fixed this behavior when no user npm or Bun configuration file exists.
-- Fixed missing judge token counts corrupting session usage totals and displaying `$NaN`.
-- Fixed Cursor sessions under-reporting token usage and cost, compacting based on the wrong context measurement, and applying shell-command timeouts in the wrong units.
-- Updated goal mode to wait for user input when all remaining todos are blocked instead of repeatedly requesting approval.
-- Fixed `pi-background-tasks` 2.6.0 and later failing to load due to a missing legacy `pi-ai` compatibility export.
-- Fixed blob broker requests when `PI_PROXY` is configured.
-- Fixed `generate_image` reporting the catalog model instead of the image model actually used by the ChatGPT/Codex backend; saved image metadata now reflects the provider-returned size and quality.
-- Fixed fast-model fallback selection so it no longer chooses Gemini or MiniMax models when no `smol` role is configured.
-- Fixed extension tool renderers using upstream pi’s `renderCall(args, theme, context)` signature failing to render.
-- Fixed Nix flake and NixOS module builds failing because the native package version stamp was not recognized.
-- Fixed Nix dependency-lock checks failing after obsolete stats chart dependencies were removed.
-
-## [18.3.5] - 2026-09-27
-
-### Added
-
-- Added API-key-billed OpenAI Responses web search (`openai/gpt-6-luna`, then `openai/gpt-5.6-luna`), tried after every Codex entry in the default search fallback chain so ChatGPT-subscription search is exhausted before any API usage is billed ([#13467](https://github.com/can1357/oh-my-pi/pull/13467) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
-- Added prompt-cache warming, ported from [earendil-works/pi](https://github.com/earendil-works/pi): shortly before a prompt-cache entry expires, the main agent loop replays its last request and cuts the replay off at the first generated token, so idle gaps no longer force a full-prefix cache re-write. A refresh fires only when the expected avoided-miss cost clears its cost by $0.05, and warming stops as soon as a refresh misses the cache. Controlled by `providers.cacheWarming` (`off` / `streaming` / `idle`, default `idle`); idle warming covers 5-minute entries only, and models without a declared `promptCache` lifetime are never warmed. Extensions can override each decision through the `cache_warming_decision` event ([#12699](https://github.com/can1357/oh-my-pi/pull/12699) by [@KamijoToma](https://github.com/KamijoToma)).
-
-## [18.3.4] - 2026-09-27
-
-### Breaking Changes
-
-- Replaced the `task` tool's `complexity` field with `solutionSpace`, a description of how open-ended the subtask is; `auto` thinking for spawned subagents now picks effort from it alone
-
-### Changed
-
-- `auto` thinking now picks effort for every turn by how open-ended the problem is, so large volumes of mechanical work no longer raise it
-
-### Fixed
-
-- Fixed agents looping for hours when every turn spends the whole output limit on reasoning: length-stop retries now tell the model its reasoning was discarded and to act in smaller steps, and a subagent whose length-stop recovery gives up now fails with that error instead of being re-prompted into the same loop
-- Fixed tagging a model with `^` mid-session dropping the provider prompt cache for every following turn: new `m<N>` pseudonyms now arrive as a hidden session notice instead of rewriting the `task` description, which only absorbs them at a base-prompt rebuild
-
-## [18.3.3] - 2026-09-27
-
-### Added
-
-- Added a unified predictive text engine with N-gram, SmolLM2, and macOS native providers, including cross-engine blending, background model downloads, and a cross-process prediction daemon.
-- Added the `oms predict` command for evaluating completion performance and support for ingesting existing Claude Code and Codex prompt histories to bootstrap predictions on new installations.
-- Added `oms skill list [dir] [--json]` to report skills resolved for a session directory, including discovery warnings in JSON output.
-- Added a centralized progress display for background tool and model downloads, including support for downloading the SmolLM2-135M word-completion model.
-- Added dynamic evaluation guidance through hidden session notices.
-- Added a required `complexity` rationale to the `task` tool to improve automatic thinking-depth selection.
-- Agents using `task` or `bash` now receive the `wait` tool for background-process coordination, and subagents can receive it when explicitly requested.
-- Added context-aware suggestions to empty composers based on agent activity and effort.
-- Added optional global or per-project memory scopes to the `retain` and `learn` tools when Mnemopi scoping is enabled.
-- Added `/btw` to focused subagent views for asking questions about that agent's transcript with separate side-conversation history.
-
-### Changed
-
-- Completion behavior now uses the N-gram engine for standard `auto` completion across platforms, with blended N-gram and SmolLM confidence scoring where applicable; the SmolLM2 model uses a 145 MB GGUF (Q8_0) download and is prefetched only when explicitly activated.
-- Updated `spelling.autocomplete` to use an enum-based engine configuration.
-- Completion ghost text is now preserved through manual keystrokes.
-- Window input actions now default to background execution; set `takeover: true` to opt into foreground activation, with clarified cross-platform coordinate and activation behavior.
-- `oms tiny-models download` can now download the word-completion model.
-- Updated `/play` help, read-tool summaries, platform-aware shortcut labels, and other UI hints for clearer interaction guidance.
-- Updated the empty-submit behavior to account for live-steered messages and surface pending live-steering status in the UI.
-- `ps --all` now includes exited global services, while the default view shows live global services.
-- Orchestrator task documentation now follows a Target/Change/Acceptance format.
-- Slash-command and hint usage tracking is now persistent and namespaced.
-
-### Fixed
-
-- Preserved MCP `structuredContent` in live tool-result details so evaluation callers can consume server data without reparsing model-facing JSON; spilled results continue to retain an artifact reference without duplicating the payload in session history.
-- Fixed Collab hosts becoming unable to reclaim a room after a brief network interruption; hosts now retry room recovery without losing guests or queued updates.
-- Fixed one-shot commands that stopped before completing, such as `oms config set` on a fresh Windows profile, incorrectly exiting successfully without output; they now report failure with diagnostic guidance.
-
-## [18.3.2] - 2026-09-20
-
-### Fixed
-
-- Fixed `oms update` failing with "Failed to fetch release info … Not Found": release metadata now resolves from GitHub releases (the fork's actual distribution channel) instead of the unpublished `@oh-my-soup` npm scope, for both the stable and canary channels. Installs prior to 18.3.2 need one manual reinstall to pick up the fixed updater.
-
-## [18.3.2] - 2026-09-25
-
-### Added
-
-- Added `ctx.agent` to the extension context, reporting whether the session is the top-level agent or a subagent, plus its registry id, agent definition name, task depth and parent id, so handlers rebound to subagent sessions can tell which agent they serve ([#13314](https://github.com/can1357/oh-my-pi/pull/13314) by [@andrebrait](https://github.com/andrebrait))
-- Added tracking of Anthropic's usage-limit wrap-up allowance for Claude subscription accounts: after the 5-hour or weekly limit is reached, the status line and `/slow status` show `limit reached · wrapping up · resets HH:MM`, and the agent is told to wrap up when neither low priority nor extra usage will continue the work ([#13340](https://github.com/can1357/oh-my-pi/pull/13340) by [@H4vC](https://github.com/H4vC))
-
-### Changed
-
-- `providers.anthropic.slowMode` now controls only the low-priority lane; the usage-limit wrap-up allowance is tracked for every first-party Claude subscription account ([#13340](https://github.com/can1357/oh-my-pi/pull/13340) by [@H4vC](https://github.com/H4vC))
-- Enter on the `/model` hub sidebar now moves focus to the model list (like →) instead of acting on the highlighted row ([#13347](https://github.com/can1357/oh-my-pi/pull/13347) by [@H4vC](https://github.com/H4vC))
-
-### Fixed
-
-- Fixed the Windows bash tool exporting `TEMP`, `TMP`, and `TMPDIR` with 8.3 short names such as `ADMINI~1`, so they now match the long-form `pwd`/`$PWD` after `cd "$TEMP"` ([#13265](https://github.com/can1357/oh-my-pi/pull/13265) by [@CoderTCY](https://github.com/CoderTCY))
-- `edit` and `write` no longer refuse handwritten files named `generated.go`, `generated.ts`, `generated.js`, or `generated.py`; these are treated as auto-generated only when their header carries a generated-code marker ([#13138](https://github.com/can1357/oh-my-pi/issues/13138), [#13139](https://github.com/can1357/oh-my-pi/pull/13139) by [@radkawar](https://github.com/radkawar))
-- Fixed the `edit` tool warning that valid Go 1.26 `new(expr)` calls (e.g. `new(f(x))`) introduced a syntax error, and `ast_grep`/`ast_edit` reporting parse errors on them ([#13148](https://github.com/can1357/oh-my-pi/issues/13148), [#13149](https://github.com/can1357/oh-my-pi/pull/13149) by [@radkawar](https://github.com/radkawar))
-- Fixed hashline `PUT N*` / `CUT N*` on the first statement of a block (for example a Go or Python function that opens with an `if`) also replacing or deleting every statement after it ([#13153](https://github.com/can1357/oh-my-pi/issues/13153), [#13154](https://github.com/can1357/oh-my-pi/pull/13154) by [@radkawar](https://github.com/radkawar))
-- Fixed the `Full output: artifact://` link on large background bash and eval results pointing at a truncated copy with `[…elided…]` gaps instead of the complete output ([#13142](https://github.com/can1357/oh-my-pi/issues/13142), [#13143](https://github.com/can1357/oh-my-pi/pull/13143) by [@radkawar](https://github.com/radkawar))
-- Fixed `grep` paths like `dir/*.go` also matching files in subdirectories of `dir` ([#13146](https://github.com/can1357/oh-my-pi/issues/13146), [#13150](https://github.com/can1357/oh-my-pi/pull/13150) by [@radkawar](https://github.com/radkawar))
-- Fixed auto-compaction re-sending a failed native (server-side) compaction on every turn, re-reading the full context each time; after a failure a retry would repeat, the next configured method runs instead until a compaction succeeds ([#13310](https://github.com/can1357/oh-my-pi/pull/13310) by [@alphastorm](https://github.com/alphastorm))
-- Fixed a `/slow off` session resending requests indefinitely when another session had activated the shared Anthropic low-priority lane ([#13340](https://github.com/can1357/oh-my-pi/pull/13340) by [@H4vC](https://github.com/H4vC))
-
-## [18.3.1] - 2026-09-20
-
-### Fixed
-
-- Completed the OMS rebrand on surfaces introduced by the upstream merge: the welcome screen and setup splash now render the OMS block wordmark instead of the π mark (the compact splash spells "Oh My Soup"), the status-line brand icon and default terminal title use the 🍜 bowl, and the remaining π glyphs were swept from comments and tests.
-
-## [18.3.1] - 2026-09-25
-
-### Added
-
-- Added a filter to the Esc Esc rewind selector: press `f` and type to show only items containing every word, then Enter to rewind ([#13295](https://github.com/can1357/oh-my-pi/pull/13295) by [@H4vC](https://github.com/H4vC))
-- Added native filesystem support for `local://` and `oms://` URLs across file-search, content-search, AST, shell, and related tools, including support for virtual working directories.
-- Added a native `cp` builtin for filesystem copy operations.
-- Added IDA Pro integration for opening executables and IDA databases, browsing pseudocode, assembly, imports, exports, strings, and cross-references, and performing database-aware actions such as renaming, commenting, type editing, function creation, saving, and persistent Python execution.
-- Added shared, project-scoped IDA database access with broker-managed host processes, configurable concurrency and idle cleanup via `ida.maxOpen` and `ida.idleCloseSec`, automatic autosaving, and universal Mach-O architecture selection with `:@<arch>` syntax and host-architecture detection. IDA features can be configured with `ida.enabled`, `ida.python`, and `ida.installDir`.
-- Added the `/slow [on|off|status]` command for opting into lower-priority service tiers on OpenAI, Google, and Anthropic subscription sessions, including automatic continuation when Anthropic session limits are reached.
-- Added the `providers.openaiLiveSteering` setting to control whether input can be delivered while a response is in progress.
-- Added session-wide approval for configuration changes through an `Always for this session` option in `cfg://` prompts, with clear timeout handling for unanswered prompts.
-- Added the `cfg://` protocol and a configuration registry for reading, modifying, unsetting, and reactively managing layered agent settings with approval and precedence feedback.
-- Added paged reading for large files, with metadata that allows clients to recover and continue displaying results.
-- Added per-agent compaction thresholds for task and evaluation subagents, configurable as percentages or fixed token limits without changing the main session threshold.
-- Added trusted additional context for extension and hook tool results, including `ctx.addAdditionalContext()`, allowing instructions to reach the model without altering displayed tool results.
-- Added dictation support to `/btw` follow-up input.
-- Added support for multiple simultaneous browser instances, including concurrent Chrome and Edge connections.
-- Added detailed benchmark phases for measuring single-user throughput, parallel scaling, and prefill performance, with automatic prefill sizing based on model context limits.
-- Added opt-in CUDA support to the Nix package for tiny-model inference through ONNX Runtime.
-- Added reliable RPC prompt lifecycle reporting with `prompt_result`, structured provider errors, session-settled state, prompt identifiers, event filtering, and `--no-ui` support for non-interactive hosts.
-- Added RPC session management through `open_session`, plus corresponding TypeScript and Python client APIs including `openSession`, `setEventFilter`, `onPromptResult`, `onSessionSettled`, and `waitForSettled`.
-- Added `attachment://` and `conflict://` resource URL handlers.
-- Added a per-server MCP `instructions: false` option to keep a server's guidance out of the system prompt while retaining its tools.
-- Added stale tool-result eviction for advisors: before each review, an advisor replaces its own `read`/`grep`/`glob` output from reviews older than the latest one with a short placeholder, so it stops re-sending that output on every request. The deltas it reviews, the notes it wrote, and other tool results such as `recall` are never touched. Turn it off with `advisor.evictStaleResults` ([#13238](https://github.com/can1357/oh-my-pi/pull/13238) by [@alnaggar-dev](https://github.com/alnaggar-dev))
-
-### Changed
-
-- Improved recovery from output-length and context-window limits so truncated but actionable turns can be retained and retries are handled more accurately.
-- Shortened the default system prompt by approximately 150 tokens while preserving its guidance.
-- Improved Anthropic fallback handling so credit tokens and signed thinking context are preserved across same-provider fallbacks.
-- Improved filesystem safety and path consistency across virtual URL protocols, including symlink and containment validation and correct Windows long-path reporting.
-- Improved IDA database resource management with project sharing, bounded concurrency, idle cleanup, autosave, and clearer database status in listings.
-- Improved runtime configuration behavior with type-safe layered settings, live updates, and safe sequential saves.
-- Improved authentication and credential management to support live broker and credential-store changes.
-
-### Fixed
-
-- Fixed concurrent project access by enforcing file locking across processes.
-- Fixed Windows file reads with line selectors such as `:1-40`.
-- Fixed `oms update` and startup update checks to honor configured npm registries, including scoped registries and authentication tokens.
-- Fixed invalid auto-QA grievance reports blocking the rest of the upload queue; rejected reports are now surfaced with the server error while other reports continue.
-- Fixed advisor reviews making unnecessary follow-up requests, losing context after pruning, using the wrong thinking effort, or sending excessively large edit diffs.
-- Fixed `/login` crashes in source-link and development installs after extension loading.
-- Fixed retry fallback loops that could continue indefinitely when the fallback resolved to the same effective request.
-- Fixed setup wizard detection for Gemini web search when Antigravity OAuth is active.
-- Fixed headless print mode failing to complete an advisor review when a configured fallback reviewer was available.
-- Fixed embedded shell startup when the inherited working directory had been deleted.
-- Fixed Codex usage displays showing stale subscription plans and corrected usage views that combined separate quota limits.
-- Fixed explicit model and provider selections bypassing `disabledProviders`; disabled providers are now refused and skipped during fallback.
-- Fixed memory storage errors so failed items and underlying storage failures are identified.
-- Fixed malformed user-level `mcp.json` files preventing valid MCP sources from loading.
-- Fixed Anthropic server-side fallback requests using invalid model names.
-- Fixed large-output model requests failing near the context limit by adjusting the output allowance to the remaining context.
-- Fixed tool references in system prompts for tools exposed only through `xd://` devices.
-- Fixed dictation remaining active after a recording restart during transcription.
-- Fixed automatic account sign-outs going unannounced; sessions now report the affected account and login action through interactive, print, JSON, and RPC output.
-- Fixed duplicate MCP tool listings in the system prompt.
-- Fixed supervised service exits being missed or repeatedly replayed instead of being delivered to the session that started the service.
-- Fixed memory backend failures to identify the affected item and underlying storage error.
-- Fixed `write xd://<tool>` validation behavior so devices can return precise schema-mismatch responses.
-
-Older entries are archived in [packages/coding-agent/CHANGELOG.md@5089da37c016](https://github.com/pickpocket/oh-my-soup/blob/5089da37c0163ece530ae5e88e8dcda593bfdff8/packages/coding-agent/CHANGELOG.md).
+Older entries are archived in [packages/coding-agent/CHANGELOG.md@5449d28543f3](https://github.com/pickpocket/oh-my-soup/blob/5449d28543f39b9cff00d5d11a3e372c5c46439b/packages/coding-agent/CHANGELOG.md).

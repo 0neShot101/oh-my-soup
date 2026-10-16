@@ -2,32 +2,6 @@
 
 ## [Unreleased]
 
-## [18.8.9] - 2026-10-10
-
-### Added
-
-- Added a filesystem timestamp guard for caches that must detect rapid same-size file rewrites.
-
-## [18.8.8] - 2026-10-10
-
-### Changed
-
-- Changed outbound User-Agent consumers to share the versioned `USER_AGENT` constant (`oms/<version>`).
-- Changed stale process-log retention from the newest five files globally to one newest file per completed process and day within the current and previous four local calendar days. This preserves bounded daily diagnostic coverage while continuing to remove one-use audit files.
-
-### Fixed
-
-- Fixed process teardown trying to read stdout again after a streaming consumer had already consumed or cancelled it.
-
-### Added
-
-- Exported `sqliteFileIdentity()`, so a caller holding a long-lived SQLite connection can tell when its path now names a different file (e.g. after a corrupt store was quarantined and replaced) ([#14361](https://github.com/can1357/oh-my-pi/pull/14361) by [@F0Rextasy](https://github.com/F0Rextasy))
-- Added `slugify()`, the shared lowercase ASCII kebab-case helper with an optional `maxLength` ([#14283](https://github.com/can1357/oh-my-pi/pull/14283) by [@jaredlyon](https://github.com/jaredlyon))
-
-### Fixed
-
-- Fixed an unhandled rejection when a subprocess is spawned with an already-aborted signal ([#15750](https://github.com/can1357/oh-my-pi/pull/15750) by [@harshaygadekar](https://github.com/harshaygadekar))
-
 ## [18.10.0] - 2026-10-12
 
 ### Added
@@ -70,7 +44,30 @@
 
 ### Added
 
+- Added a filesystem timestamp guard for caches that must detect rapid same-size file rewrites.
+
+## [18.8.9] - 2026-10-10
+
+### Added
+
 - Added `hueDistance`, the angular distance between two OKLCH hues
+
+## [18.8.8] - 2026-10-10
+
+### Changed
+
+- Changed outbound User-Agent consumers to share the versioned `USER_AGENT` constant (`oms/<version>`).
+- Changed stale process-log retention from the newest five files globally to one newest file per completed process and day within the current and previous four local calendar days. This preserves bounded daily diagnostic coverage while continuing to remove one-use audit files.
+
+### Fixed
+
+- Fixed process teardown trying to read stdout again after a streaming consumer had already consumed or cancelled it.
+- Fixed an unhandled rejection when a subprocess is spawned with an already-aborted signal ([#15750](https://github.com/can1357/oh-my-pi/pull/15750) by [@harshaygadekar](https://github.com/harshaygadekar))
+
+### Added
+
+- Exported `sqliteFileIdentity()`, so a caller holding a long-lived SQLite connection can tell when its path now names a different file (e.g. after a corrupt store was quarantined and replaced) ([#14361](https://github.com/can1357/oh-my-pi/pull/14361) by [@F0Rextasy](https://github.com/F0Rextasy))
+- Added `slugify()`, the shared lowercase ASCII kebab-case helper with an optional `maxLength` ([#14283](https://github.com/can1357/oh-my-pi/pull/14283) by [@jaredlyon](https://github.com/jaredlyon))
 
 ## [18.8.8] - 2026-10-10
 

@@ -490,8 +490,11 @@ jobs:
               if-no-files-found: error
               retention-days: 1
 
-   # Remaining targets feed release binaries and platform regression checks.
-   # Build beside the Linux TS fan-out; like rust_validate, non-PR only.
+   # The remaining targets (darwin, arm64, musl and win32 cross builds). Only
+   # release jobs consume them, so they build beside the TS fan-out instead of
+   # ahead of it: serially after the pair they held every test job back ~10
+   # min on native-changing main pushes. Non-PR only, like rust_validate;
+   # the build also keeps its disk cache warm for release runs.
    native_addons_cross:
       name: Build native addons (bazel, cross targets)
       if: github.event_name != 'pull_request'
@@ -804,13 +807,10 @@ jobs:
       steps:
          - run: echo "release validation green"
 
-   # Builds (does not publish) every release binary on one Linux x64 image in
-   # parallel with the test fan-out; the needs are the two native_addons jobs,
-   # whose artifacts supply their addons. bun cross-compiles every target;
-   # macOS binaries are Developer ID signed and notarized here too
-   # (rcodesign). release_smoke then runs each binary on its own platform.
-   # Publishing (npm leaves, GitHub release, build.stencil.so, core npm) is gated on
-   # release_gate downstream.
+   # Builds every release binary on Linux beside the test fan-out. The two
+   # native_addons jobs supply addons; Bun cross-compiles every target.
+   # macOS binaries are signed/notarized here via rcodesign. release_smoke
+   # runs each binary on its own platform before GitHub publication.
    release_binary:
       name: "Release binary: ${{ matrix.target_id }}"
       if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
@@ -930,9 +930,7 @@ jobs:
    # each one on its own platform before anything publishes: download the
    # artifact, then `--version` and `--smoke-test` in a throwaway home. macOS
    # legs first run Apple's own signature check, and launch under the final
-   # signature (hardened runtime and entitlements included when signed). These
-   # are the exact bytes release_github and release_build publish, so no job
-   # re-verifies the published assets.
+   # signature (hardened runtime and entitlements included when signed).
    release_smoke:
       name: "Smoke release binary: ${{ matrix.target_id }}"
       if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
@@ -955,8 +953,6 @@ jobs:
       runs-on: ${{ matrix.os }}
       permissions:
          contents: read
-      env:
-         MACOS_SIGNING: ${{ secrets.APPLE_CERTIFICATE_P12 != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER_ID != '' && secrets.APPLE_API_KEY != '' }}
       steps:
          - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
            with:
@@ -973,24 +969,6 @@ jobs:
               runtime_dir="$(mktemp -d)"
               HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "$BINARY" --version
               HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "$BINARY" --smoke-test
-         # ci-macos-sign.sh signs ad hoc whenever its step lacks the APPLE_*
-         # credentials, so an ad-hoc binary while the secrets exist means they
-         # stopped reaching it.
-         - name: Assert Developer ID signature
-           if: runner.os == 'macOS' && env.MACOS_SIGNING == 'true'
-           env:
-              BINARY: binaries/${{ matrix.binary }}
-           run: |
-              info="$(codesign -dvvv "$BINARY" 2>&1)"
-              echo "$info"
-              if grep -qE "flags=.*adhoc|Signature=adhoc" <<< "$info"; then
-                echo "::error::$BINARY is ad-hoc signed (Developer ID signing did not run)"
-                exit 1
-              fi
-              # Informational: a bare (unstapled) Mach-O relies on the online
-              # notarization ticket lookup, so surface the Gatekeeper result
-              # without gating the release on it.
-              spctl -a -t exec -vv "$BINARY" || echo "spctl non-zero (expected for unstapled bare binary; ticket served online)"
          - name: Smoke release binary (Alpine)
            if: matrix.alpine
            env:
@@ -1075,101 +1053,39 @@ jobs:
               body_path: release-notes.md
               generate_release_notes: true
 
-   # Publishes the release binaries to build.stencil.so, which serves them
-   # (with binary patches between releases) to `oms update`, the install
-   # scripts' binary mode, and the Homebrew formula. Canary tags upload to the
-   # canary channel (derived script-side). Not gated on skip_npm: binary
-   # clients never read npm.
-   release_build:
-      name: Publish to build.stencil.so
+   release_github_verify:
+      name: Verify published release (macOS)
       if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
-         needs.release_gate.result == 'success' &&
-         needs.release_binary.result == 'success' &&
-         needs.release_smoke.result == 'success' &&
          needs.release_github.result == 'success' }}
-      needs: [release_metadata, release_gate, release_binary, release_smoke, release_github]
-      runs-on: ubuntu-22.04
-      # `id-token: write` lets the upload mint the GitHub OIDC token (audience
-      # build.stencil.so) the service authenticates the publisher with.
+      needs: [release_metadata, release_github]
+      runs-on: macos-14
       permissions:
-         id-token: write
          contents: read
+      env:
+         MACOS_SIGNING: ${{ secrets.APPLE_CERTIFICATE_P12 != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER_ID != '' && secrets.APPLE_API_KEY != '' }}
       steps:
-         - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-         - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-         - name: Download release binaries
-           uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-           with:
-              pattern: oms-binary-*
-              path: packages/coding-agent/binaries
-              merge-multiple: true
-         # Dependency-free script (bun APIs + curl), so no `bun install`.
-         - name: Publish to build.stencil.so
-           run: bun scripts/ci-build-upload.ts "${{ needs.release_metadata.outputs.release-tag }}" packages/coding-agent/binaries/oms-*
-
-   release_npm:
-      name: Publish to npm
-      if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
-         needs.release_binary.result == 'success' &&
-         needs.release_smoke.result == 'success' &&
-         needs.release_build.result == 'success' &&
-         needs.release_native_leaves.result == 'success' &&
-         !inputs.skip_npm }}
-      # release_native_leaves must finish first: the core package lists the
-      # leaf packages as lockstep-versioned optionalDependencies, so installs
-      # resolve them the moment the core version is live. release_build too:
-      # binary updates install what build.stencil.so published (update-cli.ts),
-      # so the build service must lead npm.
-      needs: [release_metadata, release_binary, release_smoke, release_build, release_native_leaves]
-      runs-on: ubuntu-22.04
-      # `id-token: write` lets npm mint the GitHub OIDC token it exchanges for a
-      # short-lived publish token (trusted publishing + provenance). When a
-      # package has no matching trusted publisher configured, npm silently falls
-      # back to NODE_AUTH_TOKEN below — which also covers first-ever publishes.
-      permissions:
-         id-token: write
-         contents: read
-      steps:
-         - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-         - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-         - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-           with:
-              node-version: "24"
-              registry-url: "https://registry.npmjs.org"
-         # npm runs under Bun when invoked by the release script; npm 12
-         # requires a newer emulated Node version than Bun 1.3 provides.
-         - name: Ensure npm supports trusted publishing
-           run: npm install -g npm@11.17.0
-         - name: Restore bun store
-           id: bun-cache
-           uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-           with:
-              path: ~/.bun/install/cache
-              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-              restore-keys: |
-                 bun-${{ runner.os }}-
-         - run: bun install --frozen-lockfile
-         # Main-only save: caches saved on a tag or branch are readable only by
-         # that ref yet count against the shared 10 GB repo cache quota.
-         - name: Save bun store
-           if: github.ref == 'refs/heads/main' && steps.bun-cache.outputs.cache-hit != 'true'
-           uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-           with:
-              path: ~/.bun/install/cache
-              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-         # The prepack executes workspace code which loads the Linux x64
-         # addon, so install the native_addons job's artifact before publishing.
-         - name: Install prebuilt native addons
-           uses: ./.github/actions/native-artifacts
-           with:
-              targets: linux-x64-baseline linux-x64-modern
-         - name: Publish to npm
-           env:
-              # Fallback auth: setup-node wrote an .npmrc referencing
-              # NODE_AUTH_TOKEN; npm uses it only when OIDC has no trusted
-              # publisher for the package (or on a first publish).
-              NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-           run: bun run ci:release:publish
+         - name: Download published macOS arm64 binary
+           run: |
+              curl -fsSL -o oms-darwin-arm64 "https://github.com/${{ github.repository }}/releases/download/${{ needs.release_metadata.outputs.release-tag }}/oms-darwin-arm64"
+              chmod +x oms-darwin-arm64
+         - name: Verify published macOS arm64 binary
+           run: |
+              codesign -dvvv ./oms-darwin-arm64
+              codesign --verify --strict --verbose=4 ./oms-darwin-arm64
+              runtime_dir="$(mktemp -d)"
+              HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" ./oms-darwin-arm64 --version
+              HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" ./oms-darwin-arm64 --smoke-test
+         - name: Assert signed release is not ad-hoc
+           if: env.MACOS_SIGNING == 'true'
+           run: |
+              if codesign -dvvv ./oms-darwin-arm64 2>&1 | grep -qE "flags=.*adhoc|Signature=adhoc"; then
+                echo "published binary is still ad-hoc signed (Developer ID signing did not run)" >&2
+                exit 1
+              fi
+              # Gatekeeper assessment: a notarized Developer ID binary is accepted.
+              # Informational — a bare (unstapled) Mach-O relies on the online ticket
+              # lookup, so surface the result without gating the release on it.
+              spctl -a -t exec -vv ./oms-darwin-arm64 || echo "spctl non-zero (expected for unstapled bare binary; ticket served online)"
 
    # Regenerate the Homebrew tap formula (pickpocket/homebrew-tap) from the freshly
    # published release assets and push it. Gated on release_github_verify so the
@@ -1179,10 +1095,8 @@ jobs:
    release_brew:
       name: Update Homebrew tap
       if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
-         needs.release_metadata.outputs.channel != 'canary' &&
-         needs.release_build.result == 'success' &&
          needs.release_github_verify.result == 'success' }}
-      needs: [release_metadata, release_build, release_github_verify]
+      needs: [release_metadata, release_github_verify]
       runs-on: ubuntu-22.04
       env:
          HAS_TAP_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY != '' }}
@@ -1202,6 +1116,8 @@ jobs:
               path: homebrew-tap
          - name: Regenerate and push the formula
            if: env.HAS_TAP_KEY == 'true'
+           env:
+              GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
            run: |
               set -euo pipefail
               bun scripts/ci-update-brew-formula.ts "${{ needs.release_metadata.outputs.release-tag }}" --out homebrew-tap/Formula/oms.rb

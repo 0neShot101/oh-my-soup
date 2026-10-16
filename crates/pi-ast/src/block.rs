@@ -9860,7 +9860,7 @@ fn with_block_node<R>(
 		return Ok(None);
 	};
 
-	let Some(tree) = parse_cached(&code, language, path.as_deref())? else {
+	let Some(tree) = parse_cached(code, language, path)? else {
 		return Ok(None);
 	};
 	Ok(block_node(tree.root_node(), row, col).map(inspect))

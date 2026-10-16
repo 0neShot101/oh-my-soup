@@ -2,16 +2,6 @@
 
 ## [Unreleased]
 
-## [18.8.8] - 2026-10-10
-
-### Fixed
-
-- Fixed long retained transcripts exhausting local memory extraction models by limiting each extraction input to 8192 characters while keeping the opening context and newest turns ([#14956](https://github.com/can1357/oh-my-pi/issues/14956)).
-
-### Fixed
-
-- Fixed `MNEMOPI_<LABEL>_WEIGHT` and `MNEMOPI_TIER<N>_WEIGHT` having no effect on recall ranking ([#13824](https://github.com/can1357/oh-my-pi/pull/13824) by [@sjawhar](https://github.com/sjawhar))
-
 ## [18.11.1] - 2026-10-15
 
 ### Fixed
@@ -33,6 +23,13 @@
 ### Fixed
 
 - Fixed memory-save performance degradation and excessive memory-database growth when date-related terms such as “today” appeared in otherwise unrelated memories.
+
+## [18.8.8] - 2026-10-10
+
+### Fixed
+
+- Fixed long retained transcripts exhausting local memory extraction models by limiting each extraction input to 8192 characters while keeping the opening context and newest turns ([#14956](https://github.com/can1357/oh-my-pi/issues/14956)).
+- Fixed `MNEMOPI_<LABEL>_WEIGHT` and `MNEMOPI_TIER<N>_WEIGHT` having no effect on recall ranking ([#13824](https://github.com/can1357/oh-my-pi/pull/13824) by [@sjawhar](https://github.com/sjawhar))
 
 ## [18.8.8] - 2026-10-10
 

@@ -1751,6 +1751,13 @@ async fn terminate_run(registry: &process::SpawnRegistry) {
 	}
 }
 
+#[cfg_attr(
+	not(unix),
+	allow(
+		clippy::unused_async,
+		reason = "Windows TERM is hard termination without an async grace wait"
+	)
+)]
 async fn wait_for_term_grace(registry: &process::SpawnRegistry) {
 	// Windows TERM is already hard termination; there is no trap to wait for.
 	#[cfg(unix)]

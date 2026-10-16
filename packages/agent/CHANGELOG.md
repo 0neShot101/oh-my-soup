@@ -2,11 +2,6 @@
 
 ## [Unreleased]
 
-## [18.8.8] - 2026-10-10
-### Added
-
-- `agent_start` carries `resumedToolCallIds` when a continued run first executes the calls of an unpaired assistant tail
-
 ## [18.11.1] - 2026-10-15
 
 ### Added
@@ -81,6 +76,12 @@
 ### Fixed
 
 - Fixed stale queue updates when queued steering is adopted, withdrawn, or added to the transcript, ensuring queue listeners consistently receive the latest state.
+
+## [18.8.8] - 2026-10-10
+
+### Added
+
+- `agent_start` carries `resumedToolCallIds` when a continued run first executes the calls of an unpaired assistant tail
 
 ## [18.8.8] - 2026-10-10
 
