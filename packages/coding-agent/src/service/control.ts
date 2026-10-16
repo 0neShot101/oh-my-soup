@@ -1,5 +1,6 @@
 import * as net from "node:net";
 import * as path from "node:path";
+import { isBunTestRuntime } from "@oh-my-soup/pi-utils";
 import { servicePaths } from "./paths";
 import {
 	encodeServiceFrame,
@@ -17,6 +18,10 @@ export interface LiveServiceSession {
 	cwd: string;
 	pid: number;
 	id: string;
+}
+
+export function isServiceChildProcess(): boolean {
+	return process.env.OMS_SERVICE_CHILD === "1" && !isBunTestRuntime();
 }
 
 /** Missing/stale endpoints alone allow a local launch; all other connection failures are fatal. */
@@ -168,14 +173,25 @@ export async function listServiceSessions(): Promise<LiveServiceSession[]> {
 		) {
 			throw new Error("OMS service sent a malformed session list");
 		}
-		sessions.push({ sessionPath: raw.sessionPath, cwd: raw.cwd, pid: raw.pid, id: raw.id });
+		sessions.push({
+			sessionPath: raw.sessionPath,
+			cwd: raw.cwd,
+			pid: raw.pid,
+			id: raw.id,
+		});
 	}
 	return sessions;
 }
 
 /** Publish a child-owned identity, even before lazy persistence creates the file; undefined clears it. */
 export async function reportServiceSession(sessionPath: string | undefined, id?: string, cwd?: string): Promise<void> {
-	const response = await requestControl({ type: "report", pid: process.pid, sessionPath, id, cwd });
+	const response = await requestControl({
+		type: "report",
+		pid: process.pid,
+		sessionPath,
+		id,
+		cwd,
+	});
 	if (!response) throw new Error("OMS terminal service is not running");
 }
 
@@ -189,7 +205,11 @@ export async function watchServiceRepaints(repaint: () => void): Promise<() => v
 
 /** Move this child's terminal handles to an already-published PTY without opening its session file. */
 export async function handoffServiceSession(sessionPath: string): Promise<boolean> {
-	const response = await requestControl({ type: "handoff", pid: process.pid, sessionPath });
+	const response = await requestControl({
+		type: "handoff",
+		pid: process.pid,
+		sessionPath,
+	});
 	if (!response) throw new Error("OMS terminal service is not running");
 	if (typeof response.handedOff !== "boolean") throw new Error("OMS service sent a malformed handoff reply");
 	return response.handedOff;

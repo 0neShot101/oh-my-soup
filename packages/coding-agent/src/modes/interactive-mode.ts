@@ -42,16 +42,118 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@oh-my-soup/pi-tui";
-import type { TerminalAppearanceRequestToken } from "@oh-my-soup/pi-tui/terminal";
-import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "@oh-my-soup/pi-tui/native/node";
-import { col, kbd, node, row, span, text } from "@oh-my-soup/pi-tui/native/describe";
-import { sameItems } from "@oh-my-soup/pi-tui/native/memo";
+import { KeybindingsManager } from "@oh-my-soup/pi-tui/app-keybindings";
+import { AssistantMessageComponent } from "@oh-my-soup/pi-tui/chat/assistant-message";
+import type { BashExecutionComponent } from "@oh-my-soup/pi-tui/chat/bash-execution";
+import type { EvalExecutionComponent } from "@oh-my-soup/pi-tui/chat/eval-execution";
+import { ReadToolGroupComponent } from "@oh-my-soup/pi-tui/chat/read-tool-group";
+import { ServedModelTracker } from "@oh-my-soup/pi-tui/chat/served-model-marker";
+import { SkillMessageComponent } from "@oh-my-soup/pi-tui/chat/skill-message";
+import { setSvgFigureRendering } from "@oh-my-soup/pi-tui/chat/svg-figure";
+import { setTableCharts } from "@oh-my-soup/pi-tui/chat/table-chart";
+import { messageHasDisplayableThinking } from "@oh-my-soup/pi-tui/chat/thinking-display";
+import {
+	stopSharedSpinnerTicker,
+	ToolExecutionComponent,
+	type ToolExecutionHandle,
+} from "@oh-my-soup/pi-tui/chat/tool-execution";
+import { setTranscriptActionHandler } from "@oh-my-soup/pi-tui/chat/transcript-actions";
+import { ChatBlock, type ChatBlockHost } from "@oh-my-soup/pi-tui/chrome/chat-block";
+import { DynamicBorder } from "@oh-my-soup/pi-tui/chrome/dynamic-border";
+import { formatCoarseDuration } from "@oh-my-soup/pi-tui/chrome/format";
+import { appKey, editorKey, rawKeyHint } from "@oh-my-soup/pi-tui/chrome/keybinding-hints";
 import { describeSegmentTrack, renderSegmentTrack, type TrackSegment } from "@oh-my-soup/pi-tui/chrome/segment-track";
+import { sanitizeStatusText } from "@oh-my-soup/pi-tui/chrome/shared";
+import type { StatusNotice } from "@oh-my-soup/pi-tui/chrome/status-notice";
+import { TranscriptContainer } from "@oh-my-soup/pi-tui/chrome/transcript-container";
 import type { WorkingRowSpec } from "@oh-my-soup/pi-tui/components/loader";
 import { formatDoubleTap } from "@oh-my-soup/pi-tui/key-hint-format";
+import { col, kbd, node, row, span, text } from "@oh-my-soup/pi-tui/native/describe";
+import { sameItems } from "@oh-my-soup/pi-tui/native/memo";
+import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "@oh-my-soup/pi-tui/native/node";
+import type { AgentCostSnapshot } from "@oh-my-soup/pi-tui/overlays/agent-hub-projection";
+import type { AgentHubRegistry } from "@oh-my-soup/pi-tui/overlays/agent-hub-types";
+import { CodexResetFireworksController } from "@oh-my-soup/pi-tui/overlays/codex-reset-fireworks";
+import { ErrorBannerComponent } from "@oh-my-soup/pi-tui/overlays/error-banner";
+import type { HookEditorComponent } from "@oh-my-soup/pi-tui/overlays/hook-editor";
+import type { HookInputComponent } from "@oh-my-soup/pi-tui/overlays/hook-input";
+import type { HookSelectorComponent, HookSelectorSlider } from "@oh-my-soup/pi-tui/overlays/hook-selector";
+import { JobsSheet } from "@oh-my-soup/pi-tui/overlays/jobs-panel";
+import { type PlanReviewAnnotationState, PlanReviewOverlay } from "@oh-my-soup/pi-tui/overlays/plan-review-overlay";
+import { PlanSaveOverlay, type PlanSaveOverlayResult } from "@oh-my-soup/pi-tui/overlays/plan-save-overlay";
+import {
+	getRunningSubagentBadgeAgentIds,
+	getRunningSubagentBadgeRegistry,
+} from "@oh-my-soup/pi-tui/overlays/running-subagent-badge";
+import { SessionInfoOverlay } from "@oh-my-soup/pi-tui/overlays/session-info-overlay";
+import {
+	type ObservableSession,
+	type SessionObserverChangeKind,
+	SessionObserverRegistry,
+} from "@oh-my-soup/pi-tui/overlays/session-observer-registry";
+import { AttachmentChipsBand } from "@oh-my-soup/pi-tui/prompt/attachment-chips";
+import {
+	Composer,
+	type ComposerPreferences,
+	type ComposerStatusCache,
+	PINNED_HUD_TOGGLE_ID,
+} from "@oh-my-soup/pi-tui/prompt/composer";
+import { modelMentionChipLabel, shiftImageMarkers } from "@oh-my-soup/pi-tui/prompt/composer-attachments";
+import { sharedComposerCache } from "@oh-my-soup/pi-tui/prompt/composer-cache";
+import { resolveComposerHint } from "@oh-my-soup/pi-tui/prompt/composer-hints";
+import { type ComposerNativeState, CustomEditor } from "@oh-my-soup/pi-tui/prompt/custom-editor";
+import { EditorTopGap } from "@oh-my-soup/pi-tui/prompt/editor-top-gap";
+import { imageReferenceHyperlink, setImageBlobWriter } from "@oh-my-soup/pi-tui/prompt/image-references";
+import { setMagicKeywords } from "@oh-my-soup/pi-tui/prompt/magic-keywords";
+import { modelMentionDisplayName } from "@oh-my-soup/pi-tui/prompt/model-mention-syntax";
+import { setWordPredictionHost } from "@oh-my-soup/pi-tui/prompt/word-completion";
+import { applyHyperlinkSetting, fileHyperlink } from "@oh-my-soup/pi-tui/render/hyperlink";
+import {
+	FEED_MODEL_BADGE_WIDTH,
+	formatFeedModelBadge,
+	formatMoreItems,
+	isFeedModelBadgeEnabled,
+	previewLine,
+	replaceTabs,
+	shortenEmbeddedPaths,
+	shortenPath,
+	shortenToolArgumentPaths,
+	TRUNCATE_LENGTHS,
+	truncateToWidth,
+} from "@oh-my-soup/pi-tui/render/render-utils";
+import { renderTreeList } from "@oh-my-soup/pi-tui/render/tree-list";
+import type { SpaceHoldHandler } from "@oh-my-soup/pi-tui/space-hold";
+import { StatusLineComponent } from "@oh-my-soup/pi-tui/status-line";
+import type { LoopConditionConfig, LoopLimitRuntime } from "@oh-my-soup/pi-tui/status-line/loop";
 import { thinkingLevelWord } from "@oh-my-soup/pi-tui/status-line/segments";
-import type { TspChecklistItem, TspChecklistPhase, TspSpan, TspText, TspTreeNode } from "@oh-my-soup/pi-wire";
+import type { TerminalAppearanceRequestToken } from "@oh-my-soup/pi-tui/terminal";
 import { isInsideTerminalMultiplexer } from "@oh-my-soup/pi-tui/terminal-capabilities";
+import type { Theme } from "@oh-my-soup/pi-tui/theme";
+import {
+	getEditorTheme,
+	getMarkdownTheme,
+	onTerminalAppearanceChange,
+	onThemeChange,
+	setMarkdownMermaidRendering,
+	setSymbolPreset,
+	startMacOSAppearanceReprobeFallback,
+	theme,
+	warmHighlighter,
+} from "@oh-my-soup/pi-tui/theme";
+import { clearMermaidCache } from "@oh-my-soup/pi-tui/theme/mermaid-cache";
+import { getSessionAccentAnsi, getSessionAccentHex } from "@oh-my-soup/pi-tui/theme/session-color";
+import { type ShimmerPalette, shimmerEnabled, shimmerText } from "@oh-my-soup/pi-tui/theme/shimmer";
+import { getSlashCommandTypeIcon } from "@oh-my-soup/pi-tui/theme/tui-adapters";
+import type { ConfiguredThinkingLevel } from "@oh-my-soup/pi-tui/thinking";
+import { agentTypeBadge, formatTaskId } from "@oh-my-soup/pi-tui/tools/task";
+import type { TodoItem, TodoPhase } from "@oh-my-soup/pi-tui/tools/todo";
+import {
+	formatPhaseDisplayName,
+	isClosedTodo,
+	selectCollapsedTodos,
+	setActiveTodoDescriptionsProvider,
+	todoMatchesAnyDescription,
+} from "@oh-my-soup/pi-tui/tools/todo";
 import {
 	$env,
 	adjustHsv,
@@ -66,17 +168,24 @@ import {
 	setProjectDir,
 } from "@oh-my-soup/pi-utils";
 import chalk from "@oh-my-soup/pi-utils/chalk";
+import type { TspChecklistItem, TspChecklistPhase, TspSpan, TspText, TspTreeNode } from "@oh-my-soup/pi-wire";
+import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
 import { pickTableChart } from "../auto-graph/planner";
 import { restartArgv } from "../cli/flag-tables";
-import { reportServiceSession, watchServiceRepaints } from "../service/control";
-import type { CollabGuestLink } from "../collab/guest";
 import { CollabController } from "../collab/controller";
+import type { CollabGuestLink } from "../collab/guest";
 import type { CollabHost } from "../collab/host";
-import { KeybindingsManager } from "@oh-my-soup/pi-tui/app-keybindings";
-import { appKey, editorKey, rawKeyHint } from "@oh-my-soup/pi-tui/chrome/keybinding-hints";
 import { formatModelString, type ResolvedModelRoleValue } from "../config/model-resolver";
+import { cfgCycleOrder, cfgModelRoles } from "../config/model-settings";
+import { combine, type SettingValueOf } from "../config/registry";
 import { isSettingsInitialized, Settings, settings } from "../config/settings";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
+import { onDownloadActivity } from "../downloads/activity";
+import {
+	isJudgmentBatchProgress,
+	JUDGMENT_BATCH_PROGRESS_EVENT_CHANNEL,
+	type JudgmentBatchProgress,
+} from "../eval/judgment-batch-events";
 import type {
 	AutocompleteProviderFactory,
 	ContextUsage,
@@ -96,9 +205,14 @@ import type {
 import type { Skill } from "../extensibility/skills";
 import type { FileSlashCommand } from "../extensibility/slash-commands";
 import { loadSlashCommands } from "../extensibility/slash-commands";
+import { cfgGoalContinuationModes, cfgGoalEnabled } from "../goals/settings";
 import type { GoalModeState } from "../goals/state";
+import { goalContinuationActivity, goalFromModeData } from "../goals/state";
 import { rebindMemoryBackendForCwd } from "../hindsight/backend";
 import { copyLocalArtifacts, resolveLocalRoot } from "../internal-urls";
+import { type CfgApproval, type CfgChangeRequest, setCfgApprovalHost } from "../internal-urls/cfg-protocol";
+import { resolveMarkdownLinkHrefs } from "../internal-urls/hyperlink-targets";
+import type { ResolveContext } from "../internal-urls/index";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
 import type { MCPManager } from "../mcp";
 import {
@@ -109,24 +223,18 @@ import {
 	type McpConnectionStatusEvent,
 } from "../mcp/startup-events";
 import { humanizePlanTitle, type PlanApprovalDetails, resolvePlanTitle } from "../plan-mode/approved-plan";
-import {
-	isJudgmentBatchProgress,
-	JUDGMENT_BATCH_PROGRESS_EVENT_CHANNEL,
-	type JudgmentBatchProgress,
-} from "../eval/judgment-batch-events";
-import { onDownloadActivity } from "../downloads/activity";
-import { DownloadActivityHud, JudgmentBatchProgressHud } from "./progress-hud";
-import { autosaveApprovedPlan, planSaveFileName } from "../plan-mode/plan-autosave";
 import { resolvePlanModelTransition } from "../plan-mode/model-transition";
+import { autosaveApprovedPlan, planSaveFileName } from "../plan-mode/plan-autosave";
+import { resolvePlanFilePath } from "../plan-mode/plan-files";
+import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../plan-mode/settings";
+import { syncTextPrediction, textPredictionBackend } from "../predict/client";
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
 import planFilenamePrompt from "../prompts/system/plan-filename.md" with { type: "text" };
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with { type: "text" };
-import type { AgentHubRegistry } from "@oh-my-soup/pi-tui/overlays/agent-hub-types";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { registerPersistedSubagents } from "../registry/persisted-agents";
-import type { AgentCostSnapshot } from "@oh-my-soup/pi-tui/overlays/agent-hub-projection";
-import { sumSubagentTreeCost } from "./agent-hub-runtime";
+import { isServiceChildProcess, reportServiceSession, watchServiceRepaints } from "../service/control";
 import {
 	type AgentSession,
 	type AgentSessionEvent,
@@ -135,15 +243,16 @@ import {
 	SHUTDOWN_CONSOLIDATE_BUDGET_MS,
 } from "../session/agent-session";
 import type { CompactMode } from "../session/compact-modes";
+import {
+	cfgCompactionEnabled,
+	cfgCompactionIdleEnabled,
+	cfgCompactionIdleThresholdTokens,
+	cfgCompactionIdleTimeoutSeconds,
+	cfgCompactionMethodOrder,
+} from "../session/context-settings";
 import type { ForeignSessionSource } from "../session/foreign-session-store";
 import { HistoryStorage } from "../session/history-storage";
-import { syncTextPrediction, textPredictionBackend } from "../predict/client";
-import { setWordPredictionHost } from "@oh-my-soup/pi-tui/prompt/word-completion";
 import { USER_INTERRUPT_LABEL } from "../session/messages";
-import { resolveMarkdownLinkHrefs } from "../internal-urls/hyperlink-targets";
-import type { ResolveContext } from "../internal-urls/index";
-import { modelMentionDisplayName } from "@oh-my-soup/pi-tui/prompt/model-mention-syntax";
-import { modelMentionChipLabel, shiftImageMarkers } from "@oh-my-soup/pi-tui/prompt/composer-attachments";
 import type { SessionContext } from "../session/session-context";
 import type { SessionManager } from "../session/session-manager";
 import {
@@ -153,67 +262,45 @@ import {
 	type SessionWorktree,
 	type WorktreeExitPlan,
 } from "../session/session-worktree";
+import {
+	cfgExpandThinkingBlocks,
+	cfgHideThinkingBlock,
+	cfgProseOnlyThinking,
+	cfgTierAdvisor,
+} from "../session/settings";
 import type { ShakeMode } from "../session/shake-types";
-import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, buildTuiBuiltinSlashCommands } from "../slash-commands/builtin-registry";
 import { buildStaticInlineHint } from "../slash-commands/builtin-completions";
-import { formatCoarseDuration } from "@oh-my-soup/pi-tui/chrome/format";
-import { type DictationTarget, MicCursor, type SttCallbacks, STTController, type SttState } from "../stt";
-import type { SpaceHoldHandler } from "@oh-my-soup/pi-tui/space-hold";
-import { resolveCliEntryCmd } from "../subprocess/worker-client";
-import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
-import { labelEchoesHandle } from "../task/label";
-import { agentTypeBadge, formatTaskId } from "@oh-my-soup/pi-tui/tools/task";
-import type { ConfiguredThinkingLevel } from "@oh-my-soup/pi-tui/thinking";
-
-import { isMCPToolName } from "../tools/builtin-names";
-import type { LspStartupServerInfo } from "../tools";
-import { resolvePlanFilePath } from "../plan-mode/plan-files";
-import { resolveToCwd } from "../tools/path-utils";
+import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, buildTuiBuiltinSlashCommands } from "../slash-commands/builtin-registry";
 import { StreamPublisher } from "../stream/publisher";
 import { newRecordingPath, SessionRecorder } from "../stream/recording";
 import { StreamRedactor } from "../stream/redactor";
-import {
-	FEED_MODEL_BADGE_WIDTH,
-	formatFeedModelBadge,
-	formatMoreItems,
-	isFeedModelBadgeEnabled,
-	previewLine,
-	replaceTabs,
-	shortenEmbeddedPaths,
-	shortenToolArgumentPaths,
-	shortenPath,
-	TRUNCATE_LENGTHS,
-	truncateToWidth,
-} from "@oh-my-soup/pi-tui/render/render-utils";
+import { cfgStreamRedactPatterns } from "../stream/settings";
+import { type DictationTarget, MicCursor, STTController, type SttCallbacks, type SttState } from "../stt";
+import { cfgSttEnabled } from "../stt/settings";
+import { resolveCliEntryCmd } from "../subprocess/worker-client";
+import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
+import { labelEchoesHandle } from "../task/label";
+import { cfgWorktreeOnExit, cfgWorktreeOnStart } from "../task/settings";
+import type { LspStartupServerInfo } from "../tools";
+import { isMCPToolName } from "../tools/builtin-names";
+import { resolveToCwd } from "../tools/path-utils";
 import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
-import { type CfgApproval, type CfgChangeRequest, setCfgApprovalHost } from "../internal-urls/cfg-protocol";
+import { cfgTasksTodoClearDelay } from "../tools/settings";
 import {
 	createTodoHudStateData,
 	getTodoHudVisibility,
 	nextActionableTask,
 	TODO_HUD_STATE_CUSTOM_TYPE,
-	USER_TODO_EDIT_CUSTOM_TYPE,
 	type TodoHudStateEntryData,
+	USER_TODO_EDIT_CUSTOM_TYPE,
 } from "../tools/todo";
-import {
-	formatPhaseDisplayName,
-	isClosedTodo,
-	selectCollapsedTodos,
-	setActiveTodoDescriptionsProvider,
-	todoMatchesAnyDescription,
-} from "@oh-my-soup/pi-tui/tools/todo";
 import { vocalizer } from "../tts/vocalizer";
-import { applyHyperlinkSetting, fileHyperlink } from "@oh-my-soup/pi-tui/render/hyperlink";
-import { renderTreeList } from "@oh-my-soup/pi-tui/render/tree-list";
 import { formatStartupChangelogSummary, type StartupChangelogSelection } from "../utils/changelog";
 import { copyToClipboard } from "../utils/clipboard";
 import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
 import { openPath } from "../utils/open";
 import { resumeCommand } from "../utils/resume-command";
-import { getSessionAccentAnsi, getSessionAccentHex } from "@oh-my-soup/pi-tui/theme/session-color";
-import { messageHasDisplayableThinking } from "@oh-my-soup/pi-tui/chat/thinking-display";
-import type { TokenRateMeter } from "../utils/token-rate";
 import { disposeProgramStatus, initProgramStatus, setProgramStatusEnabled } from "../utils/run-status";
 import {
 	disposeTerminalTitleState,
@@ -227,50 +314,15 @@ import {
 	setTerminalTitleSpinnerStyle,
 	setTerminalTitleStateEnabled,
 } from "../utils/title-generator";
+import type { TokenRateMeter } from "../utils/token-rate";
+import { hintUsage } from "../utils/usage-counter";
 import {
 	aggregateVibeWorkerTokensPerSecond,
 	type VibeOwnerScope,
 	type VibeParentSession,
 	VibeSessionRegistry,
 } from "../vibe/runtime";
-import { AssistantMessageComponent } from "@oh-my-soup/pi-tui/chat/assistant-message";
-import { setSvgFigureRendering } from "@oh-my-soup/pi-tui/chat/svg-figure";
-import { setTableCharts } from "@oh-my-soup/pi-tui/chat/table-chart";
-import { setTranscriptActionHandler } from "@oh-my-soup/pi-tui/chat/transcript-actions";
-import { StatusNotice } from "@oh-my-soup/pi-tui/chrome/status-notice";
-import { ReadToolGroupComponent } from "@oh-my-soup/pi-tui/chat/read-tool-group";
-import { ToolExecutionComponent } from "@oh-my-soup/pi-tui/chat/tool-execution";
-import { AttachmentChipsBand } from "@oh-my-soup/pi-tui/prompt/attachment-chips";
-import type { BashExecutionComponent } from "@oh-my-soup/pi-tui/chat/bash-execution";
-import { ChatBlock, type ChatBlockHost } from "@oh-my-soup/pi-tui/chrome/chat-block";
-import { CodexResetFireworksController } from "@oh-my-soup/pi-tui/overlays/codex-reset-fireworks";
-import { type ComposerNativeState, CustomEditor } from "@oh-my-soup/pi-tui/prompt/custom-editor";
-import { DynamicBorder } from "@oh-my-soup/pi-tui/chrome/dynamic-border";
-import { EditorTopGap } from "@oh-my-soup/pi-tui/prompt/editor-top-gap";
-import { ErrorBannerComponent } from "@oh-my-soup/pi-tui/overlays/error-banner";
-import type { EvalExecutionComponent } from "@oh-my-soup/pi-tui/chat/eval-execution";
-import type { HookEditorComponent } from "@oh-my-soup/pi-tui/overlays/hook-editor";
-import type { HookInputComponent } from "@oh-my-soup/pi-tui/overlays/hook-input";
-import type { HookSelectorComponent, HookSelectorSlider } from "@oh-my-soup/pi-tui/overlays/hook-selector";
-import { type PlanReviewAnnotationState, PlanReviewOverlay } from "@oh-my-soup/pi-tui/overlays/plan-review-overlay";
-import { PlanSaveOverlay, type PlanSaveOverlayResult } from "@oh-my-soup/pi-tui/overlays/plan-save-overlay";
-import { ServedModelTracker } from "@oh-my-soup/pi-tui/chat/served-model-marker";
-import { SessionInfoOverlay } from "@oh-my-soup/pi-tui/overlays/session-info-overlay";
-import { JobsSheet } from "@oh-my-soup/pi-tui/overlays/jobs-panel";
-import { SkillMessageComponent } from "@oh-my-soup/pi-tui/chat/skill-message";
-import { StatusLineComponent } from "@oh-my-soup/pi-tui/status-line";
-import { statusLineHost } from "./status-line-host";
-import { stopSharedSpinnerTicker, type ToolExecutionHandle } from "@oh-my-soup/pi-tui/chat/tool-execution";
-import { TranscriptContainer } from "@oh-my-soup/pi-tui/chrome/transcript-container";
-import {
-	Composer,
-	type ComposerPreferences,
-	type ComposerStatusCache,
-	PINNED_HUD_TOGGLE_ID,
-} from "@oh-my-soup/pi-tui/prompt/composer";
-import { setMagicKeywords } from "@oh-my-soup/pi-tui/prompt/magic-keywords";
-import { MAGIC_KEYWORDS } from "./magic-keywords";
-import { sharedComposerCache } from "@oh-my-soup/pi-tui/prompt/composer-cache";
+import { sumSubagentTreeCost } from "./agent-hub-runtime";
 import { BtwController } from "./controllers/btw-controller";
 import { CleanseCommandController } from "./controllers/cleanse-command-controller";
 import { CommandController } from "./controllers/command-controller";
@@ -285,7 +337,6 @@ import { SessionFocusController } from "./controllers/session-focus-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { TanCommandController } from "./controllers/tan-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
-import { imageReferenceHyperlink, setImageBlobWriter } from "@oh-my-soup/pi-tui/prompt/image-references";
 import { describeLoopCondition, evaluateLoopCondition, type LoopConditionVerdict } from "./loop-condition";
 import {
 	consumeLoopLimitIteration,
@@ -296,51 +347,11 @@ import {
 	isLoopLimitExhausted,
 	parseLoopArgs,
 } from "./loop-limit";
-import type { LoopConditionConfig, LoopLimitRuntime } from "@oh-my-soup/pi-tui/status-line/loop";
+import { MAGIC_KEYWORDS } from "./magic-keywords";
 import { OAuthManualInputManager } from "./oauth-manual-input";
 import { formatPersistenceNotice } from "./persistence-failure";
-import { resolveComposerHint } from "@oh-my-soup/pi-tui/prompt/composer-hints";
-import { hintUsage } from "../utils/usage-counter";
-import {
-	getRunningSubagentBadgeAgentIds,
-	getRunningSubagentBadgeRegistry,
-} from "@oh-my-soup/pi-tui/overlays/running-subagent-badge";
-import {
-	type ObservableSession,
-	type SessionObserverChangeKind,
-	SessionObserverRegistry,
-} from "@oh-my-soup/pi-tui/overlays/session-observer-registry";
+import { DownloadActivityHud, JudgmentBatchProgressHud } from "./progress-hud";
 import { createSessionTeardown, type SessionTeardown } from "./session-teardown";
-import { sanitizeStatusText } from "@oh-my-soup/pi-tui/chrome/shared";
-import { invokeSkillCommandFromText, isKnownSkillCommand } from "./skill-command";
-import { clearMermaidCache } from "@oh-my-soup/pi-tui/theme/mermaid-cache";
-import { type ShimmerPalette, shimmerEnabled, shimmerText } from "@oh-my-soup/pi-tui/theme/shimmer";
-import type { Theme } from "@oh-my-soup/pi-tui/theme";
-import {
-	getEditorTheme,
-	getMarkdownTheme,
-	onTerminalAppearanceChange,
-	onThemeChange,
-	setMarkdownMermaidRendering,
-	setSymbolPreset,
-	startMacOSAppearanceReprobeFallback,
-	theme,
-	warmHighlighter,
-} from "@oh-my-soup/pi-tui/theme";
-import { getSlashCommandTypeIcon } from "@oh-my-soup/pi-tui/theme/tui-adapters";
-import type {
-	AgentHubOpenOptions,
-	CompactionQueuedMessage,
-	InteractiveModeContext,
-	InteractiveModeInitOptions,
-	InteractiveSelectorDialogOptions,
-	RenderSessionContextOptions,
-	ShowStatusOptions,
-	SubmittedUserInput,
-} from "./types";
-import type { TodoItem, TodoPhase } from "@oh-my-soup/pi-tui/tools/todo";
-import { materializeImageChipLinks, UiHelpers } from "./utils/ui-helpers";
-
 import {
 	askTimeoutMs,
 	cfgAutocompleteMaxVisible,
@@ -379,10 +390,10 @@ import {
 	cfgSymbolPreset,
 	cfgTerminalProgramStatus,
 	cfgTerminalShowImages,
+	cfgTuiAutoGraph,
 	cfgTuiHyperlinks,
 	cfgTuiImeSafeCursor,
 	cfgTuiMaxInlineImages,
-	cfgTuiAutoGraph,
 	cfgTuiMouse,
 	cfgTuiRenderMermaid,
 	cfgTuiRenderSvg,
@@ -394,26 +405,19 @@ import {
 	cfgTuiVimMode,
 	cfgTuiVimModeDisplay,
 } from "./settings";
-import { cfgTasksTodoClearDelay } from "../tools/settings";
-import { cfgWorktreeOnExit, cfgWorktreeOnStart } from "../task/settings";
-import { cfgExpandThinkingBlocks, cfgProseOnlyThinking } from "../session/settings";
-import { cfgHideThinkingBlock } from "../session/settings";
-import { cfgCycleOrder, cfgModelRoles } from "../config/model-settings";
-import { cfgGoalContinuationModes, cfgGoalEnabled } from "../goals/settings";
-import { goalContinuationActivity, goalFromModeData } from "../goals/state";
-import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../plan-mode/settings";
-import { cfgStreamRedactPatterns } from "../stream/settings";
-import { cfgSttEnabled } from "../stt/settings";
-import { combine, type SettingValueOf } from "../config/registry";
-import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
-import { cfgTierAdvisor } from "../session/settings";
-import {
-	cfgCompactionEnabled,
-	cfgCompactionIdleEnabled,
-	cfgCompactionIdleThresholdTokens,
-	cfgCompactionIdleTimeoutSeconds,
-	cfgCompactionMethodOrder,
-} from "../session/context-settings";
+import { invokeSkillCommandFromText, isKnownSkillCommand } from "./skill-command";
+import { statusLineHost } from "./status-line-host";
+import type {
+	AgentHubOpenOptions,
+	CompactionQueuedMessage,
+	InteractiveModeContext,
+	InteractiveModeInitOptions,
+	InteractiveSelectorDialogOptions,
+	RenderSessionContextOptions,
+	ShowStatusOptions,
+	SubmittedUserInput,
+} from "./types";
+import { materializeImageChipLinks, UiHelpers } from "./utils/ui-helpers";
 
 /**
  * Settings with live interactive-UI side effects, keyed by id. One coalesced listener applies
@@ -482,7 +486,12 @@ const JUDGMENT_BATCH_PROGRESS_RETAIN_MS = 1_000;
 const COMPOSER_STATUS_PERSIST_DELAY_MS = 1_000;
 const DEFAULT_WORKING_MESSAGE = "Working…";
 /** Native working-message shimmer under a session accent: the hue itself is the terminal's `accent`. */
-const NATIVE_ACCENT_SHIMMER: ShimmerPalette = { low: "dim", mid: "accent", high: "accent", bold: true };
+const NATIVE_ACCENT_SHIMMER: ShimmerPalette = {
+	low: "dim",
+	mid: "accent",
+	high: "accent",
+	bold: true,
+};
 
 interface WorkingMessageAccent {
 	main: string;
@@ -973,7 +982,10 @@ export function describeSubagentHud(sessions: ObservableSession[]): NativeNode {
 			node("spinner", { style: "dots", tone: "accent" }, undefined, "spinner"),
 			node(
 				"text",
-				{ text: `${running} ${running === 1 ? "agent" : "agents"} running`, wrap: "none" },
+				{
+					text: `${running} ${running === 1 ? "agent" : "agents"} running`,
+					wrap: "none",
+				},
 				undefined,
 				"label",
 			),
@@ -1398,7 +1410,13 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * loader recreated by a focus switch keeps the real elapsed time.
 	 */
 	#workingStartedAt = 0;
-	#statusHudNative: { children: readonly Component[]; todo: NativeNode | undefined; node: NativeNode } | undefined;
+	#statusHudNative:
+		| {
+				children: readonly Component[];
+				todo: NativeNode | undefined;
+				node: NativeNode;
+		  }
+		| undefined;
 	/**
 	 * The todo HUD, rebuilt with its ANSI rows; undefined while hidden. A
 	 * terminal with `checklist` gets the whole plan as a HUD checklist, others
@@ -1484,7 +1502,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (todo) parts.push(todo);
 		const described =
 			parts.length === 0 ? EMPTY_HUD : row(parts, { role: "omp.hud.activity", align: "center", gap: "sm" });
-		this.#statusHudNative = { children: children.slice(), todo, node: described };
+		this.#statusHudNative = {
+			children: children.slice(),
+			todo,
+			node: described,
+		};
 		return described;
 	}
 	unsubscribe?: () => void;
@@ -2402,7 +2424,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			// Fork and branch adopt a new session file without retitling.
 			this.session.registerSessionChangeCallback(reportTernSession),
 		);
-		if (process.env.OMS_SERVICE_CHILD === "1") {
+		if (isServiceChildProcess()) {
 			this.#eventBusUnsubscribers.push(
 				await watchServiceRepaints(() => this.ui.resetDisplay()),
 				this.session.registerSessionChangeCallback(() => {
@@ -3897,7 +3919,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		registerPersistedSubagents(AgentRegistry.global(), rootSessionFile, {
 			shouldContinue: () => this.sessionManager.getSessionFile() === rootSessionFile,
 		}).catch(error => {
-			logger.warn("Persisted subagent cost hydration failed", { rootSessionFile, error: String(error) });
+			logger.warn("Persisted subagent cost hydration failed", {
+				rootSessionFile,
+				error: String(error),
+			});
 		});
 	}
 
@@ -4462,7 +4487,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (expanded) return phase.tasks.map(todo => describeTask(todo, index(todo)));
 			const selection = selectCollapsedTodos(phase.tasks, isMatched, activeTaskCap);
 			const nodes = selection.items.map(todo => describeTask(todo, index(todo)));
-			if (selection.summary) nodes.push({ id: `${phaseIndex}.more`, label: [span(selection.summary, "muted")] });
+			if (selection.summary)
+				nodes.push({
+					id: `${phaseIndex}.more`,
+					label: [span(selection.summary, "muted")],
+				});
 			return nodes;
 		};
 		const phaseNodes: TspTreeNode[] = phaseSlice.map((phase, offset) => {
@@ -4479,7 +4508,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			};
 		});
 		if (hiddenStages > 0) {
-			phaseNodes.push({ id: "more", label: [span(formatMoreItems(hiddenStages, "stage"), "muted")] });
+			phaseNodes.push({
+				id: "more",
+				label: [span(formatMoreItems(hiddenStages, "stage"), "muted")],
+			});
 		}
 		const fallback = node(
 			"col",
@@ -4488,7 +4520,10 @@ export class InteractiveMode implements InteractiveModeContext {
 				row(
 					[
 						text([span("TODO", "accent strong")]),
-						node("progress", { value: closedTasks / totalTasks, label: `${closedTasks}/${totalTasks}` }),
+						node("progress", {
+							value: closedTasks / totalTasks,
+							label: `${closedTasks}/${totalTasks}`,
+						}),
 					],
 					{ gap: "sm", align: "center" },
 				),
@@ -4677,7 +4712,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			livePreview && !agentPauseGate.paused
 				? nextSubagentPreviewTickMs(running.slice(0, layout.itemRows), Date.now())
 				: undefined;
-		return { lines, order: running.map(session => session.id), toggleRow: layout.toggleRow, tickMs };
+		return {
+			lines,
+			order: running.map(session => session.id),
+			toggleRow: layout.toggleRow,
+			tickMs,
+		};
 	}
 
 	#armSubagentPreviewTick(tickMs: number | undefined): void {
@@ -7595,7 +7635,11 @@ export class InteractiveMode implements InteractiveModeContext {
 					},
 			close: () => this.#hideJobsSheet(),
 		});
-		this.#jobsSheetHandle = this.ui.showOverlay(sheet, { anchor: "center", width: "90%", maxHeight: "90%" });
+		this.#jobsSheetHandle = this.ui.showOverlay(sheet, {
+			anchor: "center",
+			width: "90%",
+			maxHeight: "90%",
+		});
 		this.#jobsSheetTimer = setInterval(() => this.ui.requestRender(), JOBS_SHEET_REFRESH_MS);
 		this.ui.setFocus(sheet);
 		this.ui.requestRender();
@@ -8179,7 +8223,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#dictationStarting = true;
 		this.ui.requestRender();
 		try {
-			await controller.start(this.editor, { ...this.#dictationCallbacks(this.editor), manualSubmit: true });
+			await controller.start(this.editor, {
+				...this.#dictationCallbacks(this.editor),
+				manualSubmit: true,
+			});
 		} finally {
 			this.#dictationStarting = false;
 			this.ui.requestRender();
@@ -8400,14 +8447,18 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Publish the current file and project in order, including same-ID relocations. */
 	reportLiveSession(): Promise<void> {
-		if (process.env.OMS_SERVICE_CHILD !== "1") return Promise.resolve();
+		if (!isServiceChildProcess()) return Promise.resolve();
 		const hasMessages = this.sessionManager.getEntries().some(entry => entry.type === "message");
 		const file = hasMessages ? this.sessionManager.getSessionFile() : undefined;
 		const id = hasMessages ? this.sessionManager.getSessionId() : undefined;
 		const cwd = this.sessionManager.getCwd();
 		this.#serviceReportTail = this.#serviceReportTail
 			.then(() => reportServiceSession(file, id, cwd))
-			.catch(error => logger.warn("Could not report live service session", { error: String(error) }));
+			.catch(error =>
+				logger.warn("Could not report live service session", {
+					error: String(error),
+				}),
+			);
 		return this.#serviceReportTail;
 	}
 

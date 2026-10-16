@@ -87,7 +87,7 @@ describe("bash native run box", () => {
 		expect(role(box)).toBe("omp.run");
 		expect(box?.key).toBe("run");
 		expect(props(box).tone).toBeUndefined();
-		expect(sections(box)).toEqual(["code:oms.tool.bash.command", "ansi:oms.tool.bash.output", "row:oms.run.foot"]);
+		expect(sections(box)).toEqual(["code:omp.tool.bash.command", "ansi:omp.tool.bash.output", "row:omp.run.foot"]);
 		const [input, output] = nodes(box?.c);
 		expect(props(input)).toMatchObject({ text: 'CI="1" make', wrap: true, preview: { lines: 6 } });
 		expect(props(output)).toMatchObject({ text: "built", follow: true, preview: { lines: 10 } });
@@ -103,7 +103,7 @@ describe("bash native run box", () => {
 		expect(view.tool?.target).toBeUndefined();
 		expect(view.tool?.command).toBe('CI="1" make test');
 		const box = nodes(view.body)[0];
-		expect(sections(box)).toEqual(["code:oms.tool.bash.command"]);
+		expect(sections(box)).toEqual(["code:omp.tool.bash.command"]);
 		expect(String(props(nodes(box?.c)[0]).text)).toBe('CI="1" make test');
 
 		const started = bashToolRenderer.describeCall(
@@ -425,7 +425,7 @@ describe("eval native run boxes", () => {
 		expect(rest).toEqual([]);
 		expect(box?.key).toBe("cell-0");
 		// A single cell has no caption; its source keeps no trailing blank line.
-		expect(sections(box)).toEqual(["code:oms.tool.eval.input", "ansi:oms.tool.eval.output", "row:oms.run.foot"]);
+		expect(sections(box)).toEqual(["code:omp.tool.eval.input", "ansi:omp.tool.eval.output", "row:omp.run.foot"]);
 		expect(props(nodes(box?.c)[0])).toMatchObject({ text: "x = 1\nprint(x)", wrap: false, preview: { lines: 6 } });
 		expect(props(nodes(box?.c)[1])).toMatchObject({ follow: true, preview: { lines: 10 } });
 		expect(foot(box)).toMatchObject({ state: "Done", tone: "success", time: { age: 120, stopped: 120 } });
@@ -524,12 +524,12 @@ describe("eval native run boxes", () => {
 			{ cells: [{ code: "x = 1" }, { code: "raise" }] },
 		);
 		const [first, last] = nodes(view.body);
-		expect(sections(first)).toEqual(["text:oms.run.caption", "code:oms.tool.eval.input"]);
+		expect(sections(first)).toEqual(["text:omp.run.caption", "code:omp.tool.eval.input"]);
 		expect(sections(last)).toEqual([
-			"text:oms.run.caption",
-			"code:oms.tool.eval.input",
-			"ansi:oms.tool.eval.output",
-			"row:oms.run.foot",
+			"text:omp.run.caption",
+			"code:omp.tool.eval.input",
+			"ansi:omp.tool.eval.output",
+			"row:omp.run.foot",
 		]);
 		expect(props(last).tone).toBe("error");
 		expect(foot(last)).toMatchObject({ state: "Failed", time: { stopped: 800 } });
@@ -637,7 +637,7 @@ describe("user shell runs", () => {
 		const [box, image] = nodes(described.c);
 		expect(role(box)).toBe("omp.run");
 		expect(props(box).tone).toBe("error");
-		expect(sections(box)).toEqual(["code:oms.tool.bash.command", "ansi:oms.tool.bash.output", "row:oms.run.foot"]);
+		expect(sections(box)).toEqual(["code:omp.tool.bash.command", "ansi:omp.tool.bash.output", "row:omp.run.foot"]);
 		expect(props(nodes(box?.c)[1])).toMatchObject({ follow: true, preview: { lines: 10 } });
 		expect(foot(box)).toMatchObject({ state: "exit 1", tone: "error" });
 		expect(foot(box)?.time?.stopped).toBeNumber();

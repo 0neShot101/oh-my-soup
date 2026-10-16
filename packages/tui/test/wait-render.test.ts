@@ -385,7 +385,7 @@ describe("wait and IRC renderers", () => {
 			};
 			const view = waitToolRenderer.describeResult!(result, { expanded: true, isPartial: false });
 			const [job] = view!.body!;
-			expect(job).toMatchObject({ k: "row", p: { role: "oms.wait.job", tone: "error" } });
+			expect(job).toMatchObject({ k: "row", p: { role: "omp.wait.job", tone: "error" } });
 			const json = JSON.stringify(view);
 			expect(json).toContain("hyperfine --runs 30 bench");
 			expect(json).not.toContain("Benchmark 1");

@@ -3,7 +3,7 @@ import { getProjectDir } from "@oh-my-soup/pi-utils";
 import { highlightCode, type Theme } from "../theme/theme";
 import { renderStatusLine } from "../render/status-line";
 import { framedToolCard, type ToolCardSnapshot } from "../render/tool-card";
-import { formatOutputPaneLines } from "../render/output-pane";
+import { formatOutputPaneLines, splitTerminalOutputLines } from "../render/output-pane";
 import {
 	capPreviewLines,
 	DEFAULT_TERMINAL_PREVIEW_LINES,
@@ -598,7 +598,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					const hasOutput = displayOutput.trim().length > 0;
 					const formatted = formatOutputPaneLines(
 						{
-							lines: hasOutput ? displayOutput.split("\n") : [],
+							lines: hasOutput ? splitTerminalOutputLines(displayOutput) : [],
 							expanded,
 							collapsedMaxLines: Math.min(previewLines, previewWindow),
 							edge: "tail",

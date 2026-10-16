@@ -194,7 +194,7 @@ impl PtySession {
 			command: PtyCommand::Shell { command: options.command, shell: options.shell },
 			cwd:     options.cwd,
 			env:     options.env,
-			cols:    options.cols.unwrap_or(120).clamp(20, 400),
+			cols:    options.cols.unwrap_or(120).clamp(20, 500),
 			rows:    options.rows.unwrap_or(40).clamp(5, 200),
 		};
 		self.start_config(env, run_config, options.timeout_ms, options.signal, on_chunk, on_start)
@@ -216,7 +216,7 @@ impl PtySession {
 			command: PtyCommand::Argv { application: options.application, args: options.args },
 			cwd:     options.cwd,
 			env:     options.env,
-			cols:    options.cols.unwrap_or(120).clamp(20, 400),
+			cols:    options.cols.unwrap_or(120).clamp(20, 500),
 			rows:    options.rows.unwrap_or(40).clamp(5, 200),
 		};
 		self.start_config(env, run_config, options.timeout_ms, options.signal, on_chunk, on_start)
@@ -232,7 +232,7 @@ impl PtySession {
 	#[napi]
 	pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
 		self.send_control(ControlMessage::Resize {
-			cols: cols.clamp(20, 400),
+			cols: cols.clamp(20, 500),
 			rows: rows.clamp(5, 200),
 		})
 	}

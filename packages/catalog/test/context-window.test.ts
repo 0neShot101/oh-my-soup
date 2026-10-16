@@ -48,7 +48,7 @@ test("corrects GPT-6.1 Sol's stale 872K Codex maximum to the documented 922K inp
 		const sol = codexModel(id, 872_000);
 		expect(sol.cost).toMatchObject({ input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 });
 		expect(sol.maxContextWindow).toBe(922_000);
-		expect(sol.contextWindow).toBe(272_000);
+		expect(sol.contextWindow).toBe(500_000);
 		expect(resolveMaxContextWindow(sol)).toBe(922_000);
 	}
 });

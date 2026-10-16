@@ -32,6 +32,7 @@ describe("browser backend defaults", () => {
 			"  releaseAllTabs: async () => {},",
 			"  releaseTab: async () => {},",
 			"  runInTab: async () => ({}),",
+			"  ternBlocksTaken: () => new Map(),",
 			"}));",
 			// Evaluate browser.ts only after its lifecycle dependencies have been mocked.
 			'const { BrowserTool } = await import("@oh-my-soup/pi-coding-agent/tools/browser");',
@@ -56,6 +57,9 @@ describe("browser backend defaults", () => {
 
 		expect(exitCode, stderr).toBe(0);
 		expect(stderr).toBe("");
-		expect(JSON.parse(stdout)).toEqual({ kind: "connected", cdpUrl: "http://127.0.0.1:9222" });
+		expect(JSON.parse(stdout)).toEqual({
+			kind: "connected",
+			cdpUrl: "http://127.0.0.1:9222",
+		});
 	});
 });

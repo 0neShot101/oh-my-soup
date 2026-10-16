@@ -4,12 +4,11 @@ import type { Tool as AiTool } from "@oh-my-soup/pi-ai";
 import { toolWireSchema } from "@oh-my-soup/pi-ai/utils/schema";
 import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
 import type { EvalPreludeDefinition } from "@oh-my-soup/pi-coding-agent/eval/preludes";
+import { cfgEvalPy } from "@oh-my-soup/pi-coding-agent/eval/settings";
+import { cfgTaskMaxRecursionDepth } from "@oh-my-soup/pi-coding-agent/task/settings";
 import type { ToolSession } from "@oh-my-soup/pi-coding-agent/tools";
 import { EvalTool, getEvalDocTopics, getEvalToolDescription } from "@oh-my-soup/pi-coding-agent/tools/eval";
 import { ReadTool } from "@oh-my-soup/pi-coding-agent/tools/read";
-
-import { cfgEvalPy } from "@oh-my-soup/pi-coding-agent/eval/settings";
-import { cfgTaskMaxRecursionDepth } from "@oh-my-soup/pi-coding-agent/task/settings";
 
 function makeSession(opts: {
 	spawns?: string | null;
@@ -97,7 +96,7 @@ describe("eval tool description", () => {
 		expect(enabled.agents).toContain("tools?=None");
 		expect(getEvalToolDescription({ evalTools: false })).not.toContain("@tool");
 		expect(disabled.helpers).not.toContain("tool(fn");
-		expect(disabled.helpers).toContain("budget.total");
+		expect(disabled.helpers).toContain("%load <path>");
 		expect(disabled.judge).toContain("completion(prompt");
 		expect(disabled.agents).not.toContain("tools?=None");
 	});
@@ -106,13 +105,13 @@ describe("eval tool description", () => {
 		const jsOnly = getEvalDocTopics({ py: false, js: true });
 		expect(jsOnly.helpers).toContain("%bun add");
 		expect(jsOnly.helpers).not.toContain("%pip install");
-		expect(jsOnly.helpers).toContain("await budget.total()");
+		expect(jsOnly.helpers).not.toContain("@tool / tool(fn");
 		expect(jsOnly.helpers).toContain("tool(fn, {");
 		const pyOnly = getEvalDocTopics({ py: true, js: false });
 		expect(pyOnly.helpers).toContain("%pip install");
 		expect(pyOnly.helpers).not.toContain("%bun add");
 		expect(pyOnly.helpers).toContain("@tool / tool(fn");
-		expect(pyOnly.helpers).not.toContain("await budget.total()");
+		expect(pyOnly.helpers).not.toContain("tool(fn, {");
 	});
 
 	it("inlines every topic when the session cannot read xd:// URLs", () => {
@@ -125,7 +124,7 @@ describe("eval tool description", () => {
 		for (const api of [
 			"completion(prompt",
 			"judge(state, questions",
-			"budget.total",
+			"%load <path>",
 			"tool(fn, name=",
 			"agent(prompt",
 		]) {
@@ -141,10 +140,11 @@ describe("eval tool description", () => {
 		const readTool = new ReadTool(session);
 		for (const [topic, signature] of [
 			["judge", "completion(prompt"],
-			["helpers", "budget.total"],
 			["helpers", "%load <path>"],
 		]) {
-			const result = await readTool.execute("read-eval-topic", { path: `xd://eval/${topic}` });
+			const result = await readTool.execute("read-eval-topic", {
+				path: `xd://eval/${topic}`,
+			});
 			expect(result.content.some(part => part.type === "text" && part.text.includes(signature))).toBe(true);
 		}
 	});

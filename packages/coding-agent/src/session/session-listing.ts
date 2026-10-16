@@ -8,9 +8,9 @@ import * as logger from "@oh-my-soup/pi-utils/logger";
 import { LRUCache } from "@oh-my-soup/pi-utils/lru";
 import { parseJsonlLenient } from "@oh-my-soup/pi-utils/stream";
 import { toError } from "@oh-my-soup/pi-utils/type-guards";
+import { lookupSessionTitle, recordSessionTitle } from "./session-index";
 import { computeDefaultSessionDir } from "./session-paths";
 import { FileSessionStorage, type SessionStorage, type SessionStorageStat } from "./session-storage";
-import { lookupSessionTitle, recordSessionTitle } from "./session-index";
 
 /**
  * Coarse lifecycle status of a session. `running` comes only from a live
@@ -98,7 +98,9 @@ interface SessionScanCacheEntry {
 type SessionScanCache = LRUCache<string, SessionScanCacheEntry>;
 
 /** All {@link FileSessionStorage} instances view the same real filesystem, so they share one cache. */
-const fileSessionScanCache: SessionScanCache = new LRUCache({ max: SESSION_SCAN_CACHE_MAX });
+const fileSessionScanCache: SessionScanCache = new LRUCache({
+	max: SESSION_SCAN_CACHE_MAX,
+});
 /** Other storages (in-memory test doubles) each carry their own cache to avoid cross-instance path collisions. */
 const kScanCache = Symbol("session-listing.scanCache");
 
@@ -150,7 +152,10 @@ export function sessionDisplayName(info: SessionInfo): string {
 	const created = info.created.getTime();
 	const ts = Number.isFinite(created) ? created : info.modified.getTime();
 	const date = new Date(ts);
-	const time = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+	const time = date.toLocaleTimeString(undefined, {
+		hour: "2-digit",
+		minute: "2-digit",
+	});
 	return `Untitled · ${time}`;
 }
 
@@ -432,7 +437,11 @@ async function scanSessionFile(
 		if (!header) {
 			// Cache the negative result too: an unparseable file stays unparseable
 			// until its stat identity changes.
-			cache.set(cacheKey, { mtimeMs: stat.mtimeMs, size: stat.size, info: undefined });
+			cache.set(cacheKey, {
+				mtimeMs: stat.mtimeMs,
+				size: stat.size,
+				info: undefined,
+			});
 			return undefined;
 		}
 
@@ -443,7 +452,11 @@ async function scanSessionFile(
 		let shortSummary: string | undefined;
 
 		for (let i = 1; i < entries.length; i++) {
-			const entry = entries[i] as { type?: string; message?: Message; shortSummary?: string };
+			const entry = entries[i] as {
+				type?: string;
+				message?: Message;
+				shortSummary?: string;
+			};
 
 			if (entry.type === "compaction" && typeof entry.shortSummary === "string") {
 				shortSummary = entry.shortSummary;
@@ -499,7 +512,11 @@ async function scanSessionFile(
 		};
 		// The cache keeps its own shallow copy; hits also hand out copies, so
 		// callers can never mutate the shared cached object.
-		cache.set(cacheKey, { mtimeMs: stat.mtimeMs, size: stat.size, info: { ...info } });
+		cache.set(cacheKey, {
+			mtimeMs: stat.mtimeMs,
+			size: stat.size,
+			info: { ...info },
+		});
 		return info;
 	} catch {
 		return undefined;
@@ -688,9 +705,8 @@ export function isEmptySession(session: SessionInfo): boolean {
 	const hasFirstMessage = Boolean(
 		sanitizeSessionName(session.firstMessage === "(no messages)" ? undefined : session.firstMessage),
 	);
-	if (session.messageCount === 0 && !hasFirstMessage) return true;
 	if (session.status !== undefined && session.status !== "pending" && session.status !== "unknown") return false;
-	if ((session.assistantTurns ?? 1) > 0) return false;
+	if ((session.assistantTurns ?? session.messageCount) > 0) return false;
 	if (sanitizeSessionName(session.title)) return false;
 	if (hasFirstMessage) return false;
 	return true;
@@ -854,7 +870,11 @@ export async function listRecentProjects(
 			if (!info || isEmptySession(info)) continue;
 			if (info.cwd && !listed.has(info.cwd)) {
 				listed.add(info.cwd);
-				projects.push({ cwd: info.cwd, sessionCount: files.length, latest: info });
+				projects.push({
+					cwd: info.cwd,
+					sessionCount: files.length,
+					latest: info,
+				});
 			}
 			break;
 		}
@@ -905,14 +925,22 @@ export async function getRecentSessions(
 		const id = useIndex ? sessionIdFromSessionPath(file) : undefined;
 		const indexed = id ? lookupSessionTitle(id) : undefined;
 		if (indexed) {
-			recent.push({ path: file, name: indexed, timeAgo: formatTimeAgo(stat.mtime) });
+			recent.push({
+				path: file,
+				name: indexed,
+				timeAgo: formatTimeAgo(stat.mtime),
+			});
 			continue;
 		}
 		const info = await scanSessionFile(file, storage, true, stat);
 		if (!info || isEmptySession(info)) continue;
 		const title = sanitizeSessionName(info.title);
 		if (useIndex && title && info.id) recordSessionTitle(info.id, title);
-		recent.push({ path: file, name: sessionDisplayName(info), timeAgo: formatTimeAgo(info.modified) });
+		recent.push({
+			path: file,
+			name: sessionDisplayName(info),
+			timeAgo: formatTimeAgo(info.modified),
+		});
 	}
 	return recent;
 }

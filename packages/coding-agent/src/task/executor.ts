@@ -9,6 +9,32 @@ import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentMessage, AgentTelemetryConfig } from "@oh-my-soup/pi-agent-core";
 import { AgentBusyError, EventLoopKeepalive, recordHandoff, resolveTelemetry } from "@oh-my-soup/pi-agent-core";
 import type { Api, Model, ServiceTierByFamily, Usage } from "@oh-my-soup/pi-ai";
+import { formatModelSelectorValue } from "@oh-my-soup/pi-tui/overlays/model-selector";
+import {
+	previewLine,
+	replaceTabs,
+	shortenToolArgumentPaths,
+	TRUNCATE_LENGTHS,
+} from "@oh-my-soup/pi-tui/render/render-utils";
+import {
+	type ConfiguredThinkingLevel,
+	prewalkWouldBeNoop,
+	resolveTaskEffortLevel,
+	type TaskEffort,
+} from "@oh-my-soup/pi-tui/thinking";
+import { type EditMode, getEditInputPaths } from "@oh-my-soup/pi-tui/tools/edit";
+import { DEFAULT_PEER_ROSTER_LIMIT, LIST_STATUS_ORDER } from "@oh-my-soup/pi-tui/tools/irc";
+import { truncateTail } from "@oh-my-soup/pi-tui/tools/streaming-output";
+import type {
+	AgentProgress,
+	SingleResult,
+	StructuredSubagentOutput,
+	StructuredSubagentSchemaMode,
+	StructuredSubagentSchemaSource,
+	TaskToolDetails,
+	YieldItem,
+} from "@oh-my-soup/pi-tui/tools/task";
+import { assembleYieldResult } from "@oh-my-soup/pi-tui/tools/task-yield-assembly";
 import {
 	isRecord,
 	logger,
@@ -18,18 +44,17 @@ import {
 	sanitizeText,
 	untilAborted,
 } from "@oh-my-soup/pi-utils";
-import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, AsyncJobError, AsyncJobManager, type AsyncJobRunResult } from "../async";
+import {
+	ASYNC_JOB_MANAGER_SHUTDOWN_REASON,
+	AsyncJobError,
+	type AsyncJobManager,
+	type AsyncJobRunResult,
+} from "../async";
 import type { Rule } from "../capability/rule";
 import type { EffectiveExtensionRoots } from "../capability/types";
+import { type OAuthAccountPools, validateAgentAccountPools } from "../config/account-pools";
+import type { CompactionThresholdPair } from "../config/compaction-threshold";
 import { ModelRegistry } from "../config/model-registry";
-import { formatModelSelectorValue } from "@oh-my-soup/pi-tui/overlays/model-selector";
-import {
-	previewLine,
-	replaceTabs,
-	shortenToolArgumentPaths,
-	TRUNCATE_LENGTHS,
-} from "@oh-my-soup/pi-tui/render/render-utils";
-import { type EditMode, getEditInputPaths } from "@oh-my-soup/pi-tui/tools/edit";
 import {
 	formatModelStringWithRouting,
 	resolveAgentAdvisorRolePattern,
@@ -40,6 +65,7 @@ import {
 	resolveModelOverride,
 	resolveModelOverrideWithAuthFallback,
 } from "../config/model-resolver";
+import { cfgDisabledProviders } from "../config/model-settings";
 import type { PromptTemplate } from "../config/prompt-templates";
 import {
 	buildServiceTierByFamily,
@@ -48,10 +74,7 @@ import {
 	resolveSubagentServiceTier,
 	type ServiceTierInheritSettingValue,
 } from "../config/service-tier";
-import type { CompactionThresholdPair } from "../config/compaction-threshold";
-import { type OAuthAccountPools, validateAgentAccountPools } from "../config/account-pools";
 import { type OverlayLayers, Settings } from "../config/settings";
-
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import type { PreparedExtension, ToolDefinition } from "../extensibility/extensions/types";
@@ -60,6 +83,7 @@ import type { HindsightSessionState } from "../hindsight/state";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { hasResolvableTranscript } from "../internal-urls/registry-helpers";
 import { IrcBus } from "../irc/bus";
+import { isIrcEnabled } from "../irc/messaging";
 import type { MCPManager } from "../mcp/manager";
 import type { MnemopiSessionState } from "../mnemopi/state";
 import { initializeExtensions } from "../modes/runtime-init";
@@ -85,23 +109,27 @@ import {
 import { type ArtifactManager, writeArtifact } from "../session/artifacts";
 import { ASYNC_RESULT_MESSAGE_TYPE } from "../session/async-job-delivery";
 import type { AuthStorage } from "../session/auth-storage";
-import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
-import { hasConversationalHistory, type SessionForkSnapshot, SessionManager } from "../session/session-manager";
-import { truncateTail } from "@oh-my-soup/pi-tui/tools/streaming-output";
 import {
-	type ConfiguredThinkingLevel,
-	prewalkWouldBeNoop,
-	resolveTaskEffortLevel,
-	type TaskEffort,
-} from "@oh-my-soup/pi-tui/thinking";
+	cfgCompactionModelThresholdsEnabled,
+	cfgCompactionThresholdPercent,
+	cfgCompactionThresholdTokens,
+} from "../session/context-settings";
+import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
+import { getRetryFallbackRole, installRetryFallbackRole } from "../session/retry-fallback-chains";
+import { hasConversationalHistory, type SessionForkSnapshot, SessionManager } from "../session/session-manager";
+import {
+	cfgDefaultThinkingLevel,
+	cfgRetryFallbackChains,
+	cfgTierAnthropic,
+	cfgTierGoogle,
+	cfgTierOpenai,
+	cfgTierSubagent,
+} from "../session/settings";
 import type { ContextFileEntry } from "../tools";
-import { isIrcEnabled } from "../irc/messaging";
-import { LIST_STATUS_ORDER } from "@oh-my-soup/pi-tui/tools/irc";
-import { DEFAULT_PEER_ROSTER_LIMIT } from "@oh-my-soup/pi-tui/tools/irc";
 import { normalizeSchema } from "../tools/jtd-to-json-schema";
 import { buildOutputValidator, summarizeValidationFailure } from "../tools/output-schema-validator";
-import { ToolAbortError } from "../tools/tool-errors";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "../tools/todo";
+import { ToolAbortError } from "../tools/tool-errors";
 import { resetYieldTurnState } from "../tools/yield";
 import { type EventBus, emitSubagentFrame } from "../utils/event-bus";
 import { trackLateCleanup } from "../utils/late-cleanup";
@@ -113,9 +141,21 @@ import { generateTaskLabel } from "./label";
 import { resolveAgentPrewalkDefault } from "./prewalk";
 import { isReadOnlyAgent } from "./read-only-policy";
 import { formatTaskResultSummary } from "./result-summary";
+import {
+	cfgTaskAgentAccountPools,
+	cfgTaskAgentAdvisor,
+	cfgTaskAgentIdleTtlMs,
+	cfgTaskAgentPrewalk,
+	cfgTaskAgentSoftRequestBudget,
+	cfgTaskMaxEffort,
+	cfgTaskMaxRecursionDepth,
+	cfgTaskMaxRuntimeMs,
+	cfgTaskPrewalk,
+	cfgTaskSoftRequestBudget,
+	cfgTaskSoftRequestBudgetNotice,
+} from "./settings";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import { captureSubagentToolSources } from "./tool-contract";
-import type { WorkPoolYieldItem } from "./workpool-yield";
 import {
 	type AgentDefinition,
 	MAX_OUTPUT_BYTES,
@@ -124,45 +164,8 @@ import {
 	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
 } from "./types";
-import {
-	type AgentProgress,
-	type SingleResult,
-	type StructuredSubagentOutput,
-	type StructuredSubagentSchemaMode,
-	type StructuredSubagentSchemaSource,
-	type TaskToolDetails,
-	type YieldItem,
-} from "@oh-my-soup/pi-tui/tools/task";
+import type { WorkPoolYieldItem } from "./workpool-yield";
 import { yieldSectionShapes } from "./yield-assembly";
-import { assembleYieldResult } from "@oh-my-soup/pi-tui/tools/task-yield-assembly";
-import {
-	cfgTaskPrewalk,
-	cfgTaskAgentPrewalk,
-	cfgTaskMaxEffort,
-	cfgTaskSoftRequestBudgetNotice,
-	cfgTaskSoftRequestBudget,
-	cfgTaskAgentSoftRequestBudget,
-	cfgTaskAgentIdleTtlMs,
-	cfgTaskMaxRuntimeMs,
-	cfgTaskMaxRecursionDepth,
-	cfgTaskAgentAdvisor,
-	cfgTaskAgentAccountPools,
-} from "./settings";
-import {
-	cfgTierSubagent,
-	cfgTierGoogle,
-	cfgTierAnthropic,
-	cfgTierOpenai,
-	cfgRetryFallbackChains,
-	cfgDefaultThinkingLevel,
-} from "../session/settings";
-import { cfgDisabledProviders } from "../config/model-settings";
-import { getRetryFallbackRole, installRetryFallbackRole } from "../session/retry-fallback-chains";
-import {
-	cfgCompactionModelThresholdsEnabled,
-	cfgCompactionThresholdPercent,
-	cfgCompactionThresholdTokens,
-} from "../session/context-settings";
 
 export type { YieldItem } from "@oh-my-soup/pi-tui/tools/task";
 
@@ -346,7 +349,10 @@ function installSubagentRetryFallbackChain(args: {
 	}
 
 	const role = subagentRetryFallbackRole(id);
-	installRetryFallbackRole(settings, role, { primary: candidates[selectedIndex].selector, chain: fallbackChain });
+	installRetryFallbackRole(settings, role, {
+		primary: candidates[selectedIndex].selector,
+		chain: fallbackChain,
+	});
 	return role;
 }
 
@@ -749,7 +755,12 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 			if (!assembled || assembled.missingData) {
 				rawOutput = rawOutput ? `${SUBAGENT_WARNING_NULL_YIELD}\n\n${rawOutput}` : SUBAGENT_WARNING_NULL_YIELD;
 				if (includeStructuredOutput) {
-					structuredOutput = { source, mode, status: "invalid", error: SUBAGENT_WARNING_NULL_YIELD };
+					structuredOutput = {
+						source,
+						mode,
+						status: "invalid",
+						error: SUBAGENT_WARNING_NULL_YIELD,
+					};
 				}
 				// Strict mode promises a schema violation fails the run, not a
 				// warning-decorated success (exitCode 0); build the same
@@ -758,7 +769,10 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 				if (mode === "strict" && includeStructuredOutput) {
 					const { validator } = buildOutputValidator(outputSchema);
 					const outcome = buildSchemaViolationOutcome(
-						{ message: SUBAGENT_WARNING_NULL_YIELD, missingRequired: [...(validator?.requiredFields ?? [])] },
+						{
+							message: SUBAGENT_WARNING_NULL_YIELD,
+							missingRequired: [...(validator?.requiredFields ?? [])],
+						},
 						undefined,
 					);
 					rawOutput = outcome.rawOutput;
@@ -775,9 +789,15 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 					validation && !validation.success
 						? summarizeValidationFailure(validation, completeData, validator?.requiredFields ?? [])
 						: assembled.schemaOverridden
-							? { message: SUBAGENT_WARNING_SCHEMA_OVERRIDDEN, missingRequired: [] }
+							? {
+									message: SUBAGENT_WARNING_SCHEMA_OVERRIDDEN,
+									missingRequired: [],
+								}
 							: schemaError
-								? { message: `invalid output schema: ${schemaError}`, missingRequired: [] }
+								? {
+										message: `invalid output schema: ${schemaError}`,
+										missingRequired: [],
+									}
 								: undefined;
 				if (includeStructuredOutput) {
 					structuredOutput =
@@ -790,7 +810,13 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 									error: schemaError ? `invalid output schema: ${schemaError}` : undefined,
 								}
 							: failure
-								? { source, mode, status: "invalid", data: completeData, error: failure.message }
+								? {
+										source,
+										mode,
+										status: "invalid",
+										data: completeData,
+										error: failure.message,
+									}
 								: { source, mode, status: "valid", data: completeData };
 				}
 				const mustReject =
@@ -836,11 +862,19 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		if (fallback) {
 			const { validator } = buildOutputValidator(outputSchema);
 			const completeData = parseStringifiedJson(fallback.data ?? null);
-			const result = validator?.validate(completeData) ?? { success: true as const };
+			const result = validator?.validate(completeData) ?? {
+				success: true as const,
+			};
 			if (!result.success) {
 				const summary = summarizeValidationFailure(result, completeData, validator?.requiredFields ?? []);
 				if (includeStructuredOutput) {
-					structuredOutput = { source, mode, status: "invalid", data: completeData, error: summary.message };
+					structuredOutput = {
+						source,
+						mode,
+						status: "invalid",
+						data: completeData,
+						error: summary.message,
+					};
 				}
 				const outcome = buildSchemaViolationOutcome(summary, completeData);
 				rawOutput = outcome.rawOutput;
@@ -877,7 +911,14 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		}
 	}
 
-	return { rawOutput, exitCode, stderr, abortedViaYield, hasYield, structuredOutput };
+	return {
+		rawOutput,
+		exitCode,
+		stderr,
+		abortedViaYield,
+		hasYield,
+		structuredOutput,
+	};
 }
 
 function formatToolArgsPreview(value: string, key: string): { value: string; key: string } {
@@ -998,7 +1039,12 @@ export function createMCPProxyTools(mcpManager: MCPManager): CustomTool[] {
 					.find(t => t.mcpServerName === serverName && t.mcpToolName === mcpToolName);
 				if (!source?.execute) {
 					return {
-						content: [{ type: "text" as const, text: `MCP error: tool ${mcpToolName} no longer available` }],
+						content: [
+							{
+								type: "text" as const,
+								text: `MCP error: tool ${mcpToolName} no longer available`,
+							},
+						],
 						details: { serverName, mcpToolName, isError: true },
 					};
 				}
@@ -1774,7 +1820,13 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	 */
 	const activeTools = new Map<
 		string,
-		{ tool: string; args?: string; argsKey?: string; intent?: string; startMs: number }
+		{
+			tool: string;
+			args?: string;
+			argsKey?: string;
+			intent?: string;
+			startMs: number;
+		}
 	>();
 	let visibleToolCallId: string | undefined;
 
@@ -1808,7 +1860,12 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		// event processing (which escalates to terminate).
 		const notice = buildBudgetNotice(progress.requests, softRequestBudget);
 		void Promise.resolve()
-			.then(() => steerSession.sendUserMessage(notice, { deliverAs: "steer", attribution: "agent" }))
+			.then(() =>
+				steerSession.sendUserMessage(notice, {
+					deliverAs: "steer",
+					attribution: "agent",
+				}),
+			)
 			.catch(err => {
 				logger.warn("Subagent budget steer failed", {
 					error: err instanceof Error ? err.message : String(err),
@@ -2461,7 +2518,13 @@ async function driveSessionToResult(
 		for (let attempt = 1; attempt <= MAX_PROMPT_DISPATCH_ATTEMPTS; attempt++) {
 			if (forceFinalYield) monitor.markFinalYieldForced(true);
 			try {
-				await awaitAbortable(session.prompt(text, { ...promptOptions, runCommands: false, throwOnDrop: true }));
+				await awaitAbortable(
+					session.prompt(text, {
+						...promptOptions,
+						runCommands: false,
+						throwOnDrop: true,
+					}),
+				);
 				return;
 			} catch (err) {
 				if (!(err instanceof PromptDroppedError)) throw err;
@@ -2739,7 +2802,13 @@ async function driveSessionToResult(
 
 interface FinalizeRunArgs {
 	monitor: SubagentRunMonitor;
-	done: { exitCode: number; error?: string; aborted?: boolean; abortReason?: string; durationMs: number };
+	done: {
+		exitCode: number;
+		error?: string;
+		aborted?: boolean;
+		abortReason?: string;
+		durationMs: number;
+	};
 	index: number;
 	id: string;
 	agent: AgentDefinition;
@@ -3030,7 +3099,10 @@ function wakeSources(records: AgentMessage[], selfId: string): WakeSource[] {
 		// back would ping-pong two idle peers forever.
 		if (details && Reflect.get(details, "wakeRelay") === true) continue;
 		const messageId = details ? Reflect.get(details, "id") : undefined;
-		sources.push({ from, messageId: typeof messageId === "string" ? messageId : undefined });
+		sources.push({
+			from,
+			messageId: typeof messageId === "string" ? messageId : undefined,
+		});
 	}
 	return sources;
 }
@@ -3086,7 +3158,11 @@ async function relayWakeTurnOutput(args: {
 			wakeRelay: true,
 		});
 		if (receipt.outcome === "failed") {
-			logger.warn("IRC wake-turn relay failed", { from: args.id, to: source.from, error: receipt.error });
+			logger.warn("IRC wake-turn relay failed", {
+				from: args.id,
+				to: source.from,
+				error: receipt.error,
+			});
 		}
 	}
 }
@@ -3127,7 +3203,9 @@ export function buildWakeRelayBody(args: {
 	// artifact before failing must be reported, never contradicted.
 	const summary =
 		args.yielded && args.result?.outputPath
-			? formatTaskResultSummary(args.result, { totalDurationMs: args.result.durationMs })
+			? formatTaskResultSummary(args.result, {
+					totalDurationMs: args.result.durationMs,
+				})
 			: undefined;
 
 	const headline = args.error
@@ -3371,7 +3449,9 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				// superseded it, or, for a turn that never yielded, the answer a
 				// relay would have carried.
 				if (wakeJob && yielded && result) {
-					const text = formatTaskResultSummary(result, { totalDurationMs: result.durationMs });
+					const text = formatTaskResultSummary(result, {
+						totalDurationMs: result.durationMs,
+					});
 					const structured = result.structuredOutput;
 					if (result.aborted || result.exitCode !== 0 || result.error !== undefined) {
 						wakeJob.outcome.reject(new AsyncJobError(text, structured));
@@ -3479,7 +3559,10 @@ export async function finalizeSubagentLifecycle(args: {
 		try {
 			await args.onRelease?.();
 		} catch (error) {
-			logger.warn("Subagent lifecycle resource cleanup failed", { id: args.id, error: String(error) });
+			logger.warn("Subagent lifecycle resource cleanup failed", {
+				id: args.id,
+				error: String(error),
+			});
 		}
 	};
 
@@ -3506,9 +3589,14 @@ export async function finalizeSubagentLifecycle(args: {
 				// decision is durable and a restart cannot rediscover the transcript
 				// as a revivable parked agent.
 				try {
-					await AgentLifecycleManager.global().release(args.id, ref, { tombstone: true });
+					await AgentLifecycleManager.global().release(args.id, ref, {
+						tombstone: true,
+					});
 				} catch (error) {
-					logger.warn("runSubagent: failed to persist kill tombstone", { id: args.id, error: String(error) });
+					logger.warn("runSubagent: failed to persist kill tombstone", {
+						id: args.id,
+						error: String(error),
+					});
 					registry.setStatus(args.id, "aborted", ref);
 					registry.detachSession(args.id, ref);
 					await disposeSession();
@@ -3740,7 +3828,11 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 
 	return finalizeRunResult({
 		monitor,
-		done: { ...outcome, abortReason: outcome.abortReasonText, durationMs: Date.now() - startTime },
+		done: {
+			...outcome,
+			abortReason: outcome.abortReasonText,
+			durationMs: Date.now() - startTime,
+		},
 		index,
 		id,
 		agent,
@@ -3893,7 +3985,11 @@ interface SubagentSettingsRecipe {
 }
 
 function captureSubagentSettings(parent: Settings, settings: SubagentChainSettings): SubagentSettingsRecipe {
-	return { parent, layers: settings.overlayLayers(), rootThresholds: settings[kRootCompactionThresholds] };
+	return {
+		parent,
+		layers: settings.overlayLayers(),
+		rootThresholds: settings[kRootCompactionThresholds],
+	};
 }
 
 function restoreSubagentSettings(recipe: SubagentSettingsRecipe): Settings {
@@ -3978,7 +4074,11 @@ function createWarmSubagentReviver(capture: WarmReviveCapture): AgentReviver {
 		// fail-closed gate and blocks every tool (including `yield`) in the revived agent (issue #8824).
 		await initializeExtensions(revived, {
 			reportSendError: (action, err) => logger.error("Extension send failed", { action, error: err.message }),
-			reportRuntimeError: err => logger.error("Extension error", { path: err.extensionPath, error: err.error }),
+			reportRuntimeError: err =>
+				logger.error("Extension error", {
+					path: err.extensionPath,
+					error: err.error,
+				}),
 			filterActiveTools: toolNames => (capture.keepTodo ? toolNames : toolNames.filter(name => name !== "todo")),
 		});
 		AgentRegistry.global().syncSessionStatus(id, revived);
@@ -4070,7 +4170,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			...(worktree !== undefined ? { "workspace.additionalDirectories": [] } : undefined),
 			...(advisorSelection ? { "advisor.enabled": true } : undefined),
 			...(advisorRolePattern
-				? { modelRoles: { ...settings.getModelRoles(), advisor: advisorRolePattern } }
+				? {
+						modelRoles: {
+							...settings.getModelRoles(),
+							advisor: advisorRolePattern,
+						},
+					}
 				: undefined),
 		},
 		options.parentServiceTier,
@@ -4093,7 +4198,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	// The shared runtime supplies a detached parent snapshot. Agent-definition
 	// defaults are guidance, not authority to re-enable deselected host tools.
-	let toolNames = [...(options.toolNames ?? [])];
+	let toolNames = [...(options.toolNames ?? agent.tools ?? [])];
 	// Unstructured runs never get `yield`, even when the frontmatter lists it.
 	if (!structured) toolNames = toolNames.filter(name => name !== "yield");
 	if (atMaxDepth) toolNames = toolNames.filter(name => name !== "task");
@@ -4381,7 +4486,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const enableMCP = !restrictToolNames && (options.enableMCP ?? true);
 			const mcpManager = enableMCP ? options.mcpManager : undefined;
 			const grantedToolNames = [
-				...new Set([...toolNames, ...(options.customTools ?? []).map(tool => tool.name), "yield"]),
+				...new Set([
+					...toolNames,
+					...(options.customTools ?? []).map(tool => tool.name),
+					...(structured ? ["yield"] : []),
+				]),
 			];
 			// Derive subagent-scoped telemetry from the parent's config so the
 			// child loop's spans nest under the parent's active execute_tool span
@@ -4514,7 +4623,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 			if (forked) {
 				// Keep inherited todos as historical context, not this child's active work.
-				sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases: [] });
+				sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, {
+					phases: [],
+				});
 			}
 			sessionOpenedAt = performance.now();
 			await refreshSubagentIrcRoot(sessionSpec.prompt, sessionManager, sessionFile);
@@ -4686,9 +4797,16 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const pendingExtensionMessages: Array<Promise<unknown>> = [];
 			await awaitAbortable(
 				initializeExtensions(session, {
-					reportSendError: (action, err) => logger.error("Extension send failed", { action, error: err.message }),
+					reportSendError: (action, err) =>
+						logger.error("Extension send failed", {
+							action,
+							error: err.message,
+						}),
 					reportRuntimeError: err =>
-						logger.error("Extension error", { path: err.extensionPath, error: err.error }),
+						logger.error("Extension error", {
+							path: err.extensionPath,
+							error: err.error,
+						}),
 					trackExtensionSend: task => {
 						pendingExtensionMessages.push(task.catch(() => {}));
 					},

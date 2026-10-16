@@ -31,7 +31,7 @@ import type {
 	ClientBridgeTerminalHandle,
 	ClientBridgeTerminalOutput,
 } from "../session/client-bridge";
-import { DEFAULT_MAX_BYTES, enforceInlineByteCap, TailBuffer } from "@oh-my-soup/pi-tui/tools/streaming-output";
+import { DEFAULT_MAX_BYTES, enforceInlineByteCap } from "@oh-my-soup/pi-tui/tools/streaming-output";
 import { resolveCliEntryCmd } from "../subprocess/worker-client";
 import { sameSshTarget } from "../ssh/connection-manager";
 import { resolveSshLocation } from "../ssh/remote-path";
@@ -740,7 +740,6 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			const timeoutClampNotice = formatTimeoutClampNotice(requestedTimeoutSec, timeoutSec, maxTimeout);
 			if (timeoutClampNotice) pendingNotices.push(timeoutClampNotice);
 		}
-		const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES);
 		const { path: artifactPath, id: artifactId } = (await this.session.allocateOutputArtifact?.("bash")) ?? {};
 		const wallTimeStart = performance.now();
 		const result = await executeSSH(target, command, {
@@ -750,10 +749,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			ownerId: this.session.getEvalKernelOwnerId?.() ?? this.session.getSessionId?.() ?? this.session.cwd,
 			artifactPath,
 			artifactId,
-			onChunk: chunk => {
-				tailBuffer.append(chunk);
-				onUpdate?.({ content: [{ type: "text", text: tailBuffer.text() }], details: {} });
-			},
+			onPreview: onUpdate ? text => onUpdate({ content: [{ type: "text", text }], details: {} }) : undefined,
 		});
 		const wallTimeMs = performance.now() - wallTimeStart;
 		if (result.cancelled && result.timedOut !== true) {

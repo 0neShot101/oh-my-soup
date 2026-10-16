@@ -168101,6 +168101,7 @@
 				"clampOutputToModelMax": true,
 				"supportsObfuscationOptOut": false,
 				"storeResponses": false,
+				"connectionBoundNativeHistory": false,
 				"officialEndpoint": false,
 				"harmonyLeakMitigation": false,
 				"rejectRootObjectUnion": false,
@@ -168111,7 +168112,18 @@
 				"emptyLengthFinishIsContextError": false,
 				"usesOpenAIToolCallIdLimit": false
 			},
-			"supportsComputerUse": false
+			"supportsComputerUse": false,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"unverified": true
+			}
 		}
 	},
 	"minimax": {
@@ -306028,7 +306040,8 @@
 					"high",
 					"xhigh",
 					"max"
-				]
+				],
+				"defaultLevel": "medium"
 			},
 			"identity": {
 				"class": "openai",
@@ -306058,7 +306071,7 @@
 				"supportsSamplingParams": false,
 				"supportsPenaltyAndStopParams": true,
 				"thinkingFormat": "openai",
-				"reasoningDisableMode": "lowest-effort",
+				"reasoningDisableMode": "none-effort",
 				"omitReasoningEffort": false,
 				"includeEncryptedReasoning": true,
 				"filterReasoningHistory": false,
@@ -306164,7 +306177,8 @@
 					"high",
 					"xhigh",
 					"max"
-				]
+				],
+				"defaultLevel": "medium"
 			},
 			"identity": {
 				"class": "openai",
@@ -306194,7 +306208,7 @@
 				"supportsSamplingParams": false,
 				"supportsPenaltyAndStopParams": true,
 				"thinkingFormat": "openai",
-				"reasoningDisableMode": "lowest-effort",
+				"reasoningDisableMode": "none-effort",
 				"omitReasoningEffort": false,
 				"includeEncryptedReasoning": true,
 				"filterReasoningHistory": false,
@@ -308584,7 +308598,8 @@
 				"clampOutputToModelMax": false,
 				"supportsObfuscationOptOut": false,
 				"storeResponses": false,
-				"officialEndpoint": false,
+				"connectionBoundNativeHistory": false,
+				"officialEndpoint": true,
 				"harmonyLeakMitigation": true,
 				"rejectRootObjectUnion": false,
 				"retryWithoutStrictOnGrammarError": false,
@@ -308709,7 +308724,8 @@
 				"clampOutputToModelMax": false,
 				"supportsObfuscationOptOut": false,
 				"storeResponses": false,
-				"officialEndpoint": false,
+				"connectionBoundNativeHistory": false,
+				"officialEndpoint": true,
 				"harmonyLeakMitigation": true,
 				"rejectRootObjectUnion": false,
 				"retryWithoutStrictOnGrammarError": false,

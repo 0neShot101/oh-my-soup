@@ -286,6 +286,28 @@ describe("OutputSink", () => {
 		expect(dumped.output).toBe("start\none\ntwo\n");
 	});
 
+	test("collapses bare carriage-return single-line updates in place across chunks when collapseCarriageReturns is enabled", async () => {
+		const previews: string[] = [];
+		const sink = new OutputSink({
+			collapseCarriageReturns: true,
+			onChunk: () => previews.push(sink.preview()),
+		});
+
+		sink.push("Starting\nProgress 10%\r");
+		sink.push("\x1b[2KProgress 50%\r");
+		sink.push("Progress 100%\r");
+		sink.push("\r\nDone!\n");
+		const dumped = await sink.dump();
+
+		expect(previews).toEqual([
+			"Starting\nProgress 10%",
+			"Starting\nProgress 50%",
+			"Starting\nProgress 100%",
+			"Starting\nProgress 100%\nDone!\n",
+		]);
+		expect(dumped.output).toBe("Starting\nProgress 100%\nDone!\n");
+	});
+
 	test("preserves SIXEL chunks when passthrough gates are enabled", async () => {
 		const sixel = "\x1bPqabc\x1b\\";
 		Bun.env.PI_FORCE_IMAGE_PROTOCOL = "sixel";

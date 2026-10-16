@@ -99,6 +99,11 @@ export interface OutputSinkOptions {
 	/** Minimum ms between onChunk calls. 0 = every chunk (default). */
 	chunkThrottleMs?: number;
 	/**
+	 * When true, bare carriage returns (`\r` not followed by `\n`) overwrite
+	 * the current uncommitted line in place instead of becoming newlines.
+	 */
+	collapseCarriageReturns?: boolean;
+	/**
 	 * Cap on bytes written to the artifact-on-disk file. When the cap is hit,
 	 * the head window is preserved verbatim and subsequent output feeds a
 	 * rolling tail window; on close, the sink writes a single
@@ -935,6 +940,7 @@ export class OutputSink {
 	readonly #onChunk?: (chunk: string) => void;
 	readonly #chunkThrottleMs: number;
 	readonly #maxColumns: number;
+	readonly #collapseCarriageReturns: boolean;
 
 	// Artifact-on-disk cap. When `#artifactMaxBytes > 0` the file sink owns a
 	// head budget + a rolling tail buffer; once the head is closed, subsequent
@@ -963,6 +969,7 @@ export class OutputSink {
 			maxColumns = 0,
 			onChunk,
 			chunkThrottleMs = 0,
+			collapseCarriageReturns = false,
 			artifactMaxBytes = ARTIFACT_DEFAULT_MAX_BYTES,
 			artifactHeadBytes,
 		} = options ?? {};
@@ -973,6 +980,7 @@ export class OutputSink {
 		this.#maxColumns = Math.max(0, maxColumns);
 		this.#onChunk = onChunk;
 		this.#chunkThrottleMs = chunkThrottleMs;
+		this.#collapseCarriageReturns = collapseCarriageReturns;
 		this.#artifactMaxBytes = Math.max(0, artifactMaxBytes);
 		// The default head yields to the rolling tail on small caps: it takes at
 		// most half, so the most recent output is always kept.
@@ -1025,15 +1033,82 @@ export class OutputSink {
 	 * live preview while the complete chunk is mirrored to the artifact.
 	 * `emitInline: false` keeps that representation out of the live callback.
 	 */
+	#rewindUncommittedLine(): void {
+		if (this.#buffer.length > 0) {
+			const lastNl = this.#buffer.lastIndexOf(NL);
+			const removed = lastNl === -1 ? this.#buffer : this.#buffer.slice(lastNl + 1);
+			if (removed.length > 0) {
+				const removedBytes = Buffer.byteLength(removed, "utf-8");
+				this.#buffer = lastNl === -1 ? "" : this.#buffer.slice(0, lastNl + 1);
+				this.#bufferBytes = Math.max(0, this.#bufferBytes - removedBytes);
+				this.#totalBytes = Math.max(0, this.#totalBytes - removedBytes);
+			}
+			if (lastNl !== -1 || this.#head.length === 0 || this.#head.endsWith(NL)) {
+				this.#currentLineBytes = 0;
+				this.#columnEllipsisAdded = false;
+				return;
+			}
+		}
+		if (this.#head.length > 0 && !this.#head.endsWith(NL)) {
+			const lastNl = this.#head.lastIndexOf(NL);
+			const removed = lastNl === -1 ? this.#head : this.#head.slice(lastNl + 1);
+			if (removed.length > 0) {
+				const removedBytes = Buffer.byteLength(removed, "utf-8");
+				this.#head = lastNl === -1 ? "" : this.#head.slice(0, lastNl + 1);
+				this.#headBytes = Math.max(0, this.#headBytes - removedBytes);
+				this.#totalBytes = Math.max(0, this.#totalBytes - removedBytes);
+			}
+		}
+		this.#currentLineBytes = 0;
+		this.#columnEllipsisAdded = false;
+	}
+
+	#collapseCarriageReturnsInText(text: string): string {
+		let clean = text.includes(CR)
+			? text
+					.split(CR)
+					.map(part => sanitizeText(part))
+					.join(CR)
+			: sanitizeText(text);
+		if (this.#pendingCarriageReturn) {
+			this.#pendingCarriageReturn = false;
+			clean = `${CR}${clean}`;
+		}
+		if (clean.length === 0 || !clean.includes(CR)) return clean;
+		if (clean.endsWith(CR)) {
+			let end = clean.length;
+			while (end > 0 && clean.charCodeAt(end - 1) === 0x0d) end--;
+			this.#pendingCarriageReturn = true;
+			clean = clean.slice(0, end);
+			if (clean.length === 0) return "";
+		}
+		const afterCrlf = clean.replace(/\r+\n/g, NL);
+		if (!afterCrlf.includes(CR)) return afterCrlf;
+		const lines = afterCrlf.split(NL);
+		const firstCr = lines[0]!.lastIndexOf(CR);
+		if (firstCr !== -1) {
+			this.#rewindUncommittedLine();
+			lines[0] = lines[0]!.slice(firstCr + 1);
+		}
+		for (let i = 1; i < lines.length; i++) {
+			const lastCr = lines[i]!.lastIndexOf(CR);
+			if (lastCr !== -1) lines[i] = lines[i]!.slice(lastCr + 1);
+		}
+		return lines.join(NL);
+	}
+
 	push(chunk: string, options?: { inline?: string; emitInline?: boolean }): void {
 		if (this.#finalized) return;
-		chunk = sanitizeWithOptionalSixelPassthrough(chunk, text => sanitizeText(this.#normalizeCarriageReturns(text)));
+		chunk = sanitizeWithOptionalSixelPassthrough(chunk, text =>
+			this.#collapseCarriageReturns
+				? this.#collapseCarriageReturnsInText(text)
+				: sanitizeText(this.#normalizeCarriageReturns(text)),
+		);
 		const inline = options?.inline;
 		const substituted = inline !== undefined;
 		const inlineChunk = inline === undefined ? chunk : sanitizeText(inline);
 
 		this.#store(chunk, inlineChunk, substituted);
-
 		// Throttled onChunk: coalesce chunks arriving inside the throttle window.
 		// A timer flushes quiet tails at the throttle boundary; dump() catches a
 		// final pending chunk when the process exits before that timer fires.

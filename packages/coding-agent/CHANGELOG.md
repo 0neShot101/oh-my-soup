@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-## [18.11.1] - 2026-10-16
-
 ### Added
 
 - Added `lsp.requestTimeout` setting to configure wait durations for language server diagnostics and requests
@@ -98,8 +96,6 @@
 - Fixed `/handoff` losing local artifacts (plans, scratch files, research notes) by copying them across the handoff session boundary.
 - Replaced libarchive-based tar parsing with a hardened, in-process tar reader to prevent crashes and safely handle complex archive structures, symlinks, and sparse metadata.
 - Fixed `Ctrl+O` tool-output expansion failing to reach launch-completion messages wrapped in the hidden tool activity container.
-
-Older entries are archived in [packages/coding-agent/CHANGELOG.md@b541d61d3f56](https://github.com/pickpocket/oh-my-soup/blob/b541d61d3f56351cad006223da4367eec8fbb667/packages/coding-agent/CHANGELOG.md).
 
 ## [18.11.1] - 2026-10-15
 

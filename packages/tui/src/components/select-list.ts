@@ -11,7 +11,7 @@ import type { TspProps } from "@oh-my-soup/pi-wire";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import type { SymbolTheme } from "../symbols";
 import type { Component } from "../tui";
-import { Ellipsis, padding, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
+import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
 import { ScrollView } from "./scroll-view";
 
 const DEFAULT_PRIMARY_COLUMN_WIDTH = 32;
@@ -19,6 +19,13 @@ const PRIMARY_COLUMN_GAP = 2;
 const MIN_DESCRIPTION_WIDTH = 10;
 
 const DEFAULT_CURSOR_SYMBOL = ">";
+
+function sanitizeSingleLine(text: string): string {
+	return replaceTabs(text)
+		.replace(/[\r\n]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+}
 
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(value, max));
 
@@ -150,9 +157,11 @@ type SelectItemLayout =
 
 export class SelectList implements Component, MouseRoutable {
 	/**
-	 * Sanitized `{label, description}` per item object. Labels are sanitized
-	 * once when source fields change instead of on every render pass (column
-	 * widths, row counts, and item rendering all consume the cached strings).
+	 * Sanitized `{label, description}` per item object. `sanitizeSingleLine`
+	 * is 3 passes + 2 regex execs per call and render() used to run it up to
+	 * 3x per item per frame (column widths, row counts, item render). Items
+	 * are host-owned and stable across frames; the map is cleared when the
+	 * visible item list identity changes.
 	 */
 	#sanitized = new WeakMap<
 		SelectItem,
@@ -693,8 +702,8 @@ export class SelectList implements Component, MouseRoutable {
 		const entry = {
 			sourceLabel,
 			sourceDescription,
-			label: plainLine(sourceLabel),
-			description: sourceDescription ? plainLine(sourceDescription) : undefined,
+			label: sanitizeSingleLine(sourceLabel),
+			description: sourceDescription ? sanitizeSingleLine(sourceDescription) : undefined,
 		};
 		this.#sanitized.set(item, entry);
 		return entry;
@@ -720,7 +729,7 @@ export class SelectList implements Component, MouseRoutable {
 			this.#selection.pendingKey === undefined
 				? undefined
 				: this.#selection.visibleItems.find(item => item.value === this.#selection.pendingKey);
-		const query = plainLine(this.#selection.query);
+		const query = sanitizeSingleLine(this.#selection.query);
 		const custom = this.layout.statusText?.({
 			query,
 			selectedIndex: this.#selection.selectedIndex,
@@ -791,7 +800,7 @@ export class SelectList implements Component, MouseRoutable {
 		if (item.searchText) {
 			text += ` ${item.searchText}`;
 		}
-		return plainLine(text);
+		return sanitizeSingleLine(text);
 	}
 
 	#renderContext(item: SelectItem, index: number, width: number): SelectListRenderItemContext {

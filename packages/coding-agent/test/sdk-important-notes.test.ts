@@ -9,10 +9,9 @@ import { createMockModel } from "@oh-my-soup/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-soup/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-soup/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
-import { cfgCompaction, cfgCompactionThresholdTokens } from "@oh-my-soup/pi-coding-agent/session/context-settings";
-import { computeNonMessageTokens } from "@oh-my-soup/pi-tui/status-line/context-usage";
 import { type CreateAgentSessionOptions, createAgentSession } from "@oh-my-soup/pi-coding-agent/sdk";
 import { AuthStorage } from "@oh-my-soup/pi-coding-agent/session/auth-storage";
+import { cfgCompaction, cfgCompactionThresholdTokens } from "@oh-my-soup/pi-coding-agent/session/context-settings";
 import {
 	getImportantNotesFromEntries,
 	IMPORTANT_NOTES_CUSTOM_TYPE,
@@ -20,6 +19,7 @@ import {
 import { convertToLlm } from "@oh-my-soup/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
 import * as settingsStream from "@oh-my-soup/pi-coding-agent/session/settings-stream-fn";
+import { computeNonMessageTokens } from "@oh-my-soup/pi-tui/status-line/context-usage";
 import { TempDir, untilAborted } from "@oh-my-soup/pi-utils";
 
 function noteData(context: Context): unknown[] {
@@ -81,7 +81,13 @@ async function fixture(tempDir: TempDir, mounted = false, options: Partial<Creat
 			promptTemplates: [],
 			slashCommands: [],
 			rules: [],
-			workspaceTree: { rootPath: tempDir.path(), rendered: "", truncated: false, totalLines: 0, agentsMdFiles: [] },
+			workspaceTree: {
+				rootPath: tempDir.path(),
+				rendered: "",
+				truncated: false,
+				totalLines: 0,
+				agentsMdFiles: [],
+			},
 			enableMCP: false,
 			enableLsp: false,
 			skipPythonPreflight: true,
@@ -121,7 +127,11 @@ describe("SDK important notes requests", () => {
 	it("keeps the primary reminder available after dumping the projected request", async () => {
 		using tempDir = TempDir.createSync("sdk-notes-dump-");
 		const { manager, model, authStorage, create } = await fixture(tempDir, true);
-		manager.appendMessage({ role: "user", content: "pending ".repeat(1400), timestamp: 1 });
+		manager.appendMessage({
+			role: "user",
+			content: "pending ".repeat(1400),
+			timestamp: 1,
+		});
 		const { session } = await create();
 		let dumpedPath: string | undefined;
 		try {
@@ -129,7 +139,11 @@ describe("SDK important notes requests", () => {
 			if (!dumpedPath) throw new Error("Expected a request dump");
 			const dumped: Context = await Bun.file(dumpedPath).json();
 			expect(noteWarnings(dumped)).toHaveLength(1);
-			const mock = createMockModel({ provider: model.provider, id: model.id, handler: { content: ["done"] } });
+			const mock = createMockModel({
+				provider: model.provider,
+				id: model.id,
+				handler: { content: ["done"] },
+			});
 			vi.spyOn(session.agent, "streamFn").mockImplementation(mock.stream);
 			await session.prompt("continue");
 			await session.prompt("still working");
@@ -163,7 +177,11 @@ describe("SDK important notes requests", () => {
 			});
 			const { session } = await create();
 			try {
-				const mock = createMockModel({ provider: model.provider, id: model.id, handler: { content: ["done"] } });
+				const mock = createMockModel({
+					provider: model.provider,
+					id: model.id,
+					handler: { content: ["done"] },
+				});
 				vi.spyOn(session.agent, "streamFn").mockImplementation(mock.stream);
 				const initial = session.prompt("pending ".repeat(1400));
 				if (failure === "abort") {
@@ -190,12 +208,22 @@ describe("SDK important notes requests", () => {
 	it("does not let a delivered ephemeral side request consume the primary reminder", async () => {
 		using tempDir = TempDir.createSync("sdk-notes-side-warning-");
 		const { manager, model, authStorage, create } = await fixture(tempDir, true);
-		manager.appendMessage({ role: "user", content: "pending ".repeat(1400), timestamp: 1 });
-		const mock = createMockModel({ provider: model.provider, id: model.id, handler: { content: ["done"] } });
+		manager.appendMessage({
+			role: "user",
+			content: "pending ".repeat(1400),
+			timestamp: 1,
+		});
+		const mock = createMockModel({
+			provider: model.provider,
+			id: model.id,
+			handler: { content: ["done"] },
+		});
 		vi.spyOn(settingsStream, "createSettingsAwareStreamFn").mockReturnValue(mock.stream);
 		const { session } = await create();
 		try {
-			await session.runEphemeralTurn({ promptText: "Check the current status." });
+			await session.runEphemeralTurn({
+				promptText: "Check the current status.",
+			});
 			await session.prompt("continue");
 			await session.prompt("still working");
 			expect(mock.calls).toHaveLength(3);
@@ -217,11 +245,17 @@ describe("SDK important notes requests", () => {
 			version: 1,
 			notes: [{ key: "command", text: "bun run dev" }],
 		});
-		const mock = createMockModel({ provider: model.provider, id: model.id, handler: { content: ["done"] } });
+		const mock = createMockModel({
+			provider: model.provider,
+			id: model.id,
+			handler: { content: ["done"] },
+		});
 		vi.spyOn(settingsStream, "createSettingsAwareStreamFn").mockReturnValue(mock.stream);
 		const { session } = await create();
 		try {
-			await session.runEphemeralTurn({ promptText: "Report the saved command." });
+			await session.runEphemeralTurn({
+				promptText: "Report the saved command.",
+			});
 			expect(mock.calls).toHaveLength(1);
 			expect(noteData(mock.calls[0].context)).toEqual([[{ key: "command", text: "bun run dev" }]]);
 			// The saved-notes reference is a developer message and is the request
@@ -243,7 +277,16 @@ describe("SDK important notes requests", () => {
 				provider: model.provider,
 				id: model.id,
 				responses: [
-					{ content: [{ type: "toolCall", id: "list", name: "notes", arguments: { op: "list" } }] },
+					{
+						content: [
+							{
+								type: "toolCall",
+								id: "list",
+								name: "notes",
+								arguments: { op: "list" },
+							},
+						],
+					},
 					{ content: ["done"] },
 				],
 			});
@@ -262,7 +305,10 @@ describe("SDK important notes requests", () => {
 	it("replaces append-only references after each tool update and compacted-history resume", async () => {
 		using tempDir = TempDir.createSync("sdk-notes-stream-");
 		const { manager, model, authStorage, create } = await fixture(tempDir);
-		manager.appendCustomEntry(IMPORTANT_NOTES_CUSTOM_TYPE, { version: 1, notes: [{ key: "server", text: "old" }] });
+		manager.appendCustomEntry(IMPORTANT_NOTES_CUSTOM_TYPE, {
+			version: 1,
+			notes: [{ key: "server", text: "old" }],
+		});
 		let session = (await create()).session;
 		try {
 			const mock = createMockModel({
@@ -275,7 +321,11 @@ describe("SDK important notes requests", () => {
 								type: "toolCall",
 								id: "save",
 								name: "notes",
-								arguments: { op: "set", key: "server", text: "cwd=/api; bun run dev --port 8123" },
+								arguments: {
+									op: "set",
+									key: "server",
+									text: "cwd=/api; bun run dev --port 8123",
+								},
 							},
 						],
 					},
@@ -285,7 +335,11 @@ describe("SDK important notes requests", () => {
 								type: "toolCall",
 								id: "revise",
 								name: "notes",
-								arguments: { op: "set", key: "server", text: "cwd=/api; bun run dev --port 8124" },
+								arguments: {
+									op: "set",
+									key: "server",
+									text: "cwd=/api; bun run dev --port 8124",
+								},
 							},
 						],
 					},
@@ -307,9 +361,17 @@ describe("SDK important notes requests", () => {
 			expect(noteData(mock.calls[1].context)).toEqual([]);
 			expect(noteData(mock.calls[2].context)).toEqual([]);
 			expect(getImportantNotesFromEntries(manager.getBranch())).toEqual([
-				{ key: "server", text: "cwd=/api; bun run dev --port 8124", updatedAt: expect.any(String) },
+				{
+					key: "server",
+					text: "cwd=/api; bun run dev --port 8124",
+					updatedAt: expect.any(String),
+				},
 			]);
-			const kept = manager.appendMessage({ role: "user", content: "replacement history", timestamp: Date.now() });
+			const kept = manager.appendMessage({
+				role: "user",
+				content: "replacement history",
+				timestamp: Date.now(),
+			});
 			manager.appendCompaction("Condensed server task", undefined, kept, 12_000);
 			await session.dispose();
 			const reopened = await SessionManager.open(manager.getSessionFile()!);
@@ -325,7 +387,13 @@ describe("SDK important notes requests", () => {
 			// Compacted-history resume is a new boundary: the reference ships again
 			// carrying the latest saved snapshot, timestamps included.
 			expect(noteData(resumed.calls[0].context)).toEqual([
-				[{ key: "server", text: "cwd=/api; bun run dev --port 8124", updatedAt: expect.any(String) }],
+				[
+					{
+						key: "server",
+						text: "cwd=/api; bun run dev --port 8124",
+						updatedAt: expect.any(String),
+					},
+				],
 			]);
 			const users = reopened
 				.getBranch()
@@ -346,13 +414,20 @@ describe("SDK important notes requests", () => {
 			// with an explicit per-instance discoverable metadata override.
 			const notesTool = session.getToolByName("notes");
 			if (!notesTool) throw new Error("Expected the granted notes tool");
-			Object.defineProperty(notesTool, "loadMode", { value: "discoverable", configurable: true });
+			Object.defineProperty(notesTool, "loadMode", {
+				value: "discoverable",
+				configurable: true,
+			});
 			// Registry refresh reapplies presentation without pinning every enabled
 			// name top-level as an explicit user selection would.
 			await session.refreshMCPTools([]);
 			expect(session.getEnabledToolNames()).toContain("notes");
 			expect(session.getActiveToolNames()).not.toContain("notes");
-			const mock = createMockModel({ provider: model.provider, id: model.id, handler: { content: ["done"] } });
+			const mock = createMockModel({
+				provider: model.provider,
+				id: model.id,
+				handler: { content: ["done"] },
+			});
 			vi.spyOn(session.agent, "streamFn").mockImplementation(mock.stream);
 			await session.prompt("pending ".repeat(2000));
 			await session.prompt("continue");
@@ -371,7 +446,11 @@ describe("SDK important notes requests", () => {
 			// Disabling a mounted tool legitimately emits a device-inventory
 			// notice. Only a notes-preservation reminder would violate this contract.
 			expect(noteWarnings(mock.calls[2].context)).toHaveLength(0);
-			expect(noteWarnings({ messages: convertToLlm(manager.buildSessionContext().messages) })).toHaveLength(0);
+			expect(
+				noteWarnings({
+					messages: convertToLlm(manager.buildSessionContext().messages),
+				}),
+			).toHaveLength(0);
 		} finally {
 			await session.dispose();
 			authStorage.close();
@@ -383,7 +462,14 @@ describe("SDK important notes requests", () => {
 		const secret = 'fixture-"private"\\value<token>';
 		await Bun.write(
 			tempDir.join("secrets.yml"),
-			JSON.stringify([{ type: "plain", content: secret, mode: "replace", replacement: "NOTE_REDACTED" }]),
+			JSON.stringify([
+				{
+					type: "plain",
+					content: secret,
+					mode: "replace",
+					replacement: "NOTE_REDACTED",
+				},
+			]),
 		);
 		const { manager, model, authStorage, create } = await fixture(tempDir);
 		manager.appendCustomEntry(IMPORTANT_NOTES_CUSTOM_TYPE, {
@@ -393,7 +479,11 @@ describe("SDK important notes requests", () => {
 		const snapshot = structuredClone(manager.getBranch());
 		const { session } = await create();
 		try {
-			const mock = createMockModel({ provider: model.provider, id: model.id, responses: [{ content: ["done"] }] });
+			const mock = createMockModel({
+				provider: model.provider,
+				id: model.id,
+				responses: [{ content: ["done"] }],
+			});
 			vi.spyOn(session.agent, "streamFn").mockImplementation(mock.stream);
 			await session.prompt("Continue.");
 			expect(mock.calls).toHaveLength(1);
@@ -415,9 +505,20 @@ describe("SDK important notes requests", () => {
 		const contextWindow = 8192;
 		const { manager, model, authStorage, create } = await budgetFixture(tempDir, contextWindow);
 		const notes = [{ key: "evidence", text: "0123456789abcdef".repeat(256) }];
-		manager.appendMessage({ role: "user", content: "old evidence ".repeat(1250), timestamp: 1 });
-		manager.appendMessage({ role: "user", content: "0123456789abcdef".repeat(140), timestamp: 2 });
-		manager.appendCustomEntry(IMPORTANT_NOTES_CUSTOM_TYPE, { version: 1, notes });
+		manager.appendMessage({
+			role: "user",
+			content: "old evidence ".repeat(1250),
+			timestamp: 1,
+		});
+		manager.appendMessage({
+			role: "user",
+			content: "0123456789abcdef".repeat(140),
+			timestamp: 2,
+		});
+		manager.appendCustomEntry(IMPORTANT_NOTES_CUSTOM_TYPE, {
+			version: 1,
+			notes,
+		});
 		await manager.ensureOnDisk();
 		await manager.flush();
 		const reopened = await SessionManager.open(manager.getSessionFile()!);
@@ -438,15 +539,20 @@ describe("SDK important notes requests", () => {
 				tokensBefore: preparation.tokensBefore,
 				details: {},
 			}));
-			const mock = createMockModel({ provider: model.provider, id: model.id, responses: [{ content: ["done"] }] });
+			const mock = createMockModel({
+				provider: model.provider,
+				id: model.id,
+				responses: [{ content: ["done"] }],
+			});
 			vi.spyOn(session.agent, "streamFn").mockImplementation(mock.stream);
 			await session.prompt("Continue.");
 			expect(compact).toHaveBeenCalledTimes(1);
 			expect(mock.calls).toHaveLength(1);
 			expect(noteData(mock.calls[0].context)).toEqual([notes]);
 			const sentTokens =
-				session.agent.tokenizer.countMessages(mock.calls[0].context.messages, { excludeEncryptedReasoning: true }) +
-				computeNonMessageTokens(session, session.agent.tokenizer);
+				session.agent.tokenizer.countMessages(mock.calls[0].context.messages, {
+					excludeEncryptedReasoning: true,
+				}) + computeNonMessageTokens(session, session.agent.tokenizer);
 			expect(sentTokens).toBeLessThanOrEqual(
 				contextWindow - compaction.effectiveReserveTokens(contextWindow, cfgCompaction.get(session.settings)),
 			);
@@ -467,16 +573,31 @@ describe("SDK important notes requests", () => {
 		// Seed pressure sits just under the trigger: the first request already
 		// carries the (unavoidable) session-start reference, so the seeds must
 		// leave room for it within the safe budget before the growth loop runs.
-		manager.appendMessage({ role: "user", content: "0123456789abcdef".repeat(225), timestamp: 1 });
-		manager.appendMessage({ role: "user", content: "0123456789abcdef".repeat(140), timestamp: 2 });
-		manager.appendCustomEntry(IMPORTANT_NOTES_CUSTOM_TYPE, { version: 1, notes: [{ key: "evidence", text: "old" }] });
+		manager.appendMessage({
+			role: "user",
+			content: "0123456789abcdef".repeat(225),
+			timestamp: 1,
+		});
+		manager.appendMessage({
+			role: "user",
+			content: "0123456789abcdef".repeat(140),
+			timestamp: 2,
+		});
+		manager.appendCustomEntry(IMPORTANT_NOTES_CUSTOM_TYPE, {
+			version: 1,
+			notes: [{ key: "evidence", text: "old" }],
+		});
 		const { session } = await create();
 		const text = "0123456789abcdef".repeat(96);
 		try {
 			cfgCompactionThresholdTokens.set(
 				session.settings,
 				session.getContextUsage()!.tokens! +
-					session.agent.tokenizer.countMessage({ role: "user", content: text, timestamp: 0 }),
+					session.agent.tokenizer.countMessage({
+						role: "user",
+						content: text,
+						timestamp: 0,
+					}),
 			);
 			const compact = vi.spyOn(compaction, "compact").mockImplementation(async preparation => ({
 				summary: "Previous evidence reviewed.",
@@ -490,7 +611,12 @@ describe("SDK important notes requests", () => {
 				responses: [
 					{
 						content: [
-							{ type: "toolCall", id: "grow", name: "notes", arguments: { op: "set", key: "evidence", text } },
+							{
+								type: "toolCall",
+								id: "grow",
+								name: "notes",
+								arguments: { op: "set", key: "evidence", text },
+							},
 						],
 					},
 					{ content: ["done"] },
@@ -510,8 +636,9 @@ describe("SDK important notes requests", () => {
 			expect(noteData(mock.calls[1].context)).toEqual([[{ key: "evidence", text, updatedAt: expect.any(String) }]]);
 			for (const call of mock.calls) {
 				const sentTokens =
-					session.agent.tokenizer.countMessages(call.context.messages, { excludeEncryptedReasoning: true }) +
-					computeNonMessageTokens(session, session.agent.tokenizer);
+					session.agent.tokenizer.countMessages(call.context.messages, {
+						excludeEncryptedReasoning: true,
+					}) + computeNonMessageTokens(session, session.agent.tokenizer);
 				expect(sentTokens).toBeLessThanOrEqual(
 					contextWindow - compaction.effectiveReserveTokens(contextWindow, cfgCompaction.get(session.settings)),
 				);
@@ -529,9 +656,20 @@ describe("SDK important notes requests", () => {
 		using tempDir = TempDir.createSync("sdk-notes-compacted-overflow-");
 		const { manager, model, authStorage, create } = await budgetFixture(tempDir, 8192);
 		const notes = [{ key: "evidence", text: "0123456789abcdef".repeat(256) }];
-		manager.appendMessage({ role: "user", content: "old evidence ".repeat(1800), timestamp: 1 });
-		manager.appendMessage({ role: "user", content: "0123456789abcdef".repeat(140), timestamp: 2 });
-		manager.appendCustomEntry(IMPORTANT_NOTES_CUSTOM_TYPE, { version: 1, notes });
+		manager.appendMessage({
+			role: "user",
+			content: "old evidence ".repeat(1800),
+			timestamp: 1,
+		});
+		manager.appendMessage({
+			role: "user",
+			content: "0123456789abcdef".repeat(140),
+			timestamp: 2,
+		});
+		manager.appendCustomEntry(IMPORTANT_NOTES_CUSTOM_TYPE, {
+			version: 1,
+			notes,
+		});
 		const { session } = await create();
 		try {
 			const compact = vi.spyOn(compaction, "compact").mockImplementation(async preparation => ({
@@ -540,7 +678,11 @@ describe("SDK important notes requests", () => {
 				tokensBefore: preparation.tokensBefore,
 				details: {},
 			}));
-			const mock = createMockModel({ provider: model.provider, id: model.id, handler: { content: ["done"] } });
+			const mock = createMockModel({
+				provider: model.provider,
+				id: model.id,
+				handler: { content: ["done"] },
+			});
 			vi.spyOn(session.agent, "streamFn").mockImplementation(mock.stream);
 			await expect(session.prompt("Continue.")).rejects.toThrow("could not reclaim enough space");
 			expect(compact).toHaveBeenCalledTimes(1);
@@ -556,15 +698,25 @@ describe("SDK important notes requests", () => {
 		using tempDir = TempDir.createSync("sdk-notes-small-model-");
 		const { manager, model, authStorage, create } = await budgetFixture(tempDir, 16_384);
 		const notes = [{ key: "evidence", text: "0123456789abcdef".repeat(960) }];
-		manager.appendCustomEntry(IMPORTANT_NOTES_CUSTOM_TYPE, { version: 1, notes });
+		manager.appendCustomEntry(IMPORTANT_NOTES_CUSTOM_TYPE, {
+			version: 1,
+			notes,
+		});
 		const { session } = await create();
 		try {
 			const compact = vi.spyOn(compaction, "compact");
-			const mock = createMockModel({ provider: model.provider, id: model.id, handler: { content: ["done"] } });
+			const mock = createMockModel({
+				provider: model.provider,
+				id: model.id,
+				handler: { content: ["done"] },
+			});
 			vi.spyOn(session.agent, "streamFn").mockImplementation(mock.stream);
 			await session.prompt("Review the saved evidence.");
 			expect(mock.calls).toHaveLength(1);
-			await session.setModel({ ...getBundledModel("openai", "gpt-4o"), contextWindow: 4096 });
+			await session.setModel({
+				...getBundledModel("openai", "gpt-4o"),
+				contextWindow: 4096,
+			});
 			cfgCompactionThresholdTokens.set(session.settings, 3000);
 			for (const prompt of ["Continue.", "Retry with the same notes."]) {
 				await expect(session.prompt(prompt)).rejects.toThrow("explicitly shorten or delete notes");
@@ -587,10 +739,21 @@ describe("SDK important notes requests", () => {
 			"compaction.enabled": false,
 		});
 		const notes = [{ key: "evidence", text: "0123456789abcdef".repeat(64) }];
-		manager.appendMessage({ role: "user", content: "Investigate everything.", timestamp: 1 });
+		manager.appendMessage({
+			role: "user",
+			content: "Investigate everything.",
+			timestamp: 1,
+		});
 		manager.appendMessage({
 			role: "assistant",
-			content: [{ type: "toolCall", id: "call-big-grep", name: "grep", arguments: { pattern: "TODO" } }],
+			content: [
+				{
+					type: "toolCall",
+					id: "call-big-grep",
+					name: "grep",
+					arguments: { pattern: "TODO" },
+				},
+			],
 			api: "openai-completions",
 			provider: model.provider,
 			model: model.id,
@@ -613,14 +776,21 @@ describe("SDK important notes requests", () => {
 			isError: false,
 			timestamp: 3,
 		});
-		manager.appendCustomEntry(IMPORTANT_NOTES_CUSTOM_TYPE, { version: 1, notes });
+		manager.appendCustomEntry(IMPORTANT_NOTES_CUSTOM_TYPE, {
+			version: 1,
+			notes,
+		});
 		const { session } = await create();
 		try {
 			const budget =
 				contextWindow - compaction.resolveBudgetReserveTokens(contextWindow, cfgCompaction.get(session.settings));
 			// The first request must reclaim tool output while retaining its injected note.
 			const compactSpy = vi.spyOn(compaction, "compact");
-			const mock = createMockModel({ provider: model.provider, id: model.id, handler: { content: ["done"] } });
+			const mock = createMockModel({
+				provider: model.provider,
+				id: model.id,
+				handler: { content: ["done"] },
+			});
 			vi.spyOn(session.agent, "streamFn").mockImplementation(mock.stream);
 			await session.prompt("Summarize the findings.");
 			expect(compactSpy).not.toHaveBeenCalled();
@@ -629,8 +799,9 @@ describe("SDK important notes requests", () => {
 			expect(JSON.stringify(target.context.messages)).not.toContain("match line");
 			expect(noteData(target.context)).toEqual([notes]);
 			const sentTokens =
-				session.agent.tokenizer.countMessages(target.context.messages, { excludeEncryptedReasoning: true }) +
-				computeNonMessageTokens(session, session.agent.tokenizer);
+				session.agent.tokenizer.countMessages(target.context.messages, {
+					excludeEncryptedReasoning: true,
+				}) + computeNonMessageTokens(session, session.agent.tokenizer);
 			expect(sentTokens).toBeLessThanOrEqual(budget);
 			expect(getImportantNotesFromEntries(manager.getBranch())).toEqual(notes);
 		} finally {
@@ -644,9 +815,20 @@ describe("SDK important notes requests", () => {
 		const contextWindow = 8192;
 		const { manager, model, authStorage, create } = await budgetFixture(tempDir, contextWindow);
 		const notes = [{ key: "evidence", text: "0123456789abcdef".repeat(256) }];
-		manager.appendMessage({ role: "user", content: "old evidence ".repeat(1800), timestamp: 1 });
-		manager.appendMessage({ role: "user", content: "0123456789abcdef".repeat(140), timestamp: 2 });
-		manager.appendCustomEntry(IMPORTANT_NOTES_CUSTOM_TYPE, { version: 1, notes });
+		manager.appendMessage({
+			role: "user",
+			content: "old evidence ".repeat(1800),
+			timestamp: 1,
+		});
+		manager.appendMessage({
+			role: "user",
+			content: "0123456789abcdef".repeat(140),
+			timestamp: 2,
+		});
+		manager.appendCustomEntry(IMPORTANT_NOTES_CUSTOM_TYPE, {
+			version: 1,
+			notes,
+		});
 		const { session } = await create();
 		try {
 			// A threshold above the budget leaves a gap where shouldCompact says
@@ -661,15 +843,20 @@ describe("SDK important notes requests", () => {
 				tokensBefore: preparation.tokensBefore,
 				details: {},
 			}));
-			const mock = createMockModel({ provider: model.provider, id: model.id, handler: { content: ["done"] } });
+			const mock = createMockModel({
+				provider: model.provider,
+				id: model.id,
+				handler: { content: ["done"] },
+			});
 			vi.spyOn(session.agent, "streamFn").mockImplementation(mock.stream);
 			await session.prompt("Continue.");
 			expect(compactSpy).toHaveBeenCalledTimes(1);
 			expect(mock.calls).toHaveLength(1);
 			expect(noteData(mock.calls[0].context)).toEqual([notes]);
 			const sentTokens =
-				session.agent.tokenizer.countMessages(mock.calls[0].context.messages, { excludeEncryptedReasoning: true }) +
-				computeNonMessageTokens(session, session.agent.tokenizer);
+				session.agent.tokenizer.countMessages(mock.calls[0].context.messages, {
+					excludeEncryptedReasoning: true,
+				}) + computeNonMessageTokens(session, session.agent.tokenizer);
 			expect(sentTokens).toBeLessThanOrEqual(budget);
 			expect(getImportantNotesFromEntries(manager.getBranch())).toEqual(notes);
 		} finally {
@@ -694,7 +881,11 @@ describe("SDK important notes requests", () => {
 			});
 			const { session } = await create();
 			try {
-				const mock = createMockModel({ provider: model.provider, id: model.id, handler: { content: ["done"] } });
+				const mock = createMockModel({
+					provider: model.provider,
+					id: model.id,
+					handler: { content: ["done"] },
+				});
 				vi.spyOn(session.agent, "streamFn").mockImplementation(mock.stream);
 				await session.prompt("Start.");
 				const noteTokens = session.getImportantNotesReferenceTokens();
@@ -717,7 +908,11 @@ describe("SDK important notes requests", () => {
 						fixedTokens +
 						tokenizer.countMessages([
 							...priorMessages,
-							{ role: "user", content: "0123456789abcdef".repeat(middle), timestamp: 0 },
+							{
+								role: "user",
+								content: "0123456789abcdef".repeat(middle),
+								timestamp: 0,
+							},
 						]);
 					if (estimatedTokens >= budget - noteTokens / 2) high = middle;
 					else low = middle + 1;
@@ -752,7 +947,11 @@ describe("SDK important notes requests", () => {
 			});
 			const { session } = await create();
 			try {
-				const mock = createMockModel({ provider: model.provider, id: model.id, handler: { content: ["done"] } });
+				const mock = createMockModel({
+					provider: model.provider,
+					id: model.id,
+					handler: { content: ["done"] },
+				});
 				vi.spyOn(session.agent, "streamFn").mockImplementation(mock.stream);
 				await session.prompt("Start.");
 				expect(noteData(mock.calls[0].context)).toHaveLength(1);
@@ -808,7 +1007,9 @@ describe("SDK important notes requests", () => {
 					parameters: type({}),
 					async execute() {
 						executions += 1;
-						return { content: [{ type: "text" as const, text: "No release changes." }] };
+						return {
+							content: [{ type: "text" as const, text: "No release changes." }],
+						};
 					},
 				},
 			],
@@ -821,7 +1022,16 @@ describe("SDK important notes requests", () => {
 				provider: model.provider,
 				id: model.id,
 				responses: [
-					{ content: [{ type: "toolCall", id: "release-notes", name: "notes", arguments: {} }] },
+					{
+						content: [
+							{
+								type: "toolCall",
+								id: "release-notes",
+								name: "notes",
+								arguments: {},
+							},
+						],
+					},
 					{ content: ["Read the release notes."] },
 				],
 			});
@@ -867,9 +1077,8 @@ describe("SDK important notes requests", () => {
 					"compaction.enabled": false,
 					"compaction.reserveTokens": 1024,
 					"retry.enabled": false,
-					"providers.openai-codex.codeMode": "auto",
 				}),
-				toolNames: mode === "code-mode" ? ["notes", "eval", "read"] : ["notes"],
+				toolNames: mode === "code-mode" ? ["notes", "eval"] : ["notes"],
 				restrictToolNames: true,
 				customSystemPrompt: "Preserve the working command while continuing the task.",
 			});
@@ -877,14 +1086,16 @@ describe("SDK important notes requests", () => {
 			try {
 				const notesTool = session.getToolByName("notes");
 				if (!notesTool) throw new Error("Expected builtin notes");
-				Object.defineProperty(notesTool, "customWireName", { value: "save_session_notes", configurable: true });
+				Object.defineProperty(notesTool, "customWireName", {
+					value: "save_session_notes",
+					configurable: true,
+				});
 				await session.refreshMCPTools([]);
 				expect(session.hasBuiltInTool("notes")).toBe(true);
 				expect(session.hasBuiltInTool("save_session_notes")).toBe(true);
 				expect(session.getActiveToolNames()).toContain("notes");
 				if (mode === "code-mode") {
 					expect(session.getActiveToolNames()).toContain("eval");
-					expect(session.getActiveToolNames()).not.toContain("read");
 				}
 				const mock = createMockModel({
 					provider: model.provider,
@@ -896,7 +1107,11 @@ describe("SDK important notes requests", () => {
 									type: "toolCall",
 									id: "save-command",
 									name: "save_session_notes",
-									arguments: { op: "set", key: "command", text: "bun run dev --port 8123" },
+									arguments: {
+										op: "set",
+										key: "command",
+										text: "bun run dev --port 8123",
+									},
 								},
 							],
 						},
@@ -946,7 +1161,13 @@ describe("SDK important notes requests", () => {
 				// first boundary where a reference can ship — with the tool-set
 				// updatedAt timestamp.
 				expect(noteData(mock.calls[1].context)).toEqual([
-					[{ key: "command", text: "bun run dev --port 8123", updatedAt: expect.any(String) }],
+					[
+						{
+							key: "command",
+							text: "bun run dev --port 8123",
+							updatedAt: expect.any(String),
+						},
+					],
 				]);
 				expect(
 					manager
@@ -969,7 +1190,11 @@ describe("SDK important notes requests", () => {
 		});
 		const { session } = await create();
 		try {
-			const mock = createMockModel({ provider: model.provider, id: model.id, handler: { content: ["done"] } });
+			const mock = createMockModel({
+				provider: model.provider,
+				id: model.id,
+				handler: { content: ["done"] },
+			});
 			vi.spyOn(session.agent, "streamFn").mockImplementation(mock.stream);
 			await session.prompt("Read the task. ".repeat(2000));
 			expect(mock.calls).toHaveLength(1);

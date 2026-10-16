@@ -15,7 +15,7 @@ import {
 	retryTransientCompletion,
 } from "@oh-my-soup/pi-ai";
 import { StreamMarkupHealing } from "@oh-my-soup/pi-ai/utils/stream-markup-healing";
-import { writeTerminalSequence } from "@oh-my-soup/pi-tui";
+import { isSshSession, writeTerminalSequence } from "@oh-my-soup/pi-tui";
 import { isNativeRendering, onNativeRenderingChange } from "@oh-my-soup/pi-tui/native/state";
 import { theme } from "@oh-my-soup/pi-tui/theme";
 import { SPINNER_FRAMES } from "@oh-my-soup/pi-tui/theme/symbols";
@@ -772,11 +772,11 @@ export const TERMINAL_TITLE_SPINNER_STYLES: Record<TerminalTitleSpinnerStyle, re
 	line: ["-", "\\", "|", "/"],
 };
 
-/** WSL stdout still crosses ConPTY at the `wslhost` boundary, so its working title stays static (`:`). */
+/** WSL and SSH/service-child sessions keep their working title static (`:`) instead of scheduling 80ms title animation. */
 const isStaticTitleHost = (
 	platform: NodeJS.Platform = process.platform,
 	env: NodeJS.ProcessEnv = $env as NodeJS.ProcessEnv,
-): boolean => isWsl(platform, env);
+): boolean => isWsl(platform, env) || isSshSession(env);
 const STATIC_TITLE_WORKING_SEPARATOR = ":";
 const TITLE_SPINNER_INTERVAL_MS = 80;
 /** The user's turn: the title reads like a shell prompt awaiting input. */

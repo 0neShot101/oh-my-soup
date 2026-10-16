@@ -281,7 +281,7 @@ describe("git native", () => {
 		});
 		try {
 			const role = (n: { p?: unknown }) => (n.p as { role?: string } | undefined)?.role;
-			const shown = () => h.find(n => role(n) === "oms.app.git.compare" || n.k === "kv");
+			const shown = () => h.find(n => role(n) === "omp.app.git.compare" || n.k === "kv");
 			for (let i = 0; i < 10 && !shown(); i++) {
 				await Promise.resolve();
 				h.tui.requestRender();
@@ -294,8 +294,8 @@ describe("git native", () => {
 						const { path, rev, link } = n.p as { path: string; rev?: string; link?: string };
 						return { path, rev, link };
 					}),
-				heads: h.findAll(n => role(n) === "oms.app.git.media-head").map(n => JSON.stringify(n.p)),
-				notes: h.findAll(n => role(n) === "oms.app.git.media-none").map(n => JSON.stringify(n.p)),
+				heads: h.findAll(n => role(n) === "omp.app.git.media-head").map(n => JSON.stringify(n.p)),
+				notes: h.findAll(n => role(n) === "omp.app.git.media-none").map(n => JSON.stringify(n.p)),
 				kv: h.find(n => n.k === "kv")?.p,
 			};
 		} finally {

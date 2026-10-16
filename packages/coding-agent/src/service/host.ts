@@ -36,6 +36,7 @@ interface TerminalSession {
 	pty: PtySession;
 	pid: number;
 	clients: Set<net.Socket>;
+	clientSizes: Map<net.Socket, { cols: number; rows: number }>;
 	control?: net.Socket;
 	repaintPending?: boolean;
 	cwd: string;
@@ -62,6 +63,24 @@ function resizeTerminal(terminal: TerminalSession, cols: number, rows: number): 
 	terminal.pty.resize(cols, rows);
 	terminal.cols = cols;
 	terminal.rows = rows;
+}
+
+function syncTerminalSize(terminal: TerminalSession, fallback?: { cols: number; rows: number }): void {
+	let minCols = Infinity;
+	let minRows = Infinity;
+	for (const [socket, size] of terminal.clientSizes) {
+		if (socket.destroyed || !terminal.clients.has(socket)) {
+			terminal.clientSizes.delete(socket);
+			continue;
+		}
+		if (size.cols < minCols) minCols = size.cols;
+		if (size.rows < minRows) minRows = size.rows;
+	}
+	if (Number.isFinite(minCols) && Number.isFinite(minRows)) {
+		resizeTerminal(terminal, minCols, minRows);
+	} else if (fallback) {
+		resizeTerminal(terminal, fallback.cols, fallback.rows);
+	}
 }
 
 function sendFrame(socket: net.Socket, frame: Buffer): void {
@@ -218,11 +237,10 @@ export class TerminalServiceHost {
 						const text = input.write(payload);
 						if (text) session.pty.write(text);
 					} else if (type === SERVICE_RESIZE && payload.byteLength === 4) {
-						resizeTerminal(
-							session,
-							dimensions(payload.readUInt16BE(0), 20, 500),
-							dimensions(payload.readUInt16BE(2), 10, 200),
-						);
+						const cols = dimensions(payload.readUInt16BE(0), 20, 500);
+						const rows = dimensions(payload.readUInt16BE(2), 10, 200);
+						session.clientSizes.set(socket, { cols, rows });
+						syncTerminalSize(session, { cols, rows });
 					} else throw new Error("Invalid terminal input frame");
 				});
 			} catch (error) {
@@ -237,7 +255,11 @@ export class TerminalServiceHost {
 			if (watched?.control === socket) watched.control = undefined;
 			this.#watchers.delete(socket);
 			const session = this.#attachments.get(socket);
-			session?.clients.delete(socket);
+			if (session) {
+				session.clients.delete(socket);
+				session.clientSizes.delete(socket);
+				if (session.alive && session.clients.size > 0) syncTerminalSize(session);
+			}
 			this.#attachments.delete(socket);
 		});
 	}
@@ -311,9 +333,10 @@ export class TerminalServiceHost {
 		}
 		if (!terminal.alive || this.#stopping) throw new Error("Interactive OMS exited before attachment");
 		if (socket.destroyed) return;
-		resizeTerminal(terminal, cols, rows);
 		this.#attachments.set(socket, terminal);
 		terminal.clients.add(socket);
+		terminal.clientSizes.set(socket, { cols, rows });
+		syncTerminalSize(terminal, { cols, rows });
 		reply(socket, SERVICE_HELLO, { ok: true, created, pid: terminal.pid });
 		if (!terminal.attachedBefore) {
 			for (const chunk of terminal.startupOutput) send(socket, SERVICE_OUTPUT, chunk);
@@ -335,6 +358,12 @@ export class TerminalServiceHost {
 	#forCwd(key: string): TerminalSession | undefined {
 		let unpublished: TerminalSession | undefined;
 		for (const terminal of this.#terminals.values()) {
+			for (const client of terminal.clients) {
+				if (client.destroyed) {
+					terminal.clients.delete(client);
+					terminal.clientSizes.delete(client);
+				}
+			}
 			if (!terminal.alive || terminal.clients.size > 0 || pathKey(terminal.cwd) !== key) continue;
 			if (terminal.session) return terminal;
 			unpublished ??= terminal;
@@ -440,16 +469,21 @@ export class TerminalServiceHost {
 		for (const client of source.clients) {
 			if (client.destroyed) {
 				this.#attachments.delete(client);
+				source.clientSizes.delete(client);
 				continue;
 			}
+			const size = source.clientSizes.get(client) ?? { cols: source.cols, rows: source.rows };
 			this.#attachments.set(client, target);
 			target.clients.add(client);
+			target.clientSizes.set(client, size);
 			sendFrame(client, reset);
 			if (replayStartup && !target.attachedBefore) {
 				for (const chunk of target.startupOutput) send(client, SERVICE_OUTPUT, chunk);
 			}
 		}
 		source.clients.clear();
+		source.clientSizes.clear();
+		syncTerminalSize(target, { cols: source.cols, rows: source.rows });
 		if (!replayStartup || target.attachedBefore || target.startupTruncated) {
 			this.#repaint(target);
 		}
@@ -475,6 +509,7 @@ export class TerminalServiceHost {
 			pty,
 			pid: 0,
 			clients: new Set(),
+			clientSizes: new Map(),
 			cwd,
 			cols,
 			rows,
@@ -485,7 +520,7 @@ export class TerminalServiceHost {
 			attachedBefore: false,
 		};
 		const { promise: started, resolve, reject } = Promise.withResolvers<number>();
-		const responder = new TerminalQueryResponder();
+		const responder = new TerminalQueryResponder({ hostCursorHandshake: process.platform === "win32" });
 		const finish = (error?: Error): void => {
 			terminal.alive = false;
 			terminal.control?.destroy();

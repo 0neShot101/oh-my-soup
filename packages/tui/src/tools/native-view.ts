@@ -222,7 +222,7 @@ export interface RunFootInput {
 }
 
 /**
- * The foot line of a run box (`oms.run.foot`): the state word in its tone,
+ * The foot line of a run box (`omp.run.foot`): the state word in its tone,
  * the run time (a live clock while running, frozen once settled) and the
  * quiet facts. Glyphs are the terminal's styling, never text.
  */
@@ -248,18 +248,18 @@ export function runFoot(input: RunFootInput): NativeNode {
 			: node(
 					"elapsed",
 					input.state === "running" || input.state === "background"
-						? { role: "oms.run.time", age: ms, format: "short" }
-						: { role: "oms.run.time", age: ms, stopped: ms, format: "short" },
+						? { role: "omp.run.time", age: ms, format: "short" }
+						: { role: "omp.run.time", age: ms, stopped: ms, format: "short" },
 					undefined,
 					"time",
 				);
 	return node(
 		"row",
-		{ role: "oms.run.foot", gap: "sm", align: "center" },
+		{ role: "omp.run.foot", gap: "sm", align: "center" },
 		compact<NativeNode>([
-			keyed(text([span(state.word)], { role: "oms.run.state", tone: state.tone }), "state"),
+			keyed(text([span(state.word)], { role: "omp.run.state", tone: state.tone }), "state"),
 			time,
-			factSpans.length > 0 && keyed(text(factSpans, { role: "oms.run.facts", wrap: "word" }), "facts"),
+			factSpans.length > 0 && keyed(text(factSpans, { role: "omp.run.facts", wrap: "word" }), "facts"),
 		]),
 		"foot",
 	);
@@ -279,7 +279,7 @@ export function runOutput(output: string, p: { role: string; previewLines: numbe
 }
 
 /**
- * One run as one box (`oms.run`): input, output, status lines and foot in
+ * One run as one box (`omp.run`): input, output, status lines and foot in
  * order. `tone` tints the box: `error` for a failed run, `warning` for a
  * timed-out one.
  */
@@ -287,7 +287,7 @@ export function runBox(
 	children: readonly (NativeChild | undefined | false)[],
 	p: { key: string; tone?: TspTone },
 ): NativeNode {
-	return node("col", { role: "oms.run", gap: "none", tone: p.tone }, compact(children), p.key);
+	return node("col", { role: "omp.run", gap: "none", tone: p.tone }, compact(children), p.key);
 }
 
 /** Diagnostic rows shown before `+N more`. */

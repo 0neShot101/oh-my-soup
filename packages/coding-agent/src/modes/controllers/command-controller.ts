@@ -10,6 +10,7 @@ import {
 	type UsageLimit,
 	type UsageReport,
 } from "@oh-my-soup/pi-ai";
+import type { OverlayHandle } from "@oh-my-soup/pi-tui";
 import {
 	type Component,
 	Loader,
@@ -20,9 +21,34 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@oh-my-soup/pi-tui";
+import { BashExecutionComponent, bashPtyViewport } from "@oh-my-soup/pi-tui/chat/bash-execution";
+import { EvalExecutionComponent } from "@oh-my-soup/pi-tui/chat/eval-execution";
+import { formatProviderName } from "@oh-my-soup/pi-tui/chrome/format";
+import { appKey } from "@oh-my-soup/pi-tui/chrome/keybinding-hints";
+import { buildHotkeysMarkdown, HotkeysSheetComponent } from "@oh-my-soup/pi-tui/hotkeys-markdown";
+import { isNativeRendering } from "@oh-my-soup/pi-tui/native/state";
+import { formatCompactQuota } from "@oh-my-soup/pi-tui/overlays/advisor-config";
+import { BorderedLoader } from "@oh-my-soup/pi-tui/overlays/bordered-loader";
+import { buildJobTree, jobTreeGuide, jobTreeIndent } from "@oh-my-soup/pi-tui/overlays/job-tree";
+import { MoveOverlay, type MoveOverlayResult } from "@oh-my-soup/pi-tui/overlays/move-overlay";
+import { ReportPanel } from "@oh-my-soup/pi-tui/overlays/report-panel";
+import type { UnavailableUsageAccount } from "@oh-my-soup/pi-tui/overlays/usage-dashboard";
+import {
+	collapseSharedUsageReports,
+	formatLimitTitle,
+	summarizeUsageResetCredits,
+} from "@oh-my-soup/pi-tui/overlays/usage-display";
+import { buildToolsMarkdown } from "@oh-my-soup/pi-tui/prompt/tools-markdown";
+import { formatRemainingOnlyTotal, isUsedOnlyAbsoluteAmount } from "@oh-my-soup/pi-tui/prompt/usage-amounts";
+import { replaceTabs, truncateToWidth } from "@oh-my-soup/pi-tui/render/render-utils";
+import { ContextUsageView, contextUsageHead } from "@oh-my-soup/pi-tui/status-line/context-usage";
+import { classifyTerminalMultiplexer } from "@oh-my-soup/pi-tui/terminal-multiplexer";
+import { getMarkdownTheme, getSymbolTheme, type Theme, theme } from "@oh-my-soup/pi-tui/theme";
 import { formatDuration, logger, Snowflake, sanitizeText } from "@oh-my-soup/pi-utils";
 import { getActiveProfile, getConfigDirName } from "@oh-my-soup/pi-utils/dirs";
-import { classifyTerminalMultiplexer } from "@oh-my-soup/pi-tui/terminal-multiplexer";
+import type { TspText } from "@oh-my-soup/pi-wire";
+import { flagConsumesValue, restartArgv } from "../../cli/flag-tables";
+import { cfgShareRedactSecrets, cfgShareServerUrl, cfgShareStore } from "../../commands/settings";
 import { shouldEnableAppendOnlyContext } from "../../config/append-only-context-mode";
 import { type BashResult, isPersistentShellCdCommand } from "../../exec/bash-executor";
 import { type LoadedCustomShare, loadCustomShare } from "../../export/custom-share";
@@ -40,34 +66,20 @@ import {
 	summarizeMentalModel,
 } from "../../hindsight";
 import { memoryStatsUnavailableMessage, resolveMemoryBackend } from "../../memory-backend";
-import { BashExecutionComponent, bashPtyViewport } from "@oh-my-soup/pi-tui/chat/bash-execution";
-import { appKey } from "@oh-my-soup/pi-tui/chrome/keybinding-hints";
-import { BorderedLoader } from "@oh-my-soup/pi-tui/overlays/bordered-loader";
-import { EvalExecutionComponent } from "@oh-my-soup/pi-tui/chat/eval-execution";
-import { MoveOverlay, type MoveOverlayResult } from "@oh-my-soup/pi-tui/overlays/move-overlay";
-import { moveDirectorySource } from "../move-directory-source";
-import { getMarkdownTheme, getSymbolTheme, theme, type Theme } from "@oh-my-soup/pi-tui/theme";
-import { IMPORTANT_NOTES_CUSTOM_TYPE } from "../../session/important-notes";
 import type { InteractiveModeContext } from "../../modes/types";
-import { ContextUsageView, contextUsageHead } from "@oh-my-soup/pi-tui/status-line/context-usage";
-import type { OverlayHandle } from "@oh-my-soup/pi-tui";
-import { ReportPanel } from "@oh-my-soup/pi-tui/overlays/report-panel";
-import type { TspText } from "@oh-my-soup/pi-wire";
-import { computeSessionContextBreakdown } from "../../session/context-usage-runtime";
-import { spawnServiceSession } from "../../service/control";
-import { buildHotkeysMarkdown, HotkeysSheetComponent } from "@oh-my-soup/pi-tui/hotkeys-markdown";
-import { isNativeRendering } from "@oh-my-soup/pi-tui/native/state";
-import { buildToolsMarkdown } from "@oh-my-soup/pi-tui/prompt/tools-markdown";
+import { isServiceChildProcess, spawnServiceSession } from "../../service/control";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
-import { buildJobTree, jobTreeGuide, jobTreeIndent } from "@oh-my-soup/pi-tui/overlays/job-tree";
 import type { AuthStorage, OAuthAccountIdentity } from "../../session/auth-storage";
 import type { CompactMode } from "../../session/compact-modes";
+import { computeSessionContextBreakdown } from "../../session/context-usage-runtime";
+import { IMPORTANT_NOTES_CUSTOM_TYPE } from "../../session/important-notes";
 import {
 	currentRuntimeIdentity,
 	formatRuntimeIdentity,
 	runtimeIdentityHistory,
 	sameRuntimeIdentity,
 } from "../../session/runtime-identity";
+import { formatDumpArchiveReport, type SessionDumpArchive } from "../../session/session-dump-format";
 import type { NewSessionOptions } from "../../session/session-entries";
 import {
 	cleanSourceCheckoutIfConfigured,
@@ -76,6 +88,7 @@ import {
 	formatSessionWorktreeSummary,
 	type SessionWorktree,
 } from "../../session/session-worktree";
+import { cfgNotesClearOnClear, cfgProviderAppendOnlyContext } from "../../session/settings";
 import { formatShakeSummary, type ShakeMode, type ShakeResult } from "../../session/shake-types";
 import {
 	codexUsagePlan,
@@ -83,37 +96,6 @@ import {
 	formatCodexUsageReportLabel,
 	limitMatchesActiveAccount,
 } from "../../slash-commands/helpers/active-oauth-account";
-import { formatProviderName } from "@oh-my-soup/pi-tui/chrome/format";
-import { formatCompactQuota } from "@oh-my-soup/pi-tui/overlays/advisor-config";
-import { resolveTernPane } from "../../tools/browser/tern/kind";
-import { TernError, type TernErrorKind, TernSocketClient } from "../../tools/browser/tern/wire";
-import { outputMeta } from "../../tools/output-meta";
-import { resolveToCwd, stripOuterDoubleQuotes } from "../../tools/path-utils";
-import { replaceTabs, truncateToWidth } from "@oh-my-soup/pi-tui/render/render-utils";
-import {
-	getChangelogPath,
-	parseChangelog,
-	parseChangelogView,
-	renderChangelogEntries,
-	selectChangelogEntries,
-} from "../../utils/changelog";
-import { copyToClipboard } from "../../utils/clipboard";
-import { formatDumpArchiveReport, type SessionDumpArchive } from "../../session/session-dump-format";
-import { openPath } from "../../utils/open";
-import { resumeCommand } from "../../utils/resume-command";
-import { setSessionTerminalTitle } from "../../utils/title-generator";
-import {
-	collapseSharedUsageReports,
-	formatLimitTitle,
-	summarizeUsageResetCredits,
-} from "@oh-my-soup/pi-tui/overlays/usage-display";
-import { formatRemainingOnlyTotal, isUsedOnlyAbsoluteAmount } from "@oh-my-soup/pi-tui/prompt/usage-amounts";
-import type { UnavailableUsageAccount } from "@oh-my-soup/pi-tui/overlays/usage-dashboard";
-
-import { cfgTerminalShowImages } from "../settings";
-import { cfgNotesClearOnClear, cfgProviderAppendOnlyContext } from "../../session/settings";
-import { cfgShareRedactSecrets, cfgShareServerUrl, cfgShareStore } from "../../commands/settings";
-import { flagConsumesValue, restartArgv } from "../../cli/flag-tables";
 import {
 	createDefaultTerminalLaunchRequest,
 	getTerminalLaunchPlacement,
@@ -123,12 +105,33 @@ import {
 	type TerminalLaunchResult,
 } from "../../subprocess/terminal-launch";
 import { resolveCliEntryCmd } from "../../subprocess/worker-client";
+import { resolveTernPane } from "../../tools/browser/tern/kind";
+import { TernError, type TernErrorKind, TernSocketClient } from "../../tools/browser/tern/wire";
+import { outputMeta } from "../../tools/output-meta";
+import { resolveToCwd, stripOuterDoubleQuotes } from "../../tools/path-utils";
+import {
+	getChangelogPath,
+	parseChangelog,
+	parseChangelogView,
+	renderChangelogEntries,
+	selectChangelogEntries,
+} from "../../utils/changelog";
+import { copyToClipboard } from "../../utils/clipboard";
+import { openPath } from "../../utils/open";
+import { resumeCommand } from "../../utils/resume-command";
+import { setSessionTerminalTitle } from "../../utils/title-generator";
+import { moveDirectorySource } from "../move-directory-source";
+import { cfgTerminalShowImages } from "../settings";
 
 /** How long `/fork` waits for Tern to open the fork's pane. */
 const TERN_FORK_TIMEOUT_MS = 10_000;
 
 /** Fork failures after which Tern may still open the pane, so `/fork` must not also fork in place. */
-const TERN_FORK_UNCONFIRMED: Partial<Record<TernErrorKind, true>> = { closed: true, timeout: true, protocol: true };
+const TERN_FORK_UNCONFIRMED: Partial<Record<TernErrorKind, true>> = {
+	closed: true,
+	timeout: true,
+	protocol: true,
+};
 
 /** Rows `/session` spends on the builds that wrote the session, including the elision row. */
 const MAX_LISTED_BUILDS = 5;
@@ -265,7 +268,11 @@ export class CommandController {
 		});
 		if (isNativeRendering()) {
 			report.holdFocus();
-			this.#reportSheet = this.ctx.ui.showOverlay(report, { anchor: "center", width: "90%", maxHeight: "90%" });
+			this.#reportSheet = this.ctx.ui.showOverlay(report, {
+				anchor: "center",
+				width: "90%",
+				maxHeight: "90%",
+			});
 			this.ctx.ui.setFocus(report);
 		} else if (report.heightAt(terminal.columns) > inline) {
 			fullScreen = true;
@@ -286,7 +293,10 @@ export class CommandController {
 
 	/** A titled markdown report; see {@link showCommandReport}. */
 	#showMarkdownPanel(title: string, markdown: string): void {
-		this.showCommandReport({ title, body: new Markdown(markdown.trim(), 0, 0, getMarkdownTheme()) });
+		this.showCommandReport({
+			title,
+			body: new Markdown(markdown.trim(), 0, 0, getMarkdownTheme()),
+		});
 	}
 
 	async #restoreAfterMoveFailure(
@@ -434,7 +444,9 @@ export class CommandController {
 
 	handleAdvisorDumpCommand(isRaw = false) {
 		try {
-			const advisorHistory = this.ctx.session.formatAdvisorHistoryAsText({ compact: !isRaw });
+			const advisorHistory = this.ctx.session.formatAdvisorHistoryAsText({
+				compact: !isRaw,
+			});
 			if (advisorHistory === null) {
 				this.ctx.showError("Advisor is not active for this session.");
 				return;
@@ -706,7 +718,10 @@ export class CommandController {
 	async handleAdvisorStatusCommand(): Promise<void> {
 		const stats = this.ctx.session.getAdvisorStats();
 		if (!stats.configured) {
-			this.showCommandReport({ title: "Advisor Status", body: new Text("Advisor is disabled.", 0, 0) });
+			this.showCommandReport({
+				title: "Advisor Status",
+				body: new Text("Advisor is disabled.", 0, 0),
+			});
 			return;
 		}
 		// Render cached quota data without waiting for the network. Quota lines
@@ -819,7 +834,10 @@ export class CommandController {
 			info += `${theme.fg("dim", "Cache Read:")} ${stats.tokens.cacheRead.toLocaleString()}\n`;
 		}
 		if (stats.cost > 0) info += `${theme.fg("dim", "Cost:")} $${stats.cost.toFixed(4)}\n`;
-		this.showCommandReport({ title: "Advisor Status", body: new Text(info.trim(), 0, 0) });
+		this.showCommandReport({
+			title: "Advisor Status",
+			body: new Text(info.trim(), 0, 0),
+		});
 	}
 
 	/**
@@ -845,7 +863,10 @@ export class CommandController {
 		let info = `${theme.fg("dim", "Running:")} ${tree.running.length}\n`;
 		if (tree.running.length === 0 && tree.recent.length === 0) {
 			info += `\n${theme.fg("dim", "No async jobs yet.")}`;
-			this.showCommandReport({ title: "Background Jobs", body: new Text(info, 0, 0) });
+			this.showCommandReport({
+				title: "Background Jobs",
+				body: new Text(info, 0, 0),
+			});
 			return;
 		}
 
@@ -880,13 +901,18 @@ export class CommandController {
 			}
 		}
 
-		this.showCommandReport({ title: "Background Jobs", body: new Text(info.trimEnd(), 0, 0) });
+		this.showCommandReport({
+			title: "Background Jobs",
+			body: new Text(info.trimEnd(), 0, 0),
+		});
 	}
 
 	async handleUsageCommand(reports?: UsageReport[] | null): Promise<void> {
 		let usageReports = reports ?? null;
 		if (!usageReports) {
-			const provider = this.ctx.session as { fetchUsageReports?: () => Promise<UsageReport[] | null> };
+			const provider = this.ctx.session as {
+				fetchUsageReports?: () => Promise<UsageReport[] | null>;
+			};
 			if (!provider.fetchUsageReports) {
 				this.ctx.showWarning("Usage reporting is not configured for this session.");
 				return;
@@ -939,7 +965,11 @@ export class CommandController {
 				this.ctx.ui.setFocus(this.ctx.editorContainer.children[0] ?? this.ctx.editor);
 				this.ctx.ui.requestRender();
 			});
-			const handle = this.ctx.ui.showOverlay(sheet, { anchor: "center", width: "90%", maxHeight: "90%" });
+			const handle = this.ctx.ui.showOverlay(sheet, {
+				anchor: "center",
+				width: "90%",
+				maxHeight: "90%",
+			});
 			this.ctx.ui.setFocus(sheet);
 			this.ctx.ui.requestRender();
 			return;
@@ -956,7 +986,9 @@ export class CommandController {
 	}
 
 	handleContextCommand(): void {
-		const breakdown = computeSessionContextBreakdown(this.ctx.session, { snapcompactSavings: true });
+		const breakdown = computeSessionContextBreakdown(this.ctx.session, {
+			snapcompactSavings: true,
+		});
 		if (breakdown.contextWindow <= 0) {
 			this.ctx.showWarning("Context usage is unavailable: no model is selected for this session.");
 			return;
@@ -1112,7 +1144,9 @@ export class CommandController {
 	async #mmList(state: HindsightSessionState): Promise<void> {
 		const client: HindsightApi = state.client;
 		try {
-			const response = await client.listMentalModels(state.bankId, { detail: "metadata" });
+			const response = await client.listMentalModels(state.bankId, {
+				detail: "metadata",
+			});
 			const items = response.items ?? [];
 			if (items.length === 0) {
 				this.ctx.showStatus(`No mental models on bank ${state.bankId}.`);
@@ -1130,7 +1164,9 @@ export class CommandController {
 
 	async #mmShow(state: HindsightSessionState, id: string): Promise<void> {
 		try {
-			const model = await state.client.getMentalModel(state.bankId, id, { detail: "content" });
+			const model = await state.client.getMentalModel(state.bankId, id, {
+				detail: "content",
+			});
 			if (!model) {
 				this.ctx.showError(`Mental model not found: ${id}`);
 				return;
@@ -1160,7 +1196,9 @@ export class CommandController {
 				// silently regenerated by a bank-wide refresh sweep. Reading
 				// `detail: "content"` here is required because the trigger
 				// field is excluded from `detail: "metadata"`.
-				const list = await state.client.listMentalModels(state.bankId, { detail: "content" });
+				const list = await state.client.listMentalModels(state.bankId, {
+					detail: "content",
+				});
 				const items = list.items ?? [];
 				if (items.length === 0) {
 					this.ctx.showStatus(`No mental models on bank ${state.bankId}.`);
@@ -1248,7 +1286,9 @@ export class CommandController {
 				this.ctx.showStatus(`No built-in seeds apply to scoping=${config.scoping}.`);
 				return;
 			}
-			const list = await state.client.listMentalModels(state.bankId, { detail: "metadata" });
+			const list = await state.client.listMentalModels(state.bankId, {
+				detail: "metadata",
+			});
 			const existing = list.items ?? [];
 			let created = 0;
 			let skipped = 0;
@@ -1312,7 +1352,7 @@ export class CommandController {
 			}
 		}
 		if (
-			process.env.OMS_SERVICE_CHILD === "1" &&
+			isServiceChildProcess() &&
 			!options?.parentSession &&
 			!options?.sessionDir &&
 			this.ctx.sessionManager.isPersistent() &&
@@ -1378,7 +1418,10 @@ export class CommandController {
 		}
 		// Opt-in destructive companion: /clear also wipes the session notes journal.
 		if (cfgNotesClearOnClear.get(this.ctx.settings) === true) {
-			this.ctx.sessionManager.appendCustomEntry(IMPORTANT_NOTES_CUSTOM_TYPE, { version: 2, op: "clear" });
+			this.ctx.sessionManager.appendCustomEntry(IMPORTANT_NOTES_CUSTOM_TYPE, {
+				version: 2,
+				op: "clear",
+			});
 		}
 		// Drop the rendered transcript so the UI matches the now-empty model
 		// context (mirrors #runNewSessionFlow's teardown, minus the new session —
@@ -2020,7 +2063,11 @@ export class CommandController {
 		// plan-approval turn it aborted.
 		if (internalGuidance) {
 			return this.executeCompaction(
-				{ internalGuidance, suppressContinuation: true, ...(mode ? { mode } : {}) },
+				{
+					internalGuidance,
+					suppressContinuation: true,
+					...(mode ? { mode } : {}),
+				},
 				false,
 				beforeFlush,
 				mode,
@@ -2104,7 +2151,10 @@ export class CommandController {
 			const effectiveMode = mode ?? baseOptions?.mode;
 			const options =
 				baseOptions || effectiveMode
-					? { ...baseOptions, ...(effectiveMode ? { mode: effectiveMode } : {}) }
+					? {
+							...baseOptions,
+							...(effectiveMode ? { mode: effectiveMode } : {}),
+						}
 					: undefined;
 			await this.ctx.session.compact(instructions, options);
 
@@ -2279,7 +2329,9 @@ function truncateJobLabel(label: string, maxWidth: number): string {
 }
 
 function formatNumber(value: number, maxFractionDigits = 1): string {
-	return new Intl.NumberFormat("en-US", { maximumFractionDigits: maxFractionDigits }).format(value);
+	return new Intl.NumberFormat("en-US", {
+		maximumFractionDigits: maxFractionDigits,
+	}).format(value);
 }
 
 function resolveProviderAuthMode(authStorage: AuthStorage, provider: string): string {
@@ -2608,7 +2660,12 @@ export function renderUsageReports(
 
 		const limitGroups = new Map<
 			string,
-			{ label: string; windowLabel: string; limits: UsageLimit[]; reports: UsageReport[] }
+			{
+				label: string;
+				windowLabel: string;
+				limits: UsageLimit[];
+				reports: UsageReport[];
+			}
 		>();
 		for (const report of providerReports) {
 			for (const limit of report.limits) {
@@ -2772,7 +2829,12 @@ export function renderUsageReports(
 			});
 			const sortedLimits = entries.map(entry => entry.limit);
 			const sortedReports = entries.map(entry => entry.report);
-			return { group, sortedLimits, sortedReports, amountText: formatAggregateAmount(sortedLimits) };
+			return {
+				group,
+				sortedLimits,
+				sortedReports,
+				amountText: formatAggregateAmount(sortedLimits),
+			};
 		});
 
 		const sectionCount = renderableGroups.reduce((max, g) => Math.max(max, g.sortedLimits.length), 0);

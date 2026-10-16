@@ -6,7 +6,11 @@ import { postmortem, ptree } from "@oh-my-soup/pi-utils";
 import { OutputSink } from "@oh-my-soup/pi-tui/tools/streaming-output";
 import { Settings } from "../config/settings";
 import type { BashResult } from "../exec/bash-executor";
-import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/output-meta";
+import {
+	resolveOutputMaxColumns,
+	resolveOutputSinkArtifactMaxBytes,
+	resolveOutputSinkHeadBytes,
+} from "../tools/output-meta";
 import {
 	buildRemoteCommand,
 	ensureConnection,
@@ -26,6 +30,10 @@ export interface SSHExecutorOptions {
 	timeout?: number;
 	/** Callback for streaming output chunks (already sanitized). */
 	onChunk?: (chunk: string) => void;
+	/** Receives the sink's current inline view at the `onChunk` cadence. */
+	onPreview?: (text: string) => void;
+	/** Minimum ms between onChunk/onPreview calls. */
+	chunkThrottleMs?: number;
 	signal?: AbortSignal;
 	/** Remote working directory (absolute; `~` is refused by the caller). */
 	cwd?: string;
@@ -90,12 +98,23 @@ export async function executeSSH(
 	const ownerId = options.ownerId ?? DEFAULT_SSH_OWNER;
 	const epoch = retainedSessions.getExecutionEpoch(ownerId, host.name);
 	const settings = await Settings.init();
+	const onChunk = options.onChunk;
+	const onPreview = options.onPreview;
 	const sink = new OutputSink({
-		onChunk: options.onChunk,
+		onChunk:
+			onChunk || onPreview
+				? chunk => {
+						onChunk?.(chunk);
+						onPreview?.(sink.preview());
+					}
+				: undefined,
 		artifactPath: options.artifactPath,
 		artifactId: options.artifactId,
 		headBytes: resolveOutputSinkHeadBytes(settings),
+		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(settings),
 		maxColumns: resolveOutputMaxColumns(settings),
+		chunkThrottleMs: onChunk || onPreview ? (options.chunkThrottleMs ?? 50) : 0,
+		collapseCarriageReturns: true,
 	});
 	if (options.signal?.aborted) {
 		return { exitCode: undefined, cancelled: true, ...(await sink.dump("Command cancelled")) };

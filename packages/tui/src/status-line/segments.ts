@@ -2,7 +2,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-soup/pi-agent-core";
 import { getTimeBasedPricingPeriod } from "@oh-my-soup/pi-catalog/models";
-import { SPINNER_ADVANCE_MS, TERMINAL } from "../index";
+import { isSshSession, SPINNER_ADVANCE_MS, TERMINAL } from "../index";
 import {
 	formatDuration,
 	formatNumber,
@@ -219,9 +219,10 @@ const piSegment: StatusLineSegment = {
 		// whole-unit turn timer (port of rust oms's status-band active brand).
 		// No trailing pad: the group renderer owns inter-segment spacing, so a
 		// trailing space here would double the gap at the first separator (#11103).
+		const activeGlyph = isSshSession() ? theme.icon.oms || "•" : brandSpinnerFrame(ctx.now?.getTime());
 		const content =
 			ctx.turnElapsedMs != null
-				? `${brandSpinnerFrame(ctx.now?.getTime())} ${brandTimer(ctx.turnElapsedMs)}`
+				? `${activeGlyph} ${brandTimer(ctx.turnElapsedMs)}`
 				: theme.icon.oms
 					? theme.icon.oms
 					: "";

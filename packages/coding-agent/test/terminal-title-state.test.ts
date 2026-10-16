@@ -91,6 +91,22 @@ describe("buildTerminalTitleWithState", () => {
 		);
 		expect(buildTerminalTitleWithState(undefined, "working", 1, true, "linux", "line", wslEnv)).toBe(`${BRAND} :`);
 	});
+
+	it("keeps a static colon over SSH and in service-child sessions", () => {
+		for (const sshEnv of [
+			{ SSH_CONNECTION: "192.0.2.1 50000 192.0.2.2 22" },
+			{ SSH_TTY: "/dev/pts/1" },
+			{ SSH_CLIENT: "192.0.2.1 50000 22" },
+			{ OMS_SERVICE_CHILD: "1" },
+		]) {
+			expect(buildTerminalTitleWithState(LABEL, "working", 0, true, "linux", "braille", sshEnv)).toBe(
+				`${BRAND} : ${LABEL}`,
+			);
+			expect(buildTerminalTitleWithState(LABEL, "working", 1, true, "win32", "dots", sshEnv)).toBe(
+				`${BRAND} : ${LABEL}`,
+			);
+		}
+	});
 });
 
 // Regression coverage for the shutdown-leak bug (PR #4451): the run-state

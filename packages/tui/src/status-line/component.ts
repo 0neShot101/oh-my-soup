@@ -17,6 +17,7 @@ import {
 	SPINNER_ADVANCE_MS,
 	truncateToWidth,
 	visibleWidth,
+	isSshSession,
 } from "../index";
 import { adjustHsv, formatNumber, getProjectDir, hexToRgb, rgbToHex } from "@oh-my-soup/pi-utils";
 import type {
@@ -2813,6 +2814,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		if (
 			(turnActive || this.#brandFade !== null) &&
 			this.#focusedAgentId === undefined &&
+			!isSshSession() &&
 			(leftSegments.includes("pi") || rightSegments.includes("pi"))
 		) {
 			return Math.floor(nowMs / SPINNER_ADVANCE_MS);

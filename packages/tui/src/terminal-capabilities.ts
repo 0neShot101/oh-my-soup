@@ -183,7 +183,13 @@ export class TerminalInfo {
  * is remote and host-local input/keyboard modes cannot be assumed.
  */
 export function isSshSession(env: NodeJS.ProcessEnv = Bun.env): boolean {
-	return Boolean(env.SSH_CONNECTION || env.SSH_TTY || env.SSH_CLIENT || env.OMS_SERVICE_CHILD === "1");
+	const ambientEnv = env === Bun.env || env === process.env || env === ($env as NodeJS.ProcessEnv);
+	return Boolean(
+		env.SSH_CONNECTION ||
+		env.SSH_TTY ||
+		env.SSH_CLIENT ||
+		(env.OMS_SERVICE_CHILD === "1" && (!ambientEnv || !isBunTestRuntime())),
+	);
 }
 
 export function isNotificationSuppressed(): boolean {
