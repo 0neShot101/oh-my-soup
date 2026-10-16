@@ -8,7 +8,7 @@ import * as path from "node:path";
 // /usr/bin, so the stubs never win there.
 
 const repoRoot = path.join(import.meta.dir, "..");
-const BINARY = '#!/bin/sh\necho "omp/1.0.0"\n';
+const BINARY = '#!/bin/sh\necho "oms/1.0.0"\n';
 const cleanups: (() => Promise<void> | void)[] = [];
 
 afterEach(async () => {
@@ -21,7 +21,7 @@ function sha256(text: string): string {
 
 /**
  * A build service answering every update check with version 1.0.0 of
- * `omp-linux-musl-x64`, whose `file` object carries `fileSha256`. Every other
+ * `oms-linux-musl-x64`, whose `file` object carries `fileSha256`. Every other
  * sha256 in the answer (other targets in `build.files[]`, the patch, a JSON
  * snippet in the notes) is wrong, and the `download` URL holds a `\u0026`
  * escape the way Go's encoder writes presigned URLs.
@@ -33,30 +33,30 @@ function startService(fileSha256: string): { url: string; requests: string[] } {
 		fetch(request) {
 			const url = new URL(request.url);
 			requests.push(url.pathname + url.search);
-			if (url.pathname === "/dl/omp-linux-musl-x64") {
+			if (url.pathname === "/dl/oms-linux-musl-x64") {
 				return url.searchParams.get("b") === "2"
 					? new Response(BINARY)
 					: new Response("bad query", { status: 403 });
 			}
-			if (!url.pathname.startsWith("/api/products/omp/"))
+			if (!url.pathname.startsWith("/api/products/oms/"))
 				return Response.json({ error: "no_build" }, { status: 404 });
 			const decoy = "0".repeat(64);
 			const answer = {
 				build: {
 					id: "20261010-171748-fa5ff4a",
-					product: "omp",
+					product: "oms",
 					version: "1.0.0",
 					channel: "stable",
 					notes: `Answers look like {"file":{"sha256":"${decoy}"},"version":"9.9.9"}`,
 					files: [
 						{
-							name: "omp-linux-x64",
+							name: "oms-linux-x64",
 							platform: "linux",
 							arch: "x86_64",
 							sha256: decoy,
 						},
 						{
-							name: "omp-linux-musl-x64",
+							name: "oms-linux-musl-x64",
 							platform: "linux-musl",
 							arch: "x86_64",
 							sha256: decoy,
@@ -64,15 +64,15 @@ function startService(fileSha256: string): { url: string; requests: string[] } {
 					],
 				},
 				file: {
-					name: "omp-linux-musl-x64",
+					name: "oms-linux-musl-x64",
 					platform: "linux-musl",
 					arch: "x86_64",
 					kind: "archive",
 					size: BINARY.length,
 					sha256: fileSha256,
-					url: "/d/omp/20261010-171748-fa5ff4a/omp-linux-musl-x64",
+					url: "/d/oms/20261010-171748-fa5ff4a/oms-linux-musl-x64",
 				},
-				download: `${server.url.origin}/dl/omp-linux-musl-x64?a=1&b=2`,
+				download: `${server.url.origin}/dl/oms-linux-musl-x64?a=1&b=2`,
 				patch: {
 					format: "file",
 					from: "20261009-000000-0000000",
@@ -106,7 +106,7 @@ async function runInstall(
 	stderr: string;
 	installDir: string;
 }> {
-	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-install-"));
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "oms-install-"));
 	cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
 	const binDir = path.join(dir, "bin");
 	const installDir = path.join(dir, "install");
@@ -138,10 +138,10 @@ describe.skipIf(process.platform === "win32")("install.sh binary mode", () => {
 		const result = await runInstall(service.url, ["--binary"]);
 
 		expect(result.exitCode, result.stdout + result.stderr).toBe(0);
-		expect(service.requests[0]).toBe("/api/products/omp/latest/linux-musl-x86_64?channel=stable");
+		expect(service.requests[0]).toBe("/api/products/oms/latest/linux-musl-x86_64?channel=stable");
 		expect(result.stdout).toContain("Using version: 1.0.0");
-		expect(await fs.readdir(result.installDir)).toEqual(["omp"]);
-		expect(await Bun.file(path.join(result.installDir, "omp")).text()).toBe(BINARY);
+		expect(await fs.readdir(result.installDir)).toEqual(["oms"]);
+		expect(await Bun.file(path.join(result.installDir, "oms")).text()).toBe(BINARY);
 	});
 
 	test("refuses a download whose sha256 differs from the answer's file object", async () => {
@@ -149,7 +149,7 @@ describe.skipIf(process.platform === "win32")("install.sh binary mode", () => {
 		const result = await runInstall(service.url, ["--binary"]);
 
 		expect(result.exitCode).not.toBe(0);
-		expect(result.stdout).toContain("Checksum mismatch for omp-linux-musl-x64");
+		expect(result.stdout).toContain("Checksum mismatch for oms-linux-musl-x64");
 		expect(await fs.readdir(result.installDir)).toEqual([]);
 	});
 
@@ -157,7 +157,7 @@ describe.skipIf(process.platform === "win32")("install.sh binary mode", () => {
 		const service = startService(sha256(BINARY));
 		const tagged = await runInstall(service.url, ["--binary", "--ref", "v1.0.0"]);
 		expect(tagged.exitCode, tagged.stdout + tagged.stderr).toBe(0);
-		expect(service.requests[0]).toBe("/api/products/omp/versions/1.0.0/linux-musl-x86_64");
+		expect(service.requests[0]).toBe("/api/products/oms/versions/1.0.0/linux-musl-x86_64");
 
 		const branch = await runInstall(service.url, ["--binary", "--ref", "main"]);
 		expect(branch.exitCode).toBe(1);

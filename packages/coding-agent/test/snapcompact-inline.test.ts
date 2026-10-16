@@ -7,16 +7,16 @@ import type {
 	Model,
 	TextContent,
 	ToolResultMessage,
-} from "@oh-my-pi/pi-ai";
-import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
+} from "@oh-my-soup/pi-ai";
+import { transformMessages } from "@oh-my-soup/pi-ai/providers/transform-messages";
+import { buildModel } from "@oh-my-soup/pi-catalog/build";
 import {
 	estimateInlineSavings,
 	planInlineSwaps,
 	type SnapcompactInlineOptions,
 	SnapcompactInlineTransformer,
-} from "@oh-my-pi/pi-coding-agent/session/snapcompact-inline";
-import * as snapcompact from "@oh-my-pi/snapcompact";
+} from "@oh-my-soup/pi-coding-agent/session/snapcompact-inline";
+import * as snapcompact from "@oh-my-soup/snapcompact";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 /**

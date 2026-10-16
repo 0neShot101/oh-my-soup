@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { type AnthropicOptions, streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
-import type { Context, Model } from "@oh-my-pi/pi-ai/types";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { type AnthropicOptions, streamAnthropic } from "@oh-my-soup/pi-ai/providers/anthropic";
+import type { Context, Model } from "@oh-my-soup/pi-ai/types";
+import { buildModel } from "@oh-my-soup/pi-catalog/build";
+import { Effort } from "@oh-my-soup/pi-catalog/effort";
 import { withEnv } from "./helpers";
 
 const BINDING_BETA = "thinking-binding-controls-2026-08-01";

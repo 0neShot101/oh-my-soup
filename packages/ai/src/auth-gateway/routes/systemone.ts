@@ -6,13 +6,13 @@
  * credential rotation as the chat routes, dispatched through
  * {@link NativeJudge} — pi-ai's client for every judgment API, which
  * translates to the resolved model's own wire (OpenAI Decisions, Workers AI)
- * — so 401 rotation and 429/529 backoff match omp's own judgments. A judgment
+ * — so 401 rotation and 429/529 backoff match oms's own judgments. A judgment
  * is one JSON round-trip: no stream, no provider session state. Most judgment
  * APIs report tokens only, so the cost is priced from the catalog model for the
  * response header and the broker's observed-usage ledger.
  */
-import { calculateCost } from "@oh-my-pi/pi-catalog/models";
-import { logger } from "@oh-my-pi/pi-utils";
+import { calculateCost } from "@oh-my-soup/pi-catalog/models";
+import { logger } from "@oh-my-soup/pi-utils";
 import * as AIError from "../../error";
 import { classifyGatewayError } from "../../error/gateway";
 import { checkNativeJudgmentImages, createNativeJudge, isJudgmentApi } from "../../judgment/native";

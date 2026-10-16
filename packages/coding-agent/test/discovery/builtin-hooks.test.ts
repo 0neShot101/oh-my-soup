@@ -3,11 +3,11 @@ import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { clearCache as clearFsCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
-import { type Hook, hookCapability } from "@oh-my-pi/pi-coding-agent/capability/hook";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { initializeWithSettings, loadCapability } from "@oh-my-pi/pi-coding-agent/discovery";
-import { __resetDirsFromEnvForTests, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { clearCache as clearFsCache } from "@oh-my-soup/pi-coding-agent/capability/fs";
+import { type Hook, hookCapability } from "@oh-my-soup/pi-coding-agent/capability/hook";
+import { resetSettingsForTest, Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { initializeWithSettings, loadCapability } from "@oh-my-soup/pi-coding-agent/discovery";
+import { __resetDirsFromEnvForTests, removeWithRetries, setAgentDir } from "@oh-my-soup/pi-utils";
 import { restoreEnvValue } from "../helpers/settings-test-state";
 
 const HOOK_SOURCE = `export default function(pi) {
@@ -23,7 +23,7 @@ const HOOK_SOURCE = `export default function(pi) {
  * would leave the flag undefined and skip the test on every host.
  */
 const probeSymlinks = (): boolean => {
-	const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), "omp-symlink-probe-"));
+	const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), "oms-symlink-probe-"));
 	try {
 		const target = path.join(dir, "target.ts");
 		nodeFs.writeFileSync(target, HOOK_SOURCE);
@@ -45,7 +45,7 @@ describe("native hook discovery", () => {
 	let sharedHooks: string;
 	let originalHome: string | undefined;
 	let originalAgentDirEnv: string | undefined;
-	let originalOmpProfileEnv: string | undefined;
+	let originalOmsProfileEnv: string | undefined;
 	let originalPiProfileEnv: string | undefined;
 
 	beforeEach(async () => {
@@ -53,19 +53,19 @@ describe("native hook discovery", () => {
 		clearFsCache();
 		originalHome = process.env.HOME;
 		originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
-		originalOmpProfileEnv = process.env.OMP_PROFILE;
+		originalOmsProfileEnv = process.env.OMS_PROFILE;
 		originalPiProfileEnv = process.env.PI_PROFILE;
-		root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-builtin-hooks-"));
+		root = await fs.mkdtemp(path.join(os.tmpdir(), "oms-builtin-hooks-"));
 		const home = path.join(root, "home");
 		project = path.join(root, "project");
-		projectPre = path.join(project, ".omp", "hooks", "pre");
+		projectPre = path.join(project, ".oms", "hooks", "pre");
 		sharedHooks = path.join(root, "shared-hooks");
 		process.env.HOME = home;
 		vi.spyOn(os, "homedir").mockReturnValue(home);
-		setAgentDir(path.join(home, ".omp", "agent"));
+		setAgentDir(path.join(home, ".oms", "agent"));
 		await Promise.all([
 			fs.mkdir(projectPre, { recursive: true }),
-			fs.mkdir(path.join(home, ".omp", "agent", "hooks", "pre"), { recursive: true }),
+			fs.mkdir(path.join(home, ".oms", "agent", "hooks", "pre"), { recursive: true }),
 			fs.mkdir(sharedHooks, { recursive: true }),
 			fs.mkdir(path.join(project, ".git"), { recursive: true }),
 		]);
@@ -77,7 +77,7 @@ describe("native hook discovery", () => {
 		clearFsCache();
 		vi.restoreAllMocks();
 		restoreEnvValue("HOME", originalHome);
-		restoreEnvValue("OMP_PROFILE", originalOmpProfileEnv);
+		restoreEnvValue("OMS_PROFILE", originalOmsProfileEnv);
 		restoreEnvValue("PI_PROFILE", originalPiProfileEnv);
 		restoreEnvValue("PI_CODING_AGENT_DIR", originalAgentDirEnv);
 		__resetDirsFromEnvForTests();

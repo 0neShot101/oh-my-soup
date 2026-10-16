@@ -3,18 +3,18 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { FileEntry, SessionHeader } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
-import { findSessionFiles } from "@oh-my-pi/pi-coding-agent/session/session-listing";
-import { loadEntriesFromFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { FileEntry, SessionHeader } from "@oh-my-soup/pi-coding-agent/session/session-entries";
+import { resetSessionIndexForTests } from "@oh-my-soup/pi-coding-agent/session/session-index";
+import { findSessionFiles } from "@oh-my-soup/pi-coding-agent/session/session-listing";
+import { loadEntriesFromFile } from "@oh-my-soup/pi-coding-agent/session/session-loader";
+import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
 import {
 	lastSessionTransfer,
 	markSessionMoved,
 	packSession,
 	unpackSession,
-} from "@oh-my-pi/pi-coding-agent/session/session-transfer";
-import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
+} from "@oh-my-soup/pi-coding-agent/session/session-transfer";
+import { getConfigRootDir, setAgentDir } from "@oh-my-soup/pi-utils";
 import { makeAssistantMessage } from "./session-manager/helpers";
 
 function headerOf(entries: FileEntry[]): SessionHeader {
@@ -41,7 +41,7 @@ async function appendTurn(sessionFile: string, text: string): Promise<void> {
 	await session.close();
 }
 
-describe("omp session unpack against a local copy", () => {
+describe("oms session unpack against a local copy", () => {
 	let root: string;
 	let laptopAgent: string;
 	let cloudAgent: string;
@@ -50,7 +50,7 @@ describe("omp session unpack against a local copy", () => {
 	const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 
 	beforeEach(async () => {
-		root = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-session-transfer-copy-"));
+		root = await fsp.mkdtemp(path.join(os.tmpdir(), "oms-session-transfer-copy-"));
 		laptopAgent = path.join(root, "laptop-agent");
 		cloudAgent = path.join(root, "cloud-agent");
 		laptopCwd = path.join(root, "laptop", "project");

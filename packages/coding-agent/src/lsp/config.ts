@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { $which, isRecord, logger, pathIsWithin, type WhichOptions } from "@oh-my-pi/pi-utils";
+import { $which, isRecord, logger, pathIsWithin, type WhichOptions } from "@oh-my-soup/pi-utils";
 import { YAML } from "bun";
 import type { ClaudePluginRoot } from "../discovery/helpers";
 import {
@@ -404,8 +404,8 @@ function marketplaceConfigSource(root: ClaudePluginRoot): ConfigFileSource<Norma
  *
  * Priority (highest to lowest):
  * 1. Project root: lsp.json/.lsp.json/lsp.yml/.lsp.yml/lsp.yaml/.lsp.yaml
- * 2. Project config dirs: .omp/lsp.*, .pi/lsp.*, .claude/lsp.* (+ hidden variants)
- * 3. User config dirs: ~/.omp/agent/lsp.*, ~/.pi/agent/lsp.*, ~/.claude/lsp.* (+ hidden variants)
+ * 2. Project config dirs: .oms/lsp.*, .pi/lsp.*, .claude/lsp.* (+ hidden variants)
+ * 3. User config dirs: ~/.oms/agent/lsp.*, ~/.pi/agent/lsp.*, ~/.claude/lsp.* (+ hidden variants)
  * 4. User home root: ~/lsp.*, ~/.lsp.*
  * 5. Auto-detect from project markers + available binaries
  *

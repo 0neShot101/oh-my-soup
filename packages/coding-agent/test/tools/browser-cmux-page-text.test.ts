@@ -1,7 +1,7 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { CmuxTab } from "@oh-my-pi/pi-coding-agent/tools/browser/cmux/cmux-tab";
-import { CmuxSocketClient } from "@oh-my-pi/pi-coding-agent/tools/browser/cmux/socket-client";
-import { acquireBrowser, releaseBrowser } from "@oh-my-pi/pi-coding-agent/tools/browser/registry";
+import { CmuxTab } from "@oh-my-soup/pi-coding-agent/tools/browser/cmux/cmux-tab";
+import { CmuxSocketClient } from "@oh-my-soup/pi-coding-agent/tools/browser/cmux/socket-client";
+import { acquireBrowser, releaseBrowser } from "@oh-my-soup/pi-coding-agent/tools/browser/registry";
 import { chromiumAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();

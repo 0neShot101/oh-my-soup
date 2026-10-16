@@ -1,5 +1,5 @@
-import { encodeSixel } from "@oh-my-pi/pi-natives";
-import { $env, isBunTestRuntime, isTerminalHeadless, isWsl } from "@oh-my-pi/pi-utils/env";
+import { encodeSixel } from "@oh-my-soup/pi-natives";
+import { $env, isBunTestRuntime, isTerminalHeadless, isWsl } from "@oh-my-soup/pi-utils/env";
 import { writeTerminalSequence } from "./active-terminal";
 import { sendDesktopNotification, shouldDeliverDesktopNotification } from "./desktop-notify";
 import {
@@ -597,7 +597,7 @@ const KNOWN_TERMINALS = Object.freeze({
 	// the conservative defaults.
 	rio: new TerminalInfo("rio", ImageProtocol.Kitty, true, true),
 	// Tern (Stencil's terminal, `stencil-term`) sets TERM_PROGRAM=tern and
-	// implements Kitty graphics, OSC 8 and OSC 9/99 notifications. Whether omp
+	// implements Kitty graphics, OSC 8 and OSC 9/99 notifications. Whether oms
 	// renders natively (Tern Surface Protocol) is decided by the `hello`
 	// handshake alone, never by this identity.
 	tern: new TerminalInfo("tern", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc99),
@@ -611,7 +611,7 @@ const KNOWN_TERMINALS = Object.freeze({
 	// gets the Ghostty progress keepalive. The Ghostty initial image delay stays
 	// Ghostty-only: it works around a Ghostty app startup race, not libghostty.
 	// Monstar turns OSC 9 into a D-Bus notification with a default action;
-	// activating it focuses the Monstar window. The BEL path uses omp's own
+	// activating it focuses the Monstar window. The BEL path uses oms's own
 	// `notify-send` fallback instead, which cannot focus a window.
 	monstar: new TerminalInfo("monstar", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9, false, false, false, 2),
 });
@@ -1396,7 +1396,7 @@ function notificationToLine(n: TerminalNotification): string {
 // C0/C1 control characters that are unsafe inside an OSC payload (must base64).
 const OSC99_UNSAFE = /[\x00-\x1f\x7f\x80-\x9f]/u;
 const OSC99_MAX_PAYLOAD_BYTES = 2048;
-const OSC99_APP_NAME = "omp";
+const OSC99_APP_NAME = "oms";
 let nextOsc99NotificationId = 1;
 
 function base64Utf8(value: string): string {
@@ -1410,7 +1410,7 @@ function sanitizeOsc99Id(id: string | undefined): string {
 }
 
 function osc99Id(id: string | undefined): string {
-	return sanitizeOsc99Id(id) || `omp-${nextOsc99NotificationId++}`;
+	return sanitizeOsc99Id(id) || `oms-${nextOsc99NotificationId++}`;
 }
 
 function utf8CodePointBytes(char: string): number {

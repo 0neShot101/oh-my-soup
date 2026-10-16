@@ -17,7 +17,7 @@ import { DynamicBorder } from "../chrome/dynamic-border";
 import { Ellipsis, truncateToWidth, visibleWidth } from "../utils";
 import { interruptKey } from "../chrome/keybinding-hints";
 import { DEFAULT_TERMINAL_PREVIEW_LINES, expandKeyHint } from "../render/render-utils";
-import type { TspCardStatus, TspSpan, TspText, TspTone } from "@oh-my-pi/pi-wire";
+import type { TspCardStatus, TspSpan, TspText, TspTone } from "@oh-my-soup/pi-wire";
 import { card, node, span, text } from "../native/describe";
 import type { NativeChild, NativeNode } from "../native/node";
 import { runBox, runFoot, runInput, runOutput, type RunState } from "../tools/native-view";
@@ -231,13 +231,13 @@ export function describeExecutionTool(input: ExecutionToolInput): NativeNode {
 	const box = runBox(
 		[
 			runInput(input.command, {
-				role: shell ? "omp.tool.bash.command" : "omp.tool.eval.input",
+				role: shell ? "oms.tool.bash.command" : "oms.tool.eval.input",
 				lang: input.lang,
 				wrap: shell,
 			}),
 			input.output.length > 0 &&
 				runOutput(input.output, {
-					role: shell ? "omp.tool.bash.output" : "omp.tool.eval.output",
+					role: shell ? "oms.tool.bash.output" : "oms.tool.eval.output",
 					previewLines: DEFAULT_TERMINAL_PREVIEW_LINES,
 				}),
 			runFoot({

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
-import { LoopWatchdog } from "@oh-my-pi/pi-tui/loop-watchdog";
+import { LoopWatchdog } from "@oh-my-soup/pi-tui/loop-watchdog";
 import {
 	currentLoopPhase,
 	logger,
@@ -7,7 +7,7 @@ import {
 	pushLoopPhase,
 	resetLoopPhaseWindow,
 	takeLoopPhaseAttribution,
-} from "@oh-my-pi/pi-utils";
+} from "@oh-my-soup/pi-utils";
 
 /**
  * Contract: LoopWatchdog turns event-loop lag into exactly one

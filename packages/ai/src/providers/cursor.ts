@@ -1,14 +1,14 @@
 import * as fs from "node:fs/promises";
 import http2 from "node:http2";
-import { cursorModelParameters } from "@oh-my-pi/pi-catalog/compat/behavior";
-import { isCursorMaxModeWireId } from "@oh-my-pi/pi-catalog/compat/collapse";
-import { classifyModel, collapseVariantId } from "@oh-my-pi/pi-catalog/compat/taxonomy";
+import { cursorModelParameters } from "@oh-my-soup/pi-catalog/compat/behavior";
+import { isCursorMaxModeWireId } from "@oh-my-soup/pi-catalog/compat/collapse";
+import { classifyModel, collapseVariantId } from "@oh-my-soup/pi-catalog/compat/taxonomy";
 import type {
 	ConversationStep,
 	CursorRule,
 	McpToolDefinition,
 	RequestedModel_ModelParameterbytes,
-} from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
+} from "@oh-my-soup/pi-catalog/discovery/cursor-proto";
 import {
 	CURSOR_BIDI_APPEND_PATH,
 	CURSOR_CLIENT_VERSION,
@@ -16,7 +16,7 @@ import {
 	CURSOR_RUN_PATH,
 	CURSOR_RUN_SSE_PATH,
 	cursorClientHeaders,
-} from "@oh-my-pi/pi-catalog/wire/cursor";
+} from "@oh-my-soup/pi-catalog/wire/cursor";
 import {
 	AgentClientMessageSchema,
 	AgentConversationTurnStructureSchema,
@@ -161,7 +161,7 @@ import {
 	WriteShellStdinErrorSchema,
 	WriteShellStdinResultSchema,
 	WriteSuccessSchema,
-} from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
+} from "@oh-my-soup/pi-catalog/discovery/cursor-proto";
 import {
 	create,
 	decodeJsonValue,
@@ -170,9 +170,9 @@ import {
 	type JsonValue,
 	toBinary,
 	toJson,
-} from "@oh-my-pi/pi-catalog/discovery/protobuf";
-import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
-import { calculateCost } from "@oh-my-pi/pi-catalog/models";
+} from "@oh-my-soup/pi-catalog/discovery/protobuf";
+import { THINKING_EFFORTS } from "@oh-my-soup/pi-catalog/effort";
+import { calculateCost } from "@oh-my-soup/pi-catalog/models";
 import {
 	$env,
 	isRecord,
@@ -180,9 +180,9 @@ import {
 	parseJsonWithRepair,
 	parseStreamingJsonThrottled,
 	sanitizeText,
-} from "@oh-my-pi/pi-utils";
-import { classifyJsonPrefix } from "@oh-my-pi/pi-utils/json-parse";
-import { LRUCache } from "@oh-my-pi/pi-utils/lru";
+} from "@oh-my-soup/pi-utils";
+import { classifyJsonPrefix } from "@oh-my-soup/pi-utils/json-parse";
+import { LRUCache } from "@oh-my-soup/pi-utils/lru";
 import * as AIError from "../error";
 import { parseToolCallArguments } from "../utils/tool-call-arguments";
 import type {
@@ -5764,13 +5764,13 @@ function resolveCursorRecordReplays(
 /**
  * Cursor AgentService reconstructs the model prompt from `requestContext.rules`,
  * not from the client-supplied `rootPromptMessagesJson` system blobs. Map each
- * OMP system-prompt entry to a global CursorRule so always-apply rules survive
+ * OMS system-prompt entry to a global CursorRule so always-apply rules survive
  * that reconstruction.
  */
 export function buildCursorRequestContextRules(systemPrompt: readonly string[] | undefined): CursorRule[] {
 	return normalizeSystemPrompts(systemPrompt).map((content, index) =>
 		create(CursorRuleSchema, {
-			fullPath: `/omp/system-prompt/${index}.mdc`,
+			fullPath: `/oms/system-prompt/${index}.mdc`,
 			content,
 			source: CursorRuleSource.USER,
 			type: create(CursorRuleTypeSchema, {
@@ -6595,7 +6595,7 @@ function resolveCursorWireModel(
 	}
 	// Fixed per-model parameters come from catalog KDL (`cursor-model-parameter`
 	// in `runtime/behavior.kdl`). A bare `composer-2.5` id resolves to the Fast
-	// variant server-side (can1357/oh-my-pi#9012), so the catalog pins the
+	// variant server-side (pickpocket/oh-my-soup#9012), so the catalog pins the
 	// Standard tier with `fast=false`; `-fast` selections keep the Fast lane by
 	// declaring no parameter.
 	const fixedParameters = cursorModelParameters(wireModelId);

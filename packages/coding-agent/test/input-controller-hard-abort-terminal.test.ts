@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
-import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
-import { postmortem, setTerminalHeadless } from "@oh-my-pi/pi-utils";
+import { InputController } from "@oh-my-soup/pi-coding-agent/modes/controllers/input-controller";
+import type { InteractiveModeContext } from "@oh-my-soup/pi-coding-agent/modes/types";
+import { ProcessTerminal } from "@oh-my-soup/pi-tui/terminal";
+import { postmortem, setTerminalHeadless } from "@oh-my-soup/pi-utils";
 
 // A Ctrl+C while shutdown() is still closing the session hard-exits through
 // postmortem.exitProcess(), which skips the postmortem cleanups — including the
-// terminal restore. The kitty keyboard frame omp pushed stayed on the terminal's
+// terminal restore. The kitty keyboard frame oms pushed stayed on the terminal's
 // stack, so the parent shell received Ctrl+C as `CSI 99;5u` and zsh printed
 // `9;5u` at the prompt. The terminal must be handed back before the exit.
 

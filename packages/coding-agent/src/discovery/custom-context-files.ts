@@ -7,8 +7,8 @@
  * checkout, which the normal walk never reaches.
  */
 import * as path from "node:path";
-import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { getAgentDir } from "@oh-my-pi/pi-utils";
+import * as vcs from "@oh-my-soup/pi-natives/vcs";
+import { getAgentDir } from "@oh-my-soup/pi-utils";
 import { boundSettings, registerProvider } from "../capability";
 import { type ContextFile, contextFileCapability } from "../capability/context-file";
 import { readFile } from "../capability/fs";
@@ -24,7 +24,7 @@ interface ConfiguredNames {
 	/**
 	 * Whether names may be read from the user agent directory. Not when a project
 	 * config supplied the list: a repository must not pull files such as
-	 * `config.yml` from `~/.omp/agent` into the prompt.
+	 * `config.yml` from `~/.oms/agent` into the prompt.
 	 */
 	includeAgentDir: boolean;
 }

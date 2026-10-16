@@ -31,7 +31,7 @@ function getMutationQueueKey(filePath: string): string {
  * Serialize file mutation operations targeting the same file across extensions.
  * Operations for different files still run in parallel.
  *
- * Note: Built-in `edit` and `write` tools in oh-my-pi do not take this queue;
+ * Note: Built-in `edit` and `write` tools in oh-my-soup do not take this queue;
  * this serializes custom tools and extensions against each other.
  */
 export async function withFileMutationQueue<T>(filePath: string, fn: () => Promise<T>): Promise<T> {

@@ -1,6 +1,6 @@
 # Mnemopi memory backend
 
-omp can use `@oh-my-pi/pi-mnemopi` as a local long-term memory backend.
+oms can use `@oh-my-soup/pi-mnemopi` as a local long-term memory backend.
 
 Set:
 
@@ -82,7 +82,7 @@ Under `global` and `per-project-tagged`, the `retain` and `learn` tools also acc
 
 Non-global modes also recall legacy sibling banks whose working-memory rows all carry the current absolute cwd in `metadata.cwd`; mixed-cwd, empty, corrupt, or unreadable banks are excluded. Startup probes at most 64 additional bank directories. New writes still use the current project bank.
 
-The combined project-plus-global behavior lives in the wrapper. The `@oh-my-pi/pi-mnemopi` package itself still exposes banks and constructor options directly, including `bank` for selecting a bank name. Project-local banks other than the shared bank are stored as sibling bank databases managed by Mnemopi's `BankManager`.
+The combined project-plus-global behavior lives in the wrapper. The `@oh-my-soup/pi-mnemopi` package itself still exposes banks and constructor options directly, including `bank` for selecting a bank name. Project-local banks other than the shared bank are stored as sibling bank databases managed by Mnemopi's `BankManager`.
 
 ## Recall previews and full-row reads
 
@@ -205,7 +205,7 @@ new Mnemopi({
 - Subagents do not own separate Mnemopi retain loops; they alias the parent state when a parent Mnemopi state exists, and otherwise remain inert.
 - At primary backend startup, eligible working-memory rows are promoted across owned banks before the first write can TTL-trim them. Promotion failures are logged without disabling the backend.
 - Backend startup is best-effort. If database/model initialization fails, the session continues with Mnemopi inert and logs a warning; memory tools then report that the backend is not initialized.
-- Local embedding models load once per machine, not once per session: each (model, fastembed cache dir) pair is served by one detached `omp mnemopi embed <model>` server owning an IPC endpoint under `~/.omp/run/mnemopi/` (log beside it). The first omp process that needs it spawns it; others connect. Inference runs in the server's private `onnxruntime` child. The server exits after 15 minutes without a request, freeing the model's memory, and is replaced when an omp process of another version connects. A steady-state embed that takes longer than 2 minutes fails, and the server kills and respawns its inference child.
+- Local embedding models load once per machine, not once per session: each (model, fastembed cache dir) pair is served by one detached `oms mnemopi embed <model>` server owning an IPC endpoint under `~/.oms/run/mnemopi/` (log beside it). The first oms process that needs it spawns it; others connect. Inference runs in the server's private `onnxruntime` child. The server exits after 15 minutes without a request, freeing the model's memory, and is replaced when an oms process of another version connects. A steady-state embed that takes longer than 2 minutes fails, and the server kills and respawns its inference child.
 
 ## Shutdown and durability
 

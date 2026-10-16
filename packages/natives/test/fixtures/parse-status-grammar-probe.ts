@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { __ompSetGrammarDir, parseCodeStatus, summarizeCode, wasmGrammarFor } from "../../native";
 
-const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-parse-status-"));
+const directory = await fs.mkdtemp(path.join(os.tmpdir(), "oms-parse-status-"));
 try {
 	__ompSetGrammarDir(directory);
 	const options = { code: "[core]\nname = pi\n", lang: "ini" };

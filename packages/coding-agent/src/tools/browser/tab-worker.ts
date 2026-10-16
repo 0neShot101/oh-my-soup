@@ -2,8 +2,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { formatBytes, postmortem, Snowflake, untilAborted, withTimeout } from "@oh-my-pi/pi-utils";
-import type { HTMLElement } from "@oh-my-pi/pi-utils/dom";
+import { formatBytes, postmortem, Snowflake, untilAborted, withTimeout } from "@oh-my-soup/pi-utils";
+import type { HTMLElement } from "@oh-my-soup/pi-utils/dom";
 import type {
 	Accessibility,
 	Browser,
@@ -37,7 +37,7 @@ import {
 	withBrowserPromiseCombinatorTracking,
 } from "../run-scope";
 import { ToolAbortError, throwIfAborted } from "../tool-errors";
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { ToolError } from "@oh-my-soup/pi-tui/tools/tool-errors";
 import {
 	type AriaSnapshotOptions,
 	assertSelectorString,
@@ -529,7 +529,7 @@ function asElementHandle(handle: unknown): ElementHandle | null {
 	return handle ? (handle as ElementHandle) : null;
 }
 
-/** ElementHandle enriched with omp's additional direct interaction and query methods. */
+/** ElementHandle enriched with oms's additional direct interaction and query methods. */
 export type ActionableHandle = InteractionHandle & ElementQueryHelpers & { fill(value: string): Promise<void> };
 
 /**
@@ -1742,8 +1742,8 @@ export class WorkerCore {
 	}
 
 	/**
-	 * Tell the omp browser relay this worker drives the adopted page, so the
-	 * relay adds it to the per-window "omp" tab group. Best-effort: plain CDP
+	 * Tell the oms browser relay this worker drives the adopted page, so the
+	 * relay adds it to the per-window "oms" tab group. Best-effort: plain CDP
 	 * backends (real Chrome, cmux) reject the relay-private method.
 	 */
 	async #claimRelayTarget(page: Page): Promise<void> {
@@ -1753,9 +1753,9 @@ export class WorkerCore {
 			// Puppeteer's protocol map cannot express the relay-private method; the
 			// send signature is otherwise identical.
 			const raw = session as unknown as { send(method: string): Promise<unknown> };
-			await raw.send("OMP.claimTarget");
+			await raw.send("OMS.claimTarget");
 		} catch {
-			// Not the omp relay; nothing to claim.
+			// Not the oms relay; nothing to claim.
 		} finally {
 			await session?.detach().catch(() => undefined);
 		}
@@ -3057,7 +3057,7 @@ export class WorkerCore {
 					session.browserScreenshotDir,
 					`screenshot-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, -1)}.${ext}`,
 				)
-			: path.join(os.tmpdir(), `omp-sshots-${Snowflake.next()}.${ext}`);
+			: path.join(os.tmpdir(), `oms-sshots-${Snowflake.next()}.${ext}`);
 		await fs.promises.mkdir(path.dirname(dest), { recursive: true });
 		await Bun.write(dest, savedBuffer);
 		screenshots.push({
@@ -3102,7 +3102,7 @@ export class WorkerCore {
 		const changed = diff.pixelChangeRatio > threshold;
 		const diffPath = opts.output
 			? resolveToCwd(opts.output, session.cwd)
-			: path.join(os.tmpdir(), `omp-screenshot-diff-${Snowflake.next()}.png`);
+			: path.join(os.tmpdir(), `oms-screenshot-diff-${Snowflake.next()}.png`);
 		await fs.promises.mkdir(path.dirname(diffPath), { recursive: true });
 		await Bun.write(diffPath, diff.png);
 		const resized = await resizeImage(
@@ -3127,7 +3127,7 @@ export class WorkerCore {
 	async #pdf(session: SessionSnapshot, signal: AbortSignal | undefined, opts: PdfOptions = {}): Promise<string> {
 		const dest = opts.path
 			? resolveToCwd(opts.path, session.cwd)
-			: path.join(os.tmpdir(), `omp-browser-${Snowflake.next()}.pdf`);
+			: path.join(os.tmpdir(), `oms-browser-${Snowflake.next()}.pdf`);
 		await fs.promises.mkdir(path.dirname(dest), { recursive: true });
 		await untilAborted(signal, () =>
 			this.#requirePage().pdf({

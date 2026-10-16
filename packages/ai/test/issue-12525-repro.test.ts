@@ -15,10 +15,10 @@
 //
 // Synthetic data only: no network, no credentials, no local server.
 import { describe, expect, it } from "bun:test";
-import * as AIError from "@oh-my-pi/pi-ai/error";
-import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import type { Context, FetchImpl } from "@oh-my-pi/pi-ai/types";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import * as AIError from "@oh-my-soup/pi-ai/error";
+import { streamOpenAICompletions } from "@oh-my-soup/pi-ai/providers/openai-completions";
+import type { Context, FetchImpl } from "@oh-my-soup/pi-ai/types";
+import { buildModel } from "@oh-my-soup/pi-catalog/build";
 
 const model = buildModel({
 	id: "issue-12525-model",

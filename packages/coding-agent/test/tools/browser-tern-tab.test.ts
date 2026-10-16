@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
-import { RunOutput } from "@oh-my-pi/pi-coding-agent/tools/browser/run-output";
-import type { ScreenshotResult } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-protocol";
-import { TernElementHandle, TernTab, userSourceFunction } from "@oh-my-pi/pi-coding-agent/tools/browser/tern/tern-tab";
-import { parseTernSelector } from "@oh-my-pi/pi-coding-agent/tools/browser/tern/selectors";
-import { TernSocketClient } from "@oh-my-pi/pi-coding-agent/tools/browser/tern/wire";
-import { encodeRawPng } from "@oh-my-pi/pi-coding-agent/utils/png-encode";
+import { RunOutput } from "@oh-my-soup/pi-coding-agent/tools/browser/run-output";
+import type { ScreenshotResult } from "@oh-my-soup/pi-coding-agent/tools/browser/tab-protocol";
+import { TernElementHandle, TernTab, userSourceFunction } from "@oh-my-soup/pi-coding-agent/tools/browser/tern/tern-tab";
+import { parseTernSelector } from "@oh-my-soup/pi-coding-agent/tools/browser/tern/selectors";
+import { TernSocketClient } from "@oh-my-soup/pi-coding-agent/tools/browser/tern/wire";
+import { encodeRawPng } from "@oh-my-soup/pi-coding-agent/utils/png-encode";
 import { type FakeAnswer, type FakeDaemon, startFakeDaemon } from "./tern-fake-daemon";
 
 interface FakePage {
@@ -83,7 +83,7 @@ function capture(message: Record<string, unknown>): Record<string, unknown> {
 		world: "page",
 		main: true,
 		url: "https://example.test/",
-		body: JSON.stringify({ omp: "tern", ts: 1, ...message }),
+		body: JSON.stringify({ oms: "tern", ts: 1, ...message }),
 	};
 }
 
@@ -251,10 +251,10 @@ describe("TernTab", () => {
 		});
 		const tab = await openTab(fake);
 		expect(await tab.dialog()).toEqual({ open: true, type: "prompt", message: "Name?", defaultValue: "x" });
-		await tab.handleDialog({ accept: true, text: "omp" });
+		await tab.handleDialog({ accept: true, text: "oms" });
 		expect(fake.requests.find(request => request.op.op === "dialog")!.op).toMatchObject({
 			accept: true,
-			text: "omp",
+			text: "oms",
 		});
 		expect(await tab.dialog()).toEqual({ open: false });
 	});

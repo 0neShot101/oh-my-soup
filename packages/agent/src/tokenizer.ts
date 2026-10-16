@@ -1,16 +1,16 @@
-import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
-import { isColdReplayableResponsesTurn } from "@oh-my-pi/pi-ai/providers/openai-shared";
-import { shouldDropTruncatedThinkingOnlyAssistant } from "@oh-my-pi/pi-ai/providers/transform-messages";
+import type { AssistantMessage, Model } from "@oh-my-soup/pi-ai";
+import { isColdReplayableResponsesTurn } from "@oh-my-soup/pi-ai/providers/openai-shared";
+import { shouldDropTruncatedThinkingOnlyAssistant } from "@oh-my-soup/pi-ai/providers/transform-messages";
 import {
 	getOpenAIResponsesHistoryItems,
 	sanitizeOpenAIResponsesAssistantHistoryItemsForReplay,
-} from "@oh-my-pi/pi-ai/utils";
-import { resolveThinkingReplayTokens, type ThinkingReplayTokens } from "@oh-my-pi/pi-catalog/compat/thinking-replay";
-import type { ModelTokenizer } from "@oh-my-pi/pi-catalog/types";
-import * as natives from "@oh-my-pi/pi-natives";
-import { materializeString, stringifyJson } from "@oh-my-pi/pi-utils";
-import { LRUCache } from "@oh-my-pi/pi-utils/lru";
-import * as snapcompact from "@oh-my-pi/snapcompact";
+} from "@oh-my-soup/pi-ai/utils";
+import { resolveThinkingReplayTokens, type ThinkingReplayTokens } from "@oh-my-soup/pi-catalog/compat/thinking-replay";
+import type { ModelTokenizer } from "@oh-my-soup/pi-catalog/types";
+import * as natives from "@oh-my-soup/pi-natives";
+import { materializeString, stringifyJson } from "@oh-my-soup/pi-utils";
+import { LRUCache } from "@oh-my-soup/pi-utils/lru";
+import * as snapcompact from "@oh-my-soup/snapcompact";
 import { isEstimateCacheable, messageEstimateVersion } from "./compaction/message-cache";
 import { base64ImageSize, estimateImageTokens, type ImageDetail, type ImageSize } from "./image-tokens";
 import type { AgentMessage } from "./types";

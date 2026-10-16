@@ -3,9 +3,9 @@ import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
-import { recordSessionTitle, resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
-import { getHistoryDbPath, removeSyncWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { HistoryStorage } from "@oh-my-soup/pi-coding-agent/session/history-storage";
+import { recordSessionTitle, resetSessionIndexForTests } from "@oh-my-soup/pi-coding-agent/session/session-index";
+import { getHistoryDbPath, removeSyncWithRetries, setAgentDir } from "@oh-my-soup/pi-utils";
 
 /**
  * Quarantining a corrupt history.db unlinks the file and its sidecars, then
@@ -18,7 +18,7 @@ describe.skipIf(process.platform === "win32")("session index across a store quar
 	const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 
 	beforeEach(() => {
-		testAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-index-quarantine-"));
+		testAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "oms-index-quarantine-"));
 		setAgentDir(testAgentDir);
 		resetSessionIndexForTests();
 	});

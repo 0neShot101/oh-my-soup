@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { IpcConnection, ipcEndpoint } from "@oh-my-pi/pi-natives";
+import { IpcConnection, ipcEndpoint } from "@oh-my-soup/pi-natives";
 import { MessageFramer } from "../src/jsonrpc/message-framing";
 import {
 	MUX_CONNECT_METHOD,
@@ -190,7 +190,7 @@ describe("LspMuxServer", () => {
 	const clients: MuxTestClient[] = [];
 
 	beforeEach(async () => {
-		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-lsp-mux-test-"));
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "oms-lsp-mux-test-"));
 		endpoint = ipcEndpoint(tmpDir, "mux");
 		connectParams = { command: process.execPath, args: ["run", fixturePath], cwd: tmpDir };
 		server = new LspMuxServer();

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import type { AssistantMessage, Context, Tool, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai";
-import { streamOllama } from "@oh-my-pi/pi-ai/providers/ollama";
-import { NON_VISION_IMAGE_PLACEHOLDER } from "@oh-my-pi/pi-ai/providers/vision-guard";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import type { AssistantMessage, Context, Tool, ToolResultMessage, Usage } from "@oh-my-soup/pi-ai";
+import { streamOllama } from "@oh-my-soup/pi-ai/providers/ollama";
+import { NON_VISION_IMAGE_PLACEHOLDER } from "@oh-my-soup/pi-ai/providers/vision-guard";
+import { buildModel } from "@oh-my-soup/pi-catalog/build";
+import { getBundledModel } from "@oh-my-soup/pi-catalog/models";
 
 interface OllamaChatMessagePayload {
 	thinking?: unknown;

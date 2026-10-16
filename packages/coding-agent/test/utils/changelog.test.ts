@@ -14,7 +14,7 @@ import { Buffer } from "node:buffer";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { removeWithRetries, VERSION } from "@oh-my-pi/pi-utils";
+import { removeWithRetries, VERSION } from "@oh-my-soup/pi-utils";
 import { lookup } from "../../src/config/registry";
 import { Settings } from "../../src/config/settings";
 import {
@@ -36,8 +36,8 @@ import {
 	writeLastChangelogVersion,
 } from "../../src/utils/changelog";
 
-import { cfgStartupChangelogMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
-import { CURRENT_SETUP_VERSION } from "@oh-my-pi/pi-tui/setup/setup-version";
+import { cfgStartupChangelogMode } from "@oh-my-soup/pi-coding-agent/modes/settings";
+import { CURRENT_SETUP_VERSION } from "@oh-my-soup/pi-tui/setup/setup-version";
 
 const CURRENT_VERSION = "2.0.0";
 const repoRoot = path.resolve(import.meta.dir, "..", "..", "..", "..");
@@ -118,7 +118,7 @@ describe("parseChangelogView", () => {
 });
 
 async function withTempAgentDir<T>(callback: (agentDir: string) => Promise<T>): Promise<T> {
-	const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-changelog-marker-"));
+	const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "oms-changelog-marker-"));
 	try {
 		const result = await callback(agentDir);
 		return result;
@@ -396,7 +396,7 @@ describe.skipIf(!hasPtyHarness)("interactive startup changelog PTY smoke", () =>
 		"does not dump packaged changelog history on first install with uncollapsed notes",
 		async () => {
 			await withTempAgentDir(async agentDir => {
-				const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-changelog-pty-"));
+				const root = await fs.mkdtemp(path.join(os.tmpdir(), "oms-changelog-pty-"));
 				try {
 					await fs.mkdir(path.join(root, "xdg-config"), { recursive: true });
 					await fs.mkdir(path.join(root, "xdg-state"), { recursive: true });

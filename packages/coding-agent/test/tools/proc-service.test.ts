@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { procmgr, setProcessName, TempDir } from "@oh-my-pi/pi-utils";
-import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import { procmgr, setProcessName, TempDir } from "@oh-my-soup/pi-utils";
+import type { AgentToolContext } from "@oh-my-soup/pi-agent-core";
 import { Settings } from "../../src/config/settings";
 import { AsyncJobManager } from "../../src/async/job-manager";
 import { ProcProtocolHandler } from "../../src/internal-urls/proc-protocol";
@@ -23,7 +23,7 @@ import { BashTool } from "../../src/tools/bash";
 import { WriteTool } from "../../src/tools/write";
 import { sharedBrowserDaemonName } from "../../src/tools/browser/shared-daemon";
 import type { ToolSession } from "../../src/tools";
-import type { DaemonSnapshot } from "@oh-my-pi/pi-tui/tools/daemon";
+import type { DaemonSnapshot } from "@oh-my-soup/pi-tui/tools/daemon";
 
 function startBroker(projectDir: string, runtimeDir: string): Promise<void> {
 	const previous = [
@@ -298,7 +298,7 @@ describe("proc:// background jobs", () => {
 	});
 
 	it("requires file content instead of silently truncating a file", async () => {
-		using temp = TempDir.createSync("@omp-proc-write-");
+		using temp = TempDir.createSync("@oms-proc-write-");
 		const file = path.join(temp.path(), "keep.txt");
 		await Bun.write(file, "keep this");
 		const write = new WriteTool(toolSession(temp.path(), undefined, { launch: false }));
@@ -397,7 +397,7 @@ describe("proc:// background jobs", () => {
 
 describe("bash services via proc://", () => {
 	it("starts at log readiness, delivers stdin, switches persistence, and restarts a live name", async () => {
-		using temp = TempDir.createSync("@omp-proc-service-");
+		using temp = TempDir.createSync("@oms-proc-service-");
 		const cwd = path.join(temp.path(), "project");
 		const runtimeDir = path.join(temp.path(), "runtime");
 		await fs.mkdir(cwd);
@@ -536,7 +536,7 @@ describe("bash services via proc://", () => {
 	}, 25_000);
 
 	it("ends the readiness wait on a queued steer only after the broker launched the service", async () => {
-		using temp = TempDir.createSync("@omp-proc-service-steer-");
+		using temp = TempDir.createSync("@oms-proc-service-steer-");
 		const cwd = path.join(temp.path(), "project");
 		const runtimeDir = path.join(temp.path(), "runtime");
 		await fs.mkdir(cwd);

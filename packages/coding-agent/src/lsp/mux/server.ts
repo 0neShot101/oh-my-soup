@@ -1,5 +1,5 @@
-import { type IpcConnection, IpcServer } from "@oh-my-pi/pi-natives";
-import { isRecord, logger, postmortem, ptree, setProcessName } from "@oh-my-pi/pi-utils";
+import { type IpcConnection, IpcServer } from "@oh-my-soup/pi-natives";
+import { isRecord, logger, postmortem, ptree, setProcessName } from "@oh-my-soup/pi-utils";
 import { encodeMessageFrame, MessageFramer } from "../../jsonrpc/message-framing";
 import type { LspJsonRpcId, LspJsonRpcNotification, LspJsonRpcRequest, LspJsonRpcResponse } from "../types";
 import {
@@ -511,7 +511,7 @@ export class LspMuxServer {
 			}
 			return;
 		}
-		// Client-side effects such as applyEdit must reach exactly one, most recently active omp.
+		// Client-side effects such as applyEdit must reach exactly one, most recently active oms.
 		let focus: Session | undefined;
 		for (const session of server.sessions) {
 			if (!focus || session.lastActivity > focus.lastActivity) focus = session;
@@ -689,7 +689,7 @@ export async function startLspMuxFromEnvironment(): Promise<void> {
 	if (!endpoint || !projectDir) throw new Error("LSP mux environment is incomplete");
 	delete process.env[LSP_MUX_SOCKET_ENV];
 	delete process.env[LSP_MUX_PROJECT_DIR_ENV];
-	setProcessName("omp lsp mux");
+	setProcessName("oms lsp mux");
 	const server = new LspMuxServer();
 	const stopped = Promise.withResolvers<void>();
 	server.onIdle = () => {

@@ -1,6 +1,6 @@
-import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { logger } from "@oh-my-pi/pi-utils";
-import type { TspSpan } from "@oh-my-pi/pi-wire";
+import type { ImageContent } from "@oh-my-soup/pi-ai";
+import { logger } from "@oh-my-soup/pi-utils";
+import type { TspSpan } from "@oh-my-soup/pi-wire";
 import { span } from "../native/describe";
 import { isNativeRendering } from "../native/state";
 import { fileHyperlink, fileLinkSpan, isHyperlinkEnabled, isNativeLinkEnabled } from "../render/hyperlink";
@@ -12,7 +12,7 @@ interface ImageBlobResult {
 }
 /** Probed pixel dimensions riding on the draft image object itself; `null` records a failed
  *  probe so the chips band never re-decodes a corrupt header every frame. */
-const kImageDims = Symbol("omp.imageDimensions");
+const kImageDims = Symbol("oms.imageDimensions");
 
 interface ImageContentWithDims extends ImageContent {
 	[kImageDims]?: { width: number; height: number } | null;

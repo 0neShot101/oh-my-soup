@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { Tokenizer } from "@oh-my-pi/pi-agent-core";
+import { Tokenizer } from "@oh-my-soup/pi-agent-core";
 import {
 	type GenerateBranchSummaryOptions,
 	generateBranchSummary,
 	prepareBranchEntries,
 	type SessionEntry,
-} from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessage, Model, Usage } from "@oh-my-pi/pi-ai";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+} from "@oh-my-soup/pi-agent-core/compaction";
+import type { AssistantMessage, Model, Usage } from "@oh-my-soup/pi-ai";
+import { buildModel } from "@oh-my-soup/pi-catalog/build";
+import { getBundledModel } from "@oh-my-soup/pi-catalog/models";
 
 const MODEL: Model = buildModel({
 	id: "mock-model",

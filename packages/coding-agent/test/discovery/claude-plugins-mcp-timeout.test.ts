@@ -2,19 +2,19 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { clearCache as clearFsCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
-import { enableProvider, loadCapability } from "@oh-my-pi/pi-coding-agent/capability";
-import type { MCPServer } from "@oh-my-pi/pi-coding-agent/capability/mcp";
-import { clearClaudePluginRootsCache } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
-import { loadAllMCPConfigs } from "@oh-my-pi/pi-coding-agent/mcp/config";
-import { __resetDirsFromEnvForTests, logger, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
-import "@oh-my-pi/pi-coding-agent/discovery/claude-plugins";
+import { clearCache as clearFsCache } from "@oh-my-soup/pi-coding-agent/capability/fs";
+import { enableProvider, loadCapability } from "@oh-my-soup/pi-coding-agent/capability";
+import type { MCPServer } from "@oh-my-soup/pi-coding-agent/capability/mcp";
+import { clearClaudePluginRootsCache } from "@oh-my-soup/pi-coding-agent/discovery/helpers";
+import { loadAllMCPConfigs } from "@oh-my-soup/pi-coding-agent/mcp/config";
+import { __resetDirsFromEnvForTests, logger, removeWithRetries, setAgentDir } from "@oh-my-soup/pi-utils";
+import "@oh-my-soup/pi-coding-agent/discovery/claude-plugins";
 describe("Claude plugin MCP timeout compatibility", () => {
 	let tempDir: string;
 	let testAgentDir: string;
 	let originalHome: string | undefined;
 	let originalAgentDirEnv: string | undefined;
-	let originalOmpProfileEnv: string | undefined;
+	let originalOmsProfileEnv: string | undefined;
 	let originalPiProfileEnv: string | undefined;
 	let originalClaudeConfigDir: string | undefined;
 
@@ -23,7 +23,7 @@ describe("Claude plugin MCP timeout compatibility", () => {
 		clearFsCache();
 		originalHome = process.env.HOME;
 		originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
-		originalOmpProfileEnv = process.env.OMP_PROFILE;
+		originalOmsProfileEnv = process.env.OMS_PROFILE;
 		originalPiProfileEnv = process.env.PI_PROFILE;
 		originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 		delete process.env.CLAUDE_CONFIG_DIR;
@@ -32,7 +32,7 @@ describe("Claude plugin MCP timeout compatibility", () => {
 		process.env.HOME = tempDir;
 		vi.spyOn(os, "homedir").mockReturnValue(tempDir);
 		// Point the agent dir at a temp dir so user-scope discovery (native MCP
-		// config, skills, etc.) cannot read the real ~/.omp/agent profile.
+		// config, skills, etc.) cannot read the real ~/.oms/agent profile.
 		setAgentDir(testAgentDir);
 		enableProvider("claude-plugins");
 	});
@@ -45,8 +45,8 @@ describe("Claude plugin MCP timeout compatibility", () => {
 		// so restore every env var it can touch before rebuilding the resolver.
 		if (originalHome === undefined) delete process.env.HOME;
 		else process.env.HOME = originalHome;
-		if (originalOmpProfileEnv === undefined) delete process.env.OMP_PROFILE;
-		else process.env.OMP_PROFILE = originalOmpProfileEnv;
+		if (originalOmsProfileEnv === undefined) delete process.env.OMS_PROFILE;
+		else process.env.OMS_PROFILE = originalOmsProfileEnv;
 		if (originalPiProfileEnv === undefined) delete process.env.PI_PROFILE;
 		else process.env.PI_PROFILE = originalPiProfileEnv;
 		if (originalAgentDirEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -60,13 +60,13 @@ describe("Claude plugin MCP timeout compatibility", () => {
 
 	/**
 	 * Install a single user-scope marketplace plugin whose `.mcp.json` declares
-	 * one stdio server carrying `timeout` (milliseconds in OMP/Claude Code).
+	 * one stdio server carrying `timeout` (milliseconds in OMS/Claude Code).
 	 * Returns the temp paths involved.
 	 */
 	async function installPluginWithTimeout(timeout: unknown): Promise<void> {
 		const pluginPath = path.join(tempDir, "plugins", "sap-fiori-mcp-server");
-		const registryPath = path.join(tempDir, ".omp", "plugins", "installed_plugins.json");
-		await fs.mkdir(path.join(tempDir, ".omp", "plugins"), { recursive: true });
+		const registryPath = path.join(tempDir, ".oms", "plugins", "installed_plugins.json");
+		await fs.mkdir(path.join(tempDir, ".oms", "plugins"), { recursive: true });
 		await fs.mkdir(pluginPath, { recursive: true });
 		await fs.writeFile(
 			path.join(pluginPath, ".mcp.json"),
@@ -102,7 +102,7 @@ describe("Claude plugin MCP timeout compatibility", () => {
 	test("drops a sub-1000ms .mcp.json timeout instead of passing 600ms verbatim (#12485)", async () => {
 		// Regression (#12485): SAP's official marketplace plugins ship
 		// `"timeout": 600`, which Claude Code itself ignores (values below 1000
-		// are invalid there and fall through to defaults). OMP read the value
+		// are invalid there and fall through to defaults). OMS read the value
 		// verbatim as milliseconds, giving npx-spawned servers a 600ms connect
 		// budget — they can never come up, so the plugin's tools never load.
 		await installPluginWithTimeout(600);
@@ -112,7 +112,7 @@ describe("Claude plugin MCP timeout compatibility", () => {
 
 		expect(server).toBeDefined();
 		// The invalid value must not survive: resolveMCPTimeoutMs(undefined)
-		// then applies OMP's 30s default instead of 600ms.
+		// then applies OMS's 30s default instead of 600ms.
 		expect(server?.timeout).toBeUndefined();
 		expect(warnings.some(w => w.includes("timeout"))).toBe(true);
 	});

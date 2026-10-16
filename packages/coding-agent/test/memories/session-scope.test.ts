@@ -1,16 +1,16 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import type { Model } from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getMemoryRoot } from "@oh-my-pi/pi-coding-agent/memories";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import type { Model } from "@oh-my-soup/pi-ai";
+import { getBundledModel } from "@oh-my-soup/pi-catalog/models";
+import { ModelRegistry } from "@oh-my-soup/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { getMemoryRoot } from "@oh-my-soup/pi-coding-agent/memories";
+import { AgentRegistry } from "@oh-my-soup/pi-coding-agent/registry/agent-registry";
+import { createAgentSession } from "@oh-my-soup/pi-coding-agent/sdk";
+import type { AgentSession } from "@oh-my-soup/pi-coding-agent/session/agent-session";
+import type { AuthStorage } from "@oh-my-soup/pi-coding-agent/session/auth-storage";
+import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
+import { TempDir } from "@oh-my-soup/pi-utils";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
 // Embedded hosts share one Settings (pinned to a host directory) across sessions

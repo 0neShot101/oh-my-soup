@@ -9,19 +9,19 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:te
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, Context, Message, Model } from "@oh-my-pi/pi-ai";
-import { createMockModel, type MockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { type GeneratedProvider, getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
-import type { CompactionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils";
-import * as snapcompact from "@oh-my-pi/snapcompact";
+import { Agent } from "@oh-my-soup/pi-agent-core";
+import type { AssistantMessage, Context, Message, Model } from "@oh-my-soup/pi-ai";
+import { createMockModel, type MockModel } from "@oh-my-soup/pi-ai/providers/mock";
+import { type GeneratedProvider, getBundledModel } from "@oh-my-soup/pi-catalog/models";
+import { ModelRegistry } from "@oh-my-soup/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { AgentSession } from "@oh-my-soup/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-soup/pi-coding-agent/session/auth-storage";
+import { convertToLlm } from "@oh-my-soup/pi-coding-agent/session/messages";
+import type { CompactionEntry } from "@oh-my-soup/pi-coding-agent/session/session-entries";
+import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
+import { getAgentDir, setAgentDir } from "@oh-my-soup/pi-utils";
+import * as snapcompact from "@oh-my-soup/snapcompact";
 
 const REASONING = "PRIVATE-REASONING";
 const PLAIN_LEGEND = "`¶user:`, `¶ai:`, `¶call:`: user, assistant reply, tool call.";
@@ -95,7 +95,7 @@ describe("snapcompact archive read by a Claude model", () => {
 	const sessions: AgentSession[] = [];
 
 	beforeAll(async () => {
-		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-snapcompact-reader-"));
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "oms-snapcompact-reader-"));
 		setAgentDir(path.join(tempDir, "agent"));
 		authStorage = await AuthStorage.create(":memory:");
 		authStorage.keys.setRuntime("anthropic", "test-key");

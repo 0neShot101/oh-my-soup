@@ -9,24 +9,24 @@
  * another memory store, a context reset, or a branch that edits the first prompt.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
-import type { HindsightConfig } from "@oh-my-pi/pi-coding-agent/hindsight/config";
-import { HindsightSessionState } from "@oh-my-pi/pi-coding-agent/hindsight/state";
-import { MEMORY_RECALL_CHANGES_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/memory-backend/recall-entry";
-import type { MemoryPromptPreparation } from "@oh-my-pi/pi-coding-agent/memory-backend/types";
-import { mnemopiBackend } from "@oh-my-pi/pi-coding-agent/mnemopi/backend";
-import { loadMnemopiConfig } from "@oh-my-pi/pi-coding-agent/mnemopi/config";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import type { HindsightApi } from "@oh-my-soup/pi-coding-agent/hindsight/client";
+import type { HindsightConfig } from "@oh-my-soup/pi-coding-agent/hindsight/config";
+import { HindsightSessionState } from "@oh-my-soup/pi-coding-agent/hindsight/state";
+import { MEMORY_RECALL_CHANGES_MESSAGE_TYPE } from "@oh-my-soup/pi-coding-agent/memory-backend/recall-entry";
+import type { MemoryPromptPreparation } from "@oh-my-soup/pi-coding-agent/memory-backend/types";
+import { mnemopiBackend } from "@oh-my-soup/pi-coding-agent/mnemopi/backend";
+import { loadMnemopiConfig } from "@oh-my-soup/pi-coding-agent/mnemopi/config";
 import {
 	getMnemopiSessionState,
 	loadMnemopi,
 	loadMnemopiCore,
 	MnemopiSessionState,
 	setMnemopiSessionState,
-} from "@oh-my-pi/pi-coding-agent/mnemopi/state";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { clipRecallContent } from "@oh-my-pi/pi-mnemopi";
-import { TempDir } from "@oh-my-pi/pi-utils";
+} from "@oh-my-soup/pi-coding-agent/mnemopi/state";
+import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
+import { clipRecallContent } from "@oh-my-soup/pi-mnemopi";
+import { TempDir } from "@oh-my-soup/pi-utils";
 
 // Mnemopi is lazy-loaded at runtime; preload it for synchronous state construction.
 await Promise.all([loadMnemopi(), loadMnemopiCore()]);
@@ -46,7 +46,7 @@ function tempDir(): TempDir {
 	return dir;
 }
 
-/** One omp process: a session over `sessionManager` with its own Mnemopi state on the store in `storeDir`. */
+/** One oms process: a session over `sessionManager` with its own Mnemopi state on the store in `storeDir`. */
 function startProcess(
 	storeDir: TempDir,
 	sessionManager: SessionManager,
@@ -449,7 +449,7 @@ describe("Hindsight recall across a resume", () => {
 		retainMode: "full-session",
 		retainEveryNTurns: 3,
 		retainOverlapTurns: 2,
-		retainContext: "omp",
+		retainContext: "oms",
 		recallBudget: "mid",
 		recallMaxTokens: 1024,
 		recallTypes: [],

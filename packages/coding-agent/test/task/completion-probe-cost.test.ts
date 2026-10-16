@@ -1,15 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "bun:test";
-import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, Model, Usage } from "@oh-my-pi/pi-ai";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import { registerPersistedSubagents } from "@oh-my-pi/pi-coding-agent/registry/persisted-agents";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { startCompletionProbe } from "@oh-my-pi/pi-coding-agent/task/completion-probe";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { Agent } from "@oh-my-soup/pi-agent-core";
+import type { AssistantMessage, Model, Usage } from "@oh-my-soup/pi-ai";
+import { ModelRegistry } from "@oh-my-soup/pi-coding-agent/config/model-registry";
+import { AgentRegistry } from "@oh-my-soup/pi-coding-agent/registry/agent-registry";
+import { registerPersistedSubagents } from "@oh-my-soup/pi-coding-agent/registry/persisted-agents";
+import { AgentSession } from "@oh-my-soup/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-soup/pi-coding-agent/session/auth-storage";
+import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { startCompletionProbe } from "@oh-my-soup/pi-coding-agent/task/completion-probe";
+import { TempDir } from "@oh-my-soup/pi-utils";
 import * as path from "node:path";
 import { mkdir } from "node:fs/promises";
 
@@ -56,7 +56,7 @@ describe("completion probe cost persistence", () => {
 		const target = modelRegistry.getAll().find(candidate => candidate.contextWindow && candidate.contextWindow > 0);
 		if (!target) throw new Error("Expected a bundled model with a context window");
 
-		using tempDir = TempDir.createSync("@omp-completion-probe-cost-");
+		using tempDir = TempDir.createSync("@oms-completion-probe-cost-");
 		const rootSessionFile = path.join(tempDir.path(), "main.jsonl");
 		const agentDir = path.join(tempDir.path(), "main");
 		await Bun.write(rootSessionFile, "");
@@ -194,7 +194,7 @@ describe("completion probe cost persistence", () => {
 		const target = modelRegistry.getAll().find(candidate => candidate.contextWindow && candidate.contextWindow > 0);
 		if (!target) throw new Error("Expected a bundled model with a context window");
 
-		using tempDir = TempDir.createSync("@omp-late-usage-reopen-");
+		using tempDir = TempDir.createSync("@oms-late-usage-reopen-");
 		const original = SessionManager.create(tempDir.path(), tempDir.path());
 		let originalClosed = false;
 		let reopened: SessionManager | undefined;
@@ -277,7 +277,7 @@ describe("completion probe cost persistence", () => {
 		const target = modelRegistry.getAll().find(candidate => candidate.contextWindow && candidate.contextWindow > 0);
 		if (!target) throw new Error("Expected a bundled model with a context window");
 
-		using tempDir = TempDir.createSync("@omp-cleared-usage-leaf-");
+		using tempDir = TempDir.createSync("@oms-cleared-usage-leaf-");
 		const original = SessionManager.create(tempDir.path(), tempDir.path());
 		let reopened: SessionManager | undefined;
 		try {

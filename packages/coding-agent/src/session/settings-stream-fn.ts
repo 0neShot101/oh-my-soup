@@ -10,10 +10,10 @@
  * OpenRouter never saw `providers.openrouterVariant`, breaking sticky routing
  * and OpenRouter response-cache hits across advisor calls.
  */
-import { fitOutputTokensToContextWindow, type StreamFn, Tokenizer } from "@oh-my-pi/pi-agent-core";
-import { type Model, type SimpleStreamOptions, streamSimple } from "@oh-my-pi/pi-ai";
-import { openAIResponsesReplaysNativeHistory } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import { serverSideFallbackModels } from "@oh-my-pi/pi-catalog/compat/server-side-fallback";
+import { fitOutputTokensToContextWindow, type StreamFn, Tokenizer } from "@oh-my-soup/pi-agent-core";
+import { type Model, type SimpleStreamOptions, streamSimple } from "@oh-my-soup/pi-ai";
+import { openAIResponsesReplaysNativeHistory } from "@oh-my-soup/pi-ai/providers/openai-responses";
+import { serverSideFallbackModels } from "@oh-my-soup/pi-catalog/compat/server-side-fallback";
 import type { Settings } from "../config/settings";
 import { type AnthropicSlowModeLanes, anthropicSlowModeLanes } from "./anthropic-slow-mode";
 

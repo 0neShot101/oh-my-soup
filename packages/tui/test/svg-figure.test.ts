@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { SvgFigure } from "@oh-my-pi/pi-tui/chat/svg-figure";
-import { getKittyGraphics, setKittyGraphics } from "@oh-my-pi/pi-tui/kitty-graphics";
+import { SvgFigure } from "@oh-my-soup/pi-tui/chat/svg-figure";
+import { getKittyGraphics, setKittyGraphics } from "@oh-my-soup/pi-tui/kitty-graphics";
 import {
 	type CellDimensions,
 	getCellDimensions,
@@ -9,9 +9,9 @@ import {
 	setCellDimensions,
 	setTerminalImageProtocol,
 	TERMINAL,
-} from "@oh-my-pi/pi-tui/terminal-capabilities";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import { TUI } from "@oh-my-pi/pi-tui/tui";
+} from "@oh-my-soup/pi-tui/terminal-capabilities";
+import { initTheme } from "@oh-my-soup/pi-tui/theme";
+import { TUI } from "@oh-my-soup/pi-tui/tui";
 import { withoutTerminalMultiplexer } from "./helpers/terminal-multiplexer";
 import { VirtualRenderScheduler } from "./virtual-render-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
@@ -150,7 +150,7 @@ describe("SvgFigure", () => {
 	// raster, so the figure was marked failed and showed its source instead.
 	it("draws in a process that never installed a theme", async () => {
 		const script = `
-			import { SvgFigure } from "@oh-my-pi/pi-tui/chat/svg-figure";
+			import { SvgFigure } from "@oh-my-soup/pi-tui/chat/svg-figure";
 			const landed = Promise.withResolvers();
 			const svg = new SvgFigure({ onChange: () => landed.resolve() });
 			svg.update(${JSON.stringify(SVG)}, true);

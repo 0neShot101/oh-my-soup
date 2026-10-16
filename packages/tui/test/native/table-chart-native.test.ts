@@ -1,9 +1,9 @@
 import { afterEach, beforeAll, describe, expect, it } from "bun:test";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
-import { setTableCharts } from "@oh-my-pi/pi-tui/chat/table-chart";
-import { setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
-import { initTheme, setTheme } from "@oh-my-pi/pi-tui/theme";
+import type { AssistantMessage } from "@oh-my-soup/pi-ai";
+import { AssistantMessageComponent } from "@oh-my-soup/pi-tui/chat/assistant-message";
+import { setTableCharts } from "@oh-my-soup/pi-tui/chat/table-chart";
+import { setNativeRendering } from "@oh-my-soup/pi-tui/native/state";
+import { initTheme, setTheme } from "@oh-my-soup/pi-tui/theme";
 import { TspHarness } from "./tsp-harness";
 
 const ANSWER = `Where the time goes:
@@ -52,7 +52,7 @@ describe("table charts on a TSP terminal", () => {
 		await setTheme("dark");
 	});
 
-	it("sends the chart between the prose runs as an svg fence the terminal colors, whatever omp's theme", async () => {
+	it("sends the chart between the prose runs as an svg fence the terminal colors, whatever oms's theme", async () => {
 		setTableCharts("always");
 		const component = new AssistantMessageComponent(answer(ANSWER));
 		harness = await TspHarness.start();
@@ -68,7 +68,7 @@ describe("table charts on a TSP terminal", () => {
 		expect(texts()).toHaveLength(3);
 		expect(before).toEndWith("| everything else | 9 ms |");
 		expect(after).toBe("The API call dominates.");
-		// Tern resolves the figure tokens in the palette it shows, so omp's theme must not leak into the fence.
+		// Tern resolves the figure tokens in the palette it shows, so oms's theme must not leak into the fence.
 		expect(chart).toMatch(/^```svg\n<svg [^>]*aria-label="[^"]*bar chart of[^"]*"[^]*<\/svg>\n```$/);
 		expect(chart).toContain('fill="var(--c1)"');
 		expect(chart).not.toMatch(/(?:fill|stroke|stop-color)="#/);

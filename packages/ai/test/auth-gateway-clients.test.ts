@@ -2,19 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { clearCustomApis } from "@oh-my-pi/pi-ai/api-registry";
+import { clearCustomApis } from "@oh-my-soup/pi-ai/api-registry";
 import {
 	type AuthGatewayClient,
 	type AuthGatewayServerHandle,
 	hashAuthGatewayToken,
 	parseAuthGatewayClients,
 	startAuthGateway,
-} from "@oh-my-pi/pi-ai/auth-gateway";
-import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
-import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
-import { createMockModel, type MockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
-import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
-import type { Api, Model } from "@oh-my-pi/pi-ai/types";
+} from "@oh-my-soup/pi-ai/auth-gateway";
+import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-soup/pi-ai/auth-storage";
+import { ProviderHttpError } from "@oh-my-soup/pi-ai/error";
+import { createMockModel, type MockModel, registerMockApi } from "@oh-my-soup/pi-ai/providers/mock";
+import * as oauthUtils from "@oh-my-soup/pi-ai/registry/oauth";
+import type { Api, Model } from "@oh-my-soup/pi-ai/types";
 
 const GATEWAY_TOKEN = "gateway-token";
 const CI_TOKEN = "ci-token";

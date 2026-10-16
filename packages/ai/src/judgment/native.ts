@@ -19,10 +19,10 @@
  * (`rules/auth/typesafe.kdl`), `TYPESAFE_BASE_URL` overrides the API root,
  * `TYPESAFE_DEFAULT_MODEL` the model.
  */
-import { resolveJudgmentQuestionsMax } from "@oh-my-pi/pi-catalog/compat/judgment-questions";
-import { TYPESAFE_DEFAULT_BASE_URL } from "@oh-my-pi/pi-catalog/discovery";
-import type { Api, FetchImpl } from "@oh-my-pi/pi-catalog/types";
-import { $env, isRecord, parseImageMetadata } from "@oh-my-pi/pi-utils";
+import { resolveJudgmentQuestionsMax } from "@oh-my-soup/pi-catalog/compat/judgment-questions";
+import { TYPESAFE_DEFAULT_BASE_URL } from "@oh-my-soup/pi-catalog/discovery";
+import type { Api, FetchImpl } from "@oh-my-soup/pi-catalog/types";
+import { $env, isRecord, parseImageMetadata } from "@oh-my-soup/pi-utils";
 import { type ApiKey, withAuth } from "../auth-retry";
 import * as AIError from "../error";
 import type { ImageContent, Model, Usage } from "../types";

@@ -4,23 +4,23 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
 import { stripVTControlCharacters } from "node:util";
-import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { LocalProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/local-protocol";
-import { getDocsDiskRoot } from "@oh-my-pi/pi-coding-agent/internal-urls/docs-index";
-import { resolveMarkdownLinkHrefs } from "@oh-my-pi/pi-coding-agent/internal-urls/hyperlink-targets";
-import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import { getMarkdownTheme, initTheme } from "@oh-my-pi/pi-tui/theme";
-import * as terminalCaps from "@oh-my-pi/pi-tui";
-import { isHyperlinkEnabled } from "@oh-my-pi/pi-tui/render/hyperlink";
-import { isFeedModelBadgeEnabled, resolveImageOptions } from "@oh-my-pi/pi-tui/render/render-utils";
+import { resetSettingsForTest, Settings, settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { LocalProtocolHandler } from "@oh-my-soup/pi-coding-agent/internal-urls/local-protocol";
+import { getDocsDiskRoot } from "@oh-my-soup/pi-coding-agent/internal-urls/docs-index";
+import { resolveMarkdownLinkHrefs } from "@oh-my-soup/pi-coding-agent/internal-urls/hyperlink-targets";
+import { InternalUrlRouter } from "@oh-my-soup/pi-coding-agent/internal-urls/router";
+import { AgentRegistry } from "@oh-my-soup/pi-coding-agent/registry/agent-registry";
+import { getMarkdownTheme, initTheme } from "@oh-my-soup/pi-tui/theme";
+import * as terminalCaps from "@oh-my-soup/pi-tui";
+import { isHyperlinkEnabled } from "@oh-my-soup/pi-tui/render/hyperlink";
+import { isFeedModelBadgeEnabled, resolveImageOptions } from "@oh-my-soup/pi-tui/render/render-utils";
 
-import { cfgTaskShowResolvedModelBadge } from "@oh-my-pi/pi-coding-agent/task/settings";
+import { cfgTaskShowResolvedModelBadge } from "@oh-my-soup/pi-coding-agent/task/settings";
 import {
 	cfgTuiHyperlinks,
 	cfgTuiMaxInlineImageColumns,
 	cfgTuiMaxInlineImageRows,
-} from "@oh-my-pi/pi-coding-agent/modes/settings";
+} from "@oh-my-soup/pi-coding-agent/modes/settings";
 
 function extractAnyTerminatorLinkUri(text: string): string | undefined {
 	return text.match(/\x1b\]8;[^;]*;([^\x1b\x07]+)(?:\x1b\\|\x07)/)?.[1];
@@ -133,7 +133,7 @@ describe("resource links in chat markdown", () => {
 	let originalHyperlinks: boolean;
 
 	beforeEach(async () => {
-		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-markdown-links-"));
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "oms-markdown-links-"));
 		originalHyperlinks = terminalCaps.TERMINAL.hyperlinks;
 		terminalCaps.setTerminalHyperlinks(true);
 		await initTheme();
@@ -201,15 +201,15 @@ describe("resource links in chat markdown", () => {
 		expect(visible).not.toContain("file://");
 	});
 
-	it("links omp:// docs to the file the active corpus was read from", async () => {
-		// `omp://` docs are embedded in the shipped build, so a link only exists
+	it("links oms:// docs to the file the active corpus was read from", async () => {
+		// `oms://` docs are embedded in the shipped build, so a link only exists
 		// where the corpus is read from the repo `docs/` tree. Clicking that link
 		// must still show the URL the agent wrote, not the internal path.
 		const docPath = "tools/read.md";
-		const href = `omp://${docPath}`;
+		const href = `oms://${docPath}`;
 		const root = getDocsDiskRoot();
 		const onDisk = root === null ? undefined : path.join(root, docPath);
-		const text = `[read docs](${href}) and [missing docs](omp://no-such-doc.md)`;
+		const text = `[read docs](${href}) and [missing docs](oms://no-such-doc.md)`;
 		const targets = await resolveMarkdownLinkHrefs(terminalCaps.getMarkdownLinkUrls(text));
 		const output = new terminalCaps.Markdown(text, 0, 0, {
 			...getMarkdownTheme(),
@@ -220,7 +220,7 @@ describe("resource links in chat markdown", () => {
 		expect([...targets]).toEqual(onDisk === undefined ? [] : [[href, url.pathToFileURL(onDisk).href]]);
 		if (onDisk !== undefined) expect(output).toContain(`\x1b]8;;${url.pathToFileURL(onDisk).href}\x07`);
 		// The unknown doc keeps its plain URL instead of gaining a file link.
-		expect(output).toContain(`\x1b]8;;omp://no-such-doc.md\x07`);
+		expect(output).toContain(`\x1b]8;;oms://no-such-doc.md\x07`);
 		const visible = stripVTControlCharacters(output);
 		expect(visible).toContain(`read docs (${href})`);
 		if (onDisk !== undefined) expect(visible).not.toContain(onDisk);
@@ -298,8 +298,8 @@ describe("applyHyperlinkSetting on project-scoped reload", () => {
 	// value while path links already track the new one (#10196 review).
 	it("reapplies the effective policy so the runtime flag tracks the reloaded setting", async () => {
 		const origHyperlinks = terminalCaps.TERMINAL.hyperlinks;
-		const dirA = path.join(os.tmpdir(), "omp-hyperlink-reload-a");
-		const dirB = path.join(os.tmpdir(), "omp-hyperlink-reload-b");
+		const dirA = path.join(os.tmpdir(), "oms-hyperlink-reload-a");
+		const dirB = path.join(os.tmpdir(), "oms-hyperlink-reload-b");
 		try {
 			terminalCaps.setTerminalHyperlinks(false);
 			cfgTuiHyperlinks.override(settings, "always");

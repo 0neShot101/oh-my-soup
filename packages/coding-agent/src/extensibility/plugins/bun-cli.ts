@@ -12,9 +12,9 @@ export interface BunCliResult {
  *
  * Re-enters the running executable with `BUN_BE_BUN=1` instead of resolving
  * `bun` from `$PATH`: source and bundle installs already run under Bun, and the
- * standalone `omp` binary embeds Bun, so plugin installs never require a
+ * standalone `oms` binary embeds Bun, so plugin installs never require a
  * separately installed Bun (#15480). Same mechanism as
- * `eval/js/package-installer.ts` and `@oh-my-pi/pi-utils` runtime installs.
+ * `eval/js/package-installer.ts` and `@oh-my-soup/pi-utils` runtime installs.
  */
 export async function runBunCli(args: readonly string[], cwd: string): Promise<BunCliResult> {
 	const proc = Bun.spawn([resolveExecutablePath(), ...args], {

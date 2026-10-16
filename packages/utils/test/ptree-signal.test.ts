@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { AbortError, exec, spawn } from "@oh-my-pi/pi-utils/ptree";
+import { AbortError, exec, spawn } from "@oh-my-soup/pi-utils/ptree";
 
 describe("ptree signal abort handling", () => {
 	it("does not trigger unhandledRejection when spawned with a pre-aborted signal", async () => {

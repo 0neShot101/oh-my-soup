@@ -2,14 +2,14 @@ import { afterEach, beforeEach, describe, expect, test, spyOn, vi } from "bun:te
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { EffectiveExtensionRoots } from "@oh-my-pi/pi-coding-agent/capability/types";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { loadSkills } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
-import { writeInstalledPluginsRegistry } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
-import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
-import * as piUtils from "@oh-my-pi/pi-utils";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import type { EffectiveExtensionRoots } from "@oh-my-soup/pi-coding-agent/capability/types";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { loadSkills } from "@oh-my-soup/pi-coding-agent/extensibility/skills";
+import { writeInstalledPluginsRegistry } from "@oh-my-soup/pi-coding-agent/extensibility/plugins/marketplace";
+import type { InteractiveModeContext } from "@oh-my-soup/pi-coding-agent/modes/types";
+import { executeBuiltinSlashCommand } from "@oh-my-soup/pi-coding-agent/slash-commands/builtin-registry";
+import * as piUtils from "@oh-my-soup/pi-utils";
+import { removeWithRetries } from "@oh-my-soup/pi-utils";
 
 const ROOTS: EffectiveExtensionRoots = { explicit: [], mode: "merge", configured: [], configuredLevel: "user" };
 
@@ -33,10 +33,10 @@ describe("/plugins live enable and disable", () => {
 	let lockPath: string;
 
 	beforeEach(async () => {
-		root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-plugins-slash-"));
+		root = await fs.mkdtemp(path.join(os.tmpdir(), "oms-plugins-slash-"));
 		pluginsDir = path.join(root, "plugins");
 		registryPath = path.join(pluginsDir, "installed_plugins.json");
-		lockPath = path.join(pluginsDir, "omp-plugins.lock.json");
+		lockPath = path.join(pluginsDir, "oms-plugins.lock.json");
 		spyOn(piUtils, "getPluginsDir").mockReturnValue(pluginsDir);
 		spyOn(piUtils, "getPluginsLockfile").mockReturnValue(lockPath);
 		spyOn(piUtils, "getMarketplacesRegistryPath").mockReturnValue(path.join(root, "marketplaces.json"));
@@ -101,7 +101,7 @@ describe("/plugins live enable and disable", () => {
 		);
 		await Bun.write(
 			path.join(pluginsDir, "node_modules", name, "package.json"),
-			JSON.stringify({ name, version: "1.0.0", omp: {} }),
+			JSON.stringify({ name, version: "1.0.0", oms: {} }),
 		);
 		await Bun.write(
 			path.join(pluginsDir, "node_modules", name, "skills", "npm-skill", "SKILL.md"),

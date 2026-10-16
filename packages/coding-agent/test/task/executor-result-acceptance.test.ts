@@ -6,30 +6,30 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import { resetRegisteredArtifactDirsForTests } from "@oh-my-pi/pi-coding-agent/internal-urls/registry-helpers";
-import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
-import type { LoadExtensionsResult } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
-import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import type { CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
-import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { AssistantMessage } from "@oh-my-soup/pi-ai";
+import { AsyncJobManager } from "@oh-my-soup/pi-coding-agent/async/job-manager";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { InternalUrlRouter } from "@oh-my-soup/pi-coding-agent/internal-urls";
+import { resetRegisteredArtifactDirsForTests } from "@oh-my-soup/pi-coding-agent/internal-urls/registry-helpers";
+import { IrcBus } from "@oh-my-soup/pi-coding-agent/irc/bus";
+import type { LoadExtensionsResult } from "@oh-my-soup/pi-coding-agent/extensibility/extensions/types";
+import { AgentLifecycleManager } from "@oh-my-soup/pi-coding-agent/registry/agent-lifecycle";
+import { AgentRegistry } from "@oh-my-soup/pi-coding-agent/registry/agent-registry";
+import type { CreateAgentSessionResult } from "@oh-my-soup/pi-coding-agent/sdk";
+import * as sdkModule from "@oh-my-soup/pi-coding-agent/sdk";
+import type { AgentMessage } from "@oh-my-soup/pi-agent-core";
+import type { AgentSession, AgentSessionEvent } from "@oh-my-soup/pi-coding-agent/session/agent-session";
 import {
 	attachIrcWakeTurnMonitor,
 	runSubagentFollowUpTurn,
 	runSubprocess,
-} from "@oh-my-pi/pi-coding-agent/task/executor";
-import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { WaitTool } from "@oh-my-pi/pi-coding-agent/tools/wait";
-import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
-import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
-import { TempDir } from "@oh-my-pi/pi-utils";
+} from "@oh-my-soup/pi-coding-agent/task/executor";
+import type { AgentDefinition } from "@oh-my-soup/pi-coding-agent/task/types";
+import type { ToolSession } from "@oh-my-soup/pi-coding-agent/tools";
+import { WaitTool } from "@oh-my-soup/pi-coding-agent/tools/wait";
+import { ReadTool } from "@oh-my-soup/pi-coding-agent/tools/read";
+import { EventBus } from "@oh-my-soup/pi-coding-agent/utils/event-bus";
+import { TempDir } from "@oh-my-soup/pi-utils";
 
 const AGENT_ID = "accepted-result";
 
@@ -364,7 +364,7 @@ describe("runSubprocess result acceptance", () => {
 	});
 
 	it("reads the latest message-result completion after an IRC wake instead of the first result", async () => {
-		const tempDir = TempDir.createSync("@omp-latest-agent-result-");
+		const tempDir = TempDir.createSync("@oms-latest-agent-result-");
 		const artifactsDir = tempDir.path();
 		const harness = createHarness();
 		harness.session.sessionManager.getArtifactsDir = () => artifactsDir;
@@ -430,7 +430,7 @@ describe("runSubprocess result acceptance", () => {
 	});
 
 	it("preserves the accepted message result and sidecar when a peer wakes the agent", async () => {
-		const tempDir = TempDir.createSync("@omp-peer-agent-result-");
+		const tempDir = TempDir.createSync("@oms-peer-agent-result-");
 		const artifactsDir = tempDir.path();
 		const harness = createHarness();
 		harness.session.sessionManager.getArtifactsDir = () => artifactsDir;
@@ -471,7 +471,7 @@ describe("runSubprocess result acceptance", () => {
 	});
 
 	it("keeps the accepted artifact and sidecar when the parent cancels its wake job before finalization", async () => {
-		const tempDir = TempDir.createSync("@omp-cancelled-wake-result-");
+		const tempDir = TempDir.createSync("@oms-cancelled-wake-result-");
 		const artifactsDir = tempDir.path();
 		const manager = new AsyncJobManager({});
 		const harness = createHarness({ asyncJobManager: manager });
@@ -515,7 +515,7 @@ describe("runSubprocess result acceptance", () => {
 	});
 
 	it("keeps the accepted artifact and sidecar when an unstructured follow-up starts aborted", async () => {
-		const tempDir = TempDir.createSync("@omp-aborted-agent-result-");
+		const tempDir = TempDir.createSync("@oms-aborted-agent-result-");
 		const artifactsDir = tempDir.path();
 		const harness = createHarness();
 		registerRunning(harness.session);

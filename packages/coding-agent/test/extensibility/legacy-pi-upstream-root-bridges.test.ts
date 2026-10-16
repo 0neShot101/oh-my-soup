@@ -1,12 +1,12 @@
 import { describe, expect, it } from "bun:test";
-import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
-import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
-import * as caShim from "@oh-my-pi/pi-coding-agent/extensibility/legacy-pi-coding-agent-shim";
-import * as tuiShim from "@oh-my-pi/pi-coding-agent/extensibility/legacy-pi-tui-shim";
+import { ImageProtocol, TERMINAL } from "@oh-my-soup/pi-tui";
+import { visibleWidth } from "@oh-my-soup/pi-tui/utils";
+import * as caShim from "@oh-my-soup/pi-coding-agent/extensibility/legacy-pi-coding-agent-shim";
+import * as tuiShim from "@oh-my-soup/pi-coding-agent/extensibility/legacy-pi-tui-shim";
 
 // Upstream pi-coding-agent exports `parseSkillBlock` from its package root
 // (src/core/agent-session.ts) and upstream pi-tui exports `compositeTuiLine`
-// from its package root. omp folds skill invocation into its own hook
+// from its package root. oms folds skill invocation into its own hook
 // pipeline (no parser exported) and its canonical composite helper
 // (`compositeLineAt`) diverges from upstream (SGR-only reset, image-line
 // overlay replacement), so both names are ported into the compat layer;
@@ -57,7 +57,7 @@ describe("legacy shim upstream-root bridges", () => {
 
 	it("passes image-line bases through untouched, upstream semantics", () => {
 		// Upstream compositeTuiLine returns ANY image-line base unchanged;
-		// omp's canonical compositeLineAt deliberately differs (it replaces
+		// oms's canonical compositeLineAt deliberately differs (it replaces
 		// full-width overlays over image lines). The compat export must match
 		// upstream for both partial and full-width overlays.
 		const mutable = TERMINAL as unknown as { imageProtocol: ImageProtocol | null };

@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { TodoTool } from "@oh-my-pi/pi-coding-agent/tools";
+import type { AssistantMessage } from "@oh-my-soup/pi-ai";
+import type { AgentSession } from "@oh-my-soup/pi-coding-agent/session/agent-session";
+import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-soup/pi-coding-agent/session/auth-storage";
+import { TodoTool } from "@oh-my-soup/pi-coding-agent/tools";
 
 /**
  * Shared factory for building a minimal mock `AssistantMessage`

@@ -1,5 +1,5 @@
-import type { DesktopWindow } from "@oh-my-pi/pi-natives";
-import { truncate } from "@oh-my-pi/pi-utils/format";
+import type { DesktopWindow } from "@oh-my-soup/pi-natives";
+import { truncate } from "@oh-my-soup/pi-utils/format";
 
 const MAX_APPS = 12;
 const WINDOWS_PER_APP = 3;

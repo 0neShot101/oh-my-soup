@@ -2,20 +2,20 @@ import { beforeAll, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import * as natives from "@oh-my-pi/pi-natives";
-import { DiffSide, DiffStream } from "@oh-my-pi/pi-natives";
-import { sanitizeText } from "@oh-my-pi/pi-utils";
+import * as natives from "@oh-my-soup/pi-natives";
+import { DiffSide, DiffStream } from "@oh-my-soup/pi-natives";
+import { sanitizeText } from "@oh-my-soup/pi-utils";
 import { $ } from "bun";
 import {
 	buildDiffDocument,
 	buildLineSelectionPatch,
 	type DiffBuildOptions,
 	DiffPane,
-} from "@oh-my-pi/pi-tui/apps/git/diff-pane";
-import type { ChangedFile } from "@oh-my-pi/pi-tui/apps/git/state";
+} from "@oh-my-soup/pi-tui/apps/git/diff-pane";
+import type { ChangedFile } from "@oh-my-soup/pi-tui/apps/git/state";
 import { GitModel } from "../src/cli/git-tui/state";
-import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { ImageProtocol, TERMINAL } from "@oh-my-soup/pi-tui/terminal-capabilities";
+import { initTheme } from "@oh-my-soup/pi-tui/theme";
 
 const RED_PNG = Buffer.from(
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
@@ -31,7 +31,7 @@ beforeAll(async () => {
 });
 
 async function withReviewRepo(run: (repo: string) => Promise<void>): Promise<void> {
-	const repo = await fs.mkdtemp(path.join(os.tmpdir(), "omp-git-tui-stream-"));
+	const repo = await fs.mkdtemp(path.join(os.tmpdir(), "oms-git-tui-stream-"));
 	try {
 		await $`git init --initial-branch=main`.cwd(repo).quiet();
 		await $`git config user.name "Test User"`.cwd(repo).quiet();

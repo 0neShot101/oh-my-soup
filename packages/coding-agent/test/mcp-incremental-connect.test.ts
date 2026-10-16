@@ -11,13 +11,13 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
-import type { MCPStdioServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
+import { MCPManager } from "@oh-my-soup/pi-coding-agent/mcp/manager";
+import type { MCPStdioServerConfig } from "@oh-my-soup/pi-coding-agent/mcp/types";
 import {
 	applyMcpToggleRuntime,
 	type MCPToggleSession,
-} from "@oh-my-pi/pi-coding-agent/modes/components/extensions/mcp-runtime";
-import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
+} from "@oh-my-soup/pi-coding-agent/modes/components/extensions/mcp-runtime";
+import { removeSyncWithRetries } from "@oh-my-soup/pi-utils";
 import { MANY_TOOL_COUNT, manyToolName } from "./fixtures/many-tools-mcp";
 
 const FIXTURE_PATH = path.join(import.meta.dir, "fixtures", "many-tools-mcp.ts");
@@ -70,11 +70,11 @@ describe("MCP incremental connectServers", () => {
 	let originalRequestTimeout: string | undefined;
 
 	beforeEach(() => {
-		originalStartupTimeout = Bun.env.OMP_MCP_STARTUP_TIMEOUT_MS;
-		delete Bun.env.OMP_MCP_STARTUP_TIMEOUT_MS;
-		originalRequestTimeout = Bun.env.OMP_MCP_TIMEOUT_MS;
-		delete Bun.env.OMP_MCP_TIMEOUT_MS;
-		workDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-mcp-incremental-"));
+		originalStartupTimeout = Bun.env.OMS_MCP_STARTUP_TIMEOUT_MS;
+		delete Bun.env.OMS_MCP_STARTUP_TIMEOUT_MS;
+		originalRequestTimeout = Bun.env.OMS_MCP_TIMEOUT_MS;
+		delete Bun.env.OMS_MCP_TIMEOUT_MS;
+		workDir = fs.mkdtempSync(path.join(os.tmpdir(), "oms-mcp-incremental-"));
 		manager = new MCPManager(workDir);
 	});
 
@@ -83,10 +83,10 @@ describe("MCP incremental connectServers", () => {
 			await manager.disconnectAll();
 			removeSyncWithRetries(workDir);
 		} finally {
-			if (originalStartupTimeout === undefined) delete Bun.env.OMP_MCP_STARTUP_TIMEOUT_MS;
-			else Bun.env.OMP_MCP_STARTUP_TIMEOUT_MS = originalStartupTimeout;
-			if (originalRequestTimeout === undefined) delete Bun.env.OMP_MCP_TIMEOUT_MS;
-			else Bun.env.OMP_MCP_TIMEOUT_MS = originalRequestTimeout;
+			if (originalStartupTimeout === undefined) delete Bun.env.OMS_MCP_STARTUP_TIMEOUT_MS;
+			else Bun.env.OMS_MCP_STARTUP_TIMEOUT_MS = originalStartupTimeout;
+			if (originalRequestTimeout === undefined) delete Bun.env.OMS_MCP_TIMEOUT_MS;
+			else Bun.env.OMS_MCP_TIMEOUT_MS = originalRequestTimeout;
 		}
 	});
 

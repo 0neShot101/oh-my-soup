@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { disposeAllVmContexts } from "@oh-my-pi/pi-coding-agent/eval/js/context-manager";
-import { createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
-import { acquireBrowser, holdBrowser, releaseBrowser } from "@oh-my-pi/pi-coding-agent/tools/browser/registry";
-import { releaseAllTabs } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { disposeAllVmContexts } from "@oh-my-soup/pi-coding-agent/eval/js/context-manager";
+import { createBrowserPrelude } from "@oh-my-soup/pi-coding-agent/tools/browser";
+import { acquireBrowser, holdBrowser, releaseBrowser } from "@oh-my-soup/pi-coding-agent/tools/browser/registry";
+import { releaseAllTabs } from "@oh-my-soup/pi-coding-agent/tools/browser/tab-supervisor";
 import {
 	installWebMcp,
 	installWebMcpPageHook,
@@ -12,8 +12,8 @@ import {
 	type WebMcpInvokeResult,
 	type WebMcpListResult,
 	webMcpSnapshotInPage,
-} from "@oh-my-pi/pi-coding-agent/tools/browser/webmcp";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
+} from "@oh-my-soup/pi-coding-agent/tools/browser/webmcp";
+import type { ToolSession } from "@oh-my-soup/pi-coding-agent/tools/index";
 import { chromiumAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
@@ -196,7 +196,7 @@ context.registerTool({
 		await invoke({ action: "close", name: "webmcp-iframe", kill: true });
 	}, 30_000);
 
-	// The hook reaches a loaded page when omp attaches to it: a context the page set up itself is
+	// The hook reaches a loaded page when oms attaches to it: a context the page set up itself is
 	// patched directly, not through Chromium's ModelContext prototype.
 	it.each([
 		{
@@ -342,7 +342,7 @@ ModelContext.prototype.registerTool = window.pageRegister;`,
 			page.on("error", () => {
 				crashed = true;
 			});
-			// The replacement document is the frame's second; reading its context binds a second time if omp
+			// The replacement document is the frame's second; reading its context binds a second time if oms
 			// created one in the first.
 			const html = `<script>reportSurface((document.modelContext ?? navigator.modelContext).constructor.name);</script>`;
 			await realm.evaluate(`location.href = "javascript:" + ${JSON.stringify(JSON.stringify(html))}; null;`);
@@ -389,7 +389,7 @@ Object.defineProperty(document, "modelContext", { configurable: true, value: pag
 			await realm.evaluate(
 				`pageContext.registerTool({ name: "native_tool", description: "Page tool.", inputSchema: { type: "object" }, execute: () => ({ value: 42 }) })`,
 			);
-			// The page-side mirror, which is all omp has when the browser lacks WebMCP over CDP.
+			// The page-side mirror, which is all oms has when the browser lacks WebMCP over CDP.
 			const snapshot = await realm.evaluate(webMcpSnapshotInPage, WEBMCP_BRIDGE_KEY);
 			expect(snapshot.tools.map(tool => tool.name)).toEqual(["native_tool"]);
 			await controller.dispose();

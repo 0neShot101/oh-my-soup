@@ -1,23 +1,23 @@
 import { describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { convertOpenAICodexResponsesTools } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
-import { isJsonSchemaValueValid } from "@oh-my-pi/pi-ai/utils/schema";
-import { validateToolCall } from "@oh-my-pi/pi-ai/utils/validation";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { convertOpenAICodexResponsesTools } from "@oh-my-soup/pi-ai/providers/openai-codex-responses";
+import { isJsonSchemaValueValid } from "@oh-my-soup/pi-ai/utils/schema";
+import { validateToolCall } from "@oh-my-soup/pi-ai/utils/validation";
+import { buildModel } from "@oh-my-soup/pi-catalog/build";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
 import {
 	CONTEXT_NOTES_ENTRY_TYPE,
 	getContextNotes,
 	MAX_CONTEXT_NOTES_BYTES,
-} from "@oh-my-pi/pi-coding-agent/session/context-notes";
-import type { ContextNotesEntry } from "@oh-my-pi/pi-coding-agent/session/context-notes";
-import type { CustomEntry, ResetBoundaryEntry, SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { ContextNotesTool, NewContextTool } from "@oh-my-pi/pi-coding-agent/tools/context-notes";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
-import { TempDir } from "@oh-my-pi/pi-utils";
+} from "@oh-my-soup/pi-coding-agent/session/context-notes";
+import type { ContextNotesEntry } from "@oh-my-soup/pi-coding-agent/session/context-notes";
+import type { CustomEntry, ResetBoundaryEntry, SessionEntry } from "@oh-my-soup/pi-coding-agent/session/session-entries";
+import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
+import { ContextNotesTool, NewContextTool } from "@oh-my-soup/pi-coding-agent/tools/context-notes";
+import type { ToolSession } from "@oh-my-soup/pi-coding-agent/tools/index";
+import { TempDir } from "@oh-my-soup/pi-utils";
 
-import { cfgCompactionExperimentalContextManagement } from "@oh-my-pi/pi-coding-agent/session/context-settings";
+import { cfgCompactionExperimentalContextManagement } from "@oh-my-soup/pi-coding-agent/session/context-settings";
 
 const NOW = "2026-09-04T00:00:00.000Z";
 
@@ -69,7 +69,7 @@ function codexModel() {
 
 describe("experimental context notes", () => {
 	it("accepts an omitted text on the model wire and reads saved notes without modifying the journal", async () => {
-		using tempDir = TempDir.createSync("@omp-context-notes-read-");
+		using tempDir = TempDir.createSync("@oms-context-notes-read-");
 		const sessionDir = path.join(tempDir.path(), "sessions");
 		const manager = SessionManager.create(tempDir.path(), sessionDir);
 		const settings = Settings.isolated({ "compaction.experimentalContextManagement": true });
@@ -160,7 +160,7 @@ describe("experimental context notes", () => {
 	});
 
 	it("persists a replacement for resume and refuses disabled or parent-bound tool sessions", async () => {
-		using tempDir = TempDir.createSync("@omp-context-notes-");
+		using tempDir = TempDir.createSync("@oms-context-notes-");
 		const sessionDir = path.join(tempDir.path(), "sessions");
 		const sessionManager = SessionManager.create(tempDir.path(), sessionDir);
 		const settings = Settings.isolated({ "compaction.experimentalContextManagement": true });

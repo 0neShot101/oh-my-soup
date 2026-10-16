@@ -12,18 +12,18 @@
  */
 import { describe, expect, it } from "bun:test";
 import { gunzipSync } from "node:zlib";
-import { streamDevin } from "@oh-my-pi/pi-ai/providers/devin";
-import { convertMessages } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import { stream } from "@oh-my-pi/pi-ai/stream";
-import type { Api, AssistantMessage, Message, Model, ModelSpec } from "@oh-my-pi/pi-ai/types";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { streamDevin } from "@oh-my-soup/pi-ai/providers/devin";
+import { convertMessages } from "@oh-my-soup/pi-ai/providers/openai-completions";
+import { streamOpenAIResponses } from "@oh-my-soup/pi-ai/providers/openai-responses";
+import { stream } from "@oh-my-soup/pi-ai/stream";
+import type { Api, AssistantMessage, Message, Model, ModelSpec } from "@oh-my-soup/pi-ai/types";
+import { buildModel } from "@oh-my-soup/pi-catalog/build";
 import {
 	GetChatMessageRequestSchema,
 	GetChatMessageResponseSchema,
 	GetUserJwtResponseSchema,
-} from "@oh-my-pi/pi-catalog/discovery/devin-proto";
-import { create, fromBinary, toBinary } from "@oh-my-pi/pi-catalog/discovery/protobuf";
+} from "@oh-my-soup/pi-catalog/discovery/devin-proto";
+import { create, fromBinary, toBinary } from "@oh-my-soup/pi-catalog/discovery/protobuf";
 
 const TRACE = "Earlier reasoning: read foo.ts, then patch bar().";
 const THINK = `<think>\n${TRACE}\n</think>`;
@@ -90,7 +90,7 @@ function completionsAssistant(model: Model<"openai-completions">, messages: Mess
 }
 
 /**
- * The assistant-side input items of the Responses request omp sends on a fresh
+ * The assistant-side input items of the Responses request oms sends on a fresh
  * provider session (the state right after a host switch), captured before any
  * network call.
  */
@@ -127,7 +127,7 @@ async function responsesAssistantItems(
 	);
 }
 
-/** Captures the Cascade request omp's Devin provider sends, without a model call. */
+/** Captures the Cascade request oms's Devin provider sends, without a model call. */
 async function devinRequest(model: Model<"devin-agent">, messages: Message[]) {
 	const authPayload = toBinary(GetUserJwtResponseSchema, create(GetUserJwtResponseSchema, { userJwt: "jwt" }));
 	let requestPayload: Uint8Array | undefined;
@@ -348,7 +348,7 @@ describe("same-model reasoning carry", () => {
 
 	it("keeps demoting a family that is not declared portable, even with a matching identity", async () => {
 		// gpt-5.6-sol and gpt-5.6-terra share class/family/revision; GPT reasoning
-		// reaches omp as summaries plus encrypted content, so it is not declared.
+		// reaches oms as summaries plus encrypted content, so it is not declared.
 		const terra: Source = { provider: "openai-codex", api: "openai-codex-responses", model: "gpt-5.6-terra" };
 
 		const items = await responsesAssistantItems(

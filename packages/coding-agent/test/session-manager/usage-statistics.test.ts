@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { buildSessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
-import { resolveSessionLeafId } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { buildSessionContext } from "@oh-my-soup/pi-coding-agent/session/session-context";
+import { resolveSessionLeafId } from "@oh-my-soup/pi-coding-agent/session/session-entries";
+import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
+import { TempDir } from "@oh-my-soup/pi-utils";
 
 describe("SessionManager usage statistics", () => {
 	const modelUsage = {
@@ -148,7 +148,7 @@ describe("SessionManager usage statistics", () => {
 	});
 
 	it("replays a dangling late-usage leaf to the newest real entry", async () => {
-		using tempDir = TempDir.createSync("@omp-dangling-usage-leaf-");
+		using tempDir = TempDir.createSync("@oms-dangling-usage-leaf-");
 		const session = SessionManager.create(tempDir.path(), tempDir.path());
 		const ownerParent = session.appendMessage({ role: "user", content: "owner", timestamp: 1 });
 		const successor = session.appendMessage({ role: "user", content: "successor", timestamp: 2 });

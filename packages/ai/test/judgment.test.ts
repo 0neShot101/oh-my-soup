@@ -1,5 +1,5 @@
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { calculateUsageCost } from "@oh-my-pi/pi-catalog/models";
+import { buildModel } from "@oh-my-soup/pi-catalog/build";
+import { calculateUsageCost } from "@oh-my-soup/pi-catalog/models";
 import { describe, expect, it, spyOn } from "bun:test";
 import {
 	type ApiKeyResolveContext,
@@ -15,9 +15,9 @@ import {
 	renderJudgmentState,
 	type TextBackend,
 	TextJudge,
-} from "@oh-my-pi/pi-ai";
-import type { ImageContent } from "@oh-my-pi/pi-ai/types";
-import { ConfigurationError, ValidationError } from "@oh-my-pi/pi-ai/error";
+} from "@oh-my-soup/pi-ai";
+import type { ImageContent } from "@oh-my-soup/pi-ai/types";
+import { ConfigurationError, ValidationError } from "@oh-my-soup/pi-ai/error";
 import { withEnv } from "./helpers";
 
 const LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;

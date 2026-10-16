@@ -1,5 +1,5 @@
 import { afterEach, beforeEach } from "bun:test";
-import { TERMINAL_MULTIPLEXER_ENV_KEYS } from "@oh-my-pi/pi-tui/terminal-multiplexer";
+import { TERMINAL_MULTIPLEXER_ENV_KEYS } from "@oh-my-soup/pi-tui/terminal-multiplexer";
 
 /**
  * Neutralize every terminal-multiplexer signal for the calling test file.

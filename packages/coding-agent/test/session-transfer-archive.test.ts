@@ -3,20 +3,20 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { BlobStore, isBlobRef } from "@oh-my-pi/pi-coding-agent/session/blob-store";
-import type { FileEntry, SessionHeader } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
-import { findSessionFiles } from "@oh-my-pi/pi-coding-agent/session/session-listing";
-import { loadEntriesFromFile, resolveBlobRefsInEntries } from "@oh-my-pi/pi-coding-agent/session/session-loader";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { ImageContent } from "@oh-my-soup/pi-ai";
+import { BlobStore, isBlobRef } from "@oh-my-soup/pi-coding-agent/session/blob-store";
+import type { FileEntry, SessionHeader } from "@oh-my-soup/pi-coding-agent/session/session-entries";
+import { resetSessionIndexForTests } from "@oh-my-soup/pi-coding-agent/session/session-index";
+import { findSessionFiles } from "@oh-my-soup/pi-coding-agent/session/session-listing";
+import { loadEntriesFromFile, resolveBlobRefsInEntries } from "@oh-my-soup/pi-coding-agent/session/session-loader";
+import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
 import {
 	packSession,
 	SESSION_TRANSFER_MESSAGE_TYPE,
 	unpackSession,
-} from "@oh-my-pi/pi-coding-agent/session/session-transfer";
-import { getBlobsDir, getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
-import { readArchiveEntries, writeArchive } from "@oh-my-pi/pi-utils/ar";
+} from "@oh-my-soup/pi-coding-agent/session/session-transfer";
+import { getBlobsDir, getConfigRootDir, setAgentDir } from "@oh-my-soup/pi-utils";
+import { readArchiveEntries, writeArchive } from "@oh-my-soup/pi-utils/ar";
 import { makeAssistantMessage } from "./session-manager/helpers";
 
 const IMAGE_DATA = Buffer.alloc(4096, 7).toString("base64");
@@ -40,7 +40,7 @@ function userImage(entries: FileEntry[]): ImageContent | undefined {
 	return undefined;
 }
 
-describe("omp session pack/unpack archive", () => {
+describe("oms session pack/unpack archive", () => {
 	let root: string;
 	let agentA: string;
 	let agentB: string;
@@ -49,7 +49,7 @@ describe("omp session pack/unpack archive", () => {
 	const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 
 	beforeEach(async () => {
-		root = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-session-transfer-"));
+		root = await fsp.mkdtemp(path.join(os.tmpdir(), "oms-session-transfer-"));
 		agentA = path.join(root, "agent-a");
 		agentB = path.join(root, "agent-b");
 		cwdA = path.join(root, "laptop", "project");

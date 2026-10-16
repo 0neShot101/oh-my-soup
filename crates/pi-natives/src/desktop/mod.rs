@@ -1188,7 +1188,7 @@ impl SessionCore {
 		let caps = Arc::clone(&self.capabilities);
 		let display_awake = Arc::clone(&self.display_awake);
 		let join = thread::Builder::new()
-			.name("omp-desktop-session".into())
+			.name("oms-desktop-session".into())
 			.spawn(move || {
 				Worker::new(selector, caps, display_awake).serve(&rx, DISPLAY_AWAKE_GRACE);
 				let _ = done_tx.send(());

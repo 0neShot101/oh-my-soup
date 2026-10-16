@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import type { Model, ServiceTierByFamily } from "@oh-my-pi/pi-ai";
-import { resolveAgentServiceTierOverride } from "@oh-my-pi/pi-coding-agent/config/service-tier";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createAgentSession, type ExtensionFactory } from "@oh-my-pi/pi-coding-agent/sdk";
-import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir, withTimeout } from "@oh-my-pi/pi-utils";
+import type { Model, ServiceTierByFamily } from "@oh-my-soup/pi-ai";
+import { resolveAgentServiceTierOverride } from "@oh-my-soup/pi-coding-agent/config/service-tier";
+import { ModelRegistry } from "@oh-my-soup/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { createAgentSession, type ExtensionFactory } from "@oh-my-soup/pi-coding-agent/sdk";
+import type { AuthStorage } from "@oh-my-soup/pi-coding-agent/session/auth-storage";
+import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
+import { TempDir, withTimeout } from "@oh-my-soup/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 const runtimeProviderExtension: ExtensionFactory = pi => {
@@ -196,7 +196,7 @@ describe.serial("createAgentSession resolveServiceTierByFamily", () => {
 	}
 
 	it("routes prewarm and the first SDK turn from the final model and exact-agent tier override", async () => {
-		using tempDir = TempDir.createSync("@omp-service-tier-prewarm-first-turn-");
+		using tempDir = TempDir.createSync("@oms-service-tier-prewarm-first-turn-");
 		const authStorage = openAuthStorage();
 		installCapturingWebSocket();
 		const { session } = await createAgentSession({
@@ -232,7 +232,7 @@ describe.serial("createAgentSession resolveServiceTierByFamily", () => {
 	});
 
 	it("keeps omitted and explicit default tiers distinct during Codex prewarm and the first turn", async () => {
-		using tempDir = TempDir.createSync("@omp-service-tier-prewarm-default-");
+		using tempDir = TempDir.createSync("@oms-service-tier-prewarm-default-");
 		const createDeferredSession = async (
 			resolveServiceTierByFamily?: (model: Model | undefined) => ServiceTierByFamily,
 		) =>
@@ -285,7 +285,7 @@ describe.serial("createAgentSession resolveServiceTierByFamily", () => {
 	});
 
 	it("evaluates the resolver against the model resolved from a deferred pattern and replaces the configured tiers", async () => {
-		using tempDir = TempDir.createSync("@omp-service-tier-resolver-");
+		using tempDir = TempDir.createSync("@oms-service-tier-resolver-");
 		const authStorage = openAuthStorage();
 		const resolvedModels: Array<Model | undefined> = [];
 		const { session } = await createAgentSession({
@@ -316,7 +316,7 @@ describe.serial("createAgentSession resolveServiceTierByFamily", () => {
 	});
 
 	it("persists an empty resolved tier map so a reopened session does not re-derive tiers from settings", async () => {
-		using tempDir = TempDir.createSync("@omp-service-tier-resolver-reopen-");
+		using tempDir = TempDir.createSync("@oms-service-tier-resolver-reopen-");
 		const authStorage = openAuthStorage();
 		const sessionFile = path.join(tempDir.path(), "session.jsonl");
 		// The settings a cold revival rebuilds from say `priority`; the spawn's

@@ -1,10 +1,10 @@
 /**
- * `omp anonymize` — write a shareable copy of a session (and its subagent
+ * `oms anonymize` — write a shareable copy of a session (and its subagent
  * transcripts) with turn contents redacted and metadata preserved.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getProjectDir, isEnoent, pathIsWithin } from "@oh-my-pi/pi-utils";
+import { getProjectDir, isEnoent, pathIsWithin } from "@oh-my-soup/pi-utils";
 import { ANONYMIZED_REVIEW_NOTE, anonymizeSessionTranscripts } from "../session/session-anonymizer";
 import type { SessionEntry, SessionHeader } from "../session/session-entries";
 import { loadSessionFile } from "../session/session-loader";

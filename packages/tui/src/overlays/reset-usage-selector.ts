@@ -1,6 +1,6 @@
-import type { UsageResetCreditDetail } from "@oh-my-pi/pi-ai";
+import type { UsageResetCreditDetail } from "@oh-my-soup/pi-ai";
 import { Container, matchesKey, ScrollView, Spacer, Text, TruncatedText } from "../index";
-import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
+import { formatDuration, sanitizeText } from "@oh-my-soup/pi-utils";
 import { theme } from "../theme/theme";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
 import { OverlayPanel } from "../chrome/overlay-box";
@@ -13,7 +13,7 @@ import { node, span, text } from "../native/describe";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { actionHint, hintsRow, overlayCard } from "../native/overlay";
 import { CLOSE_ACTION, dockedPicker, PICKER_KEY, pickerAction, pickerEvent } from "../native/picker";
-import type { TspPickerItem, TspPickerProps, TspSpan } from "@oh-my-pi/pi-wire";
+import type { TspPickerItem, TspPickerProps, TspSpan } from "@oh-my-soup/pi-wire";
 
 const RESET_SELECTOR_MAX_VISIBLE = 10;
 
@@ -111,7 +111,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 	#pickerItems: readonly TspPickerItem[] | undefined;
 
 	constructor(accounts: ResetUsageAccount[], onSelect: (account: ResetUsageAccount) => void, onCancel: () => void) {
-		super("Spend a saved rate-limit reset", "omp.overlay.reset-usage");
+		super("Spend a saved rate-limit reset", "oms.overlay.reset-usage");
 		this.#onSelectCallback = onSelect;
 		this.#onCancelCallback = onCancel;
 		const firstRedeemable = accounts.find(account => account.redeemableCount > 0);

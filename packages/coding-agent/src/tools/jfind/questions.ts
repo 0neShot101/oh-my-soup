@@ -7,7 +7,7 @@
  * match the reference implementation (which serializes through sorted maps);
  * judgment quality was benchmarked against that exact layout.
  */
-import { type JsonValue, judgeQuestions, type NoulQuestion, renderQuestion } from "@oh-my-pi/pi-ai";
+import { type JsonValue, judgeQuestions, type NoulQuestion, renderQuestion } from "@oh-my-soup/pi-ai";
 import questionFile from "../../prompts/judge/find.json" with { type: "json" };
 import { type Passage, plainContent } from "./passages";
 import { type FileEntry, renderTree } from "./tree";

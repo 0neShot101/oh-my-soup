@@ -2,27 +2,27 @@ import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { CfgProtocolHandler, setCfgApprovalHost } from "@oh-my-pi/pi-coding-agent/internal-urls/cfg-protocol";
-import { parseInternalUrl } from "@oh-my-pi/pi-coding-agent/internal-urls/parse";
-import { ExtensionUiController } from "@oh-my-pi/pi-coding-agent/modes/controllers/extension-ui-controller";
-import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import { closeModelCache } from "@oh-my-soup/pi-catalog/model-cache";
+import { resetSettingsForTest, Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { CfgProtocolHandler, setCfgApprovalHost } from "@oh-my-soup/pi-coding-agent/internal-urls/cfg-protocol";
+import { parseInternalUrl } from "@oh-my-soup/pi-coding-agent/internal-urls/parse";
+import { ExtensionUiController } from "@oh-my-soup/pi-coding-agent/modes/controllers/extension-ui-controller";
+import { InteractiveMode } from "@oh-my-soup/pi-coding-agent/modes/interactive-mode";
 import {
 	cfgMarketplaceAutoUpdate,
 	cfgStartupChangelogMode,
 	cfgStartupCheckUpdate,
 	cfgStartupSetupWizard,
 	cfgStartupShowSplash,
-} from "@oh-my-pi/pi-coding-agent/modes/settings";
-import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
-import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
-import { resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import { getProjectDir, setProjectDir, Snowflake } from "@oh-my-pi/pi-utils";
-import * as utils from "@oh-my-pi/pi-utils";
+} from "@oh-my-soup/pi-coding-agent/modes/settings";
+import { AgentStorage } from "@oh-my-soup/pi-coding-agent/session/agent-storage";
+import { HistoryStorage } from "@oh-my-soup/pi-coding-agent/session/history-storage";
+import { resetSessionIndexForTests } from "@oh-my-soup/pi-coding-agent/session/session-index";
+import type { ToolSession } from "@oh-my-soup/pi-coding-agent/tools";
+import { Composer } from "@oh-my-soup/pi-tui/prompt/composer";
+import { initTheme } from "@oh-my-soup/pi-tui/theme";
+import { getProjectDir, setProjectDir, Snowflake } from "@oh-my-soup/pi-utils";
+import * as utils from "@oh-my-soup/pi-utils";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 import { createTestSession, type TestSessionContext } from "./utilities";
 
@@ -35,7 +35,7 @@ describe("cfg:// approval prompt wiring", () => {
 	let hangSelector = false;
 
 	beforeEach(async () => {
-		tmp = path.join(os.tmpdir(), `omp-cfg-timeout-${Snowflake.next()}`);
+		tmp = path.join(os.tmpdir(), `oms-cfg-timeout-${Snowflake.next()}`);
 		await fs.mkdir(tmp, { recursive: true });
 		originalProject = getProjectDir();
 		setProjectDir(tmp);

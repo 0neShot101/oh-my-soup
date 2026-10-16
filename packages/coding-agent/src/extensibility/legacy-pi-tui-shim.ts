@@ -6,18 +6,18 @@
  * exposes the equivalent, broader `decodePrintableKey` helper. Keep the legacy
  * name available without reintroducing it into the canonical package surface.
  */
-import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
-import { extractSegments, sliceByColumn, sliceWithWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { ImageProtocol, TERMINAL } from "@oh-my-soup/pi-tui";
+import { extractSegments, sliceByColumn, sliceWithWidth, visibleWidth } from "@oh-my-soup/pi-tui/utils";
 
-export * from "@oh-my-pi/pi-tui";
-export { decodePrintableKey as decodeKittyPrintable } from "@oh-my-pi/pi-tui";
+export * from "@oh-my-soup/pi-tui";
+export { decodePrintableKey as decodeKittyPrintable } from "@oh-my-soup/pi-tui";
 
 /**
  * Legacy pi-tui `compositeTuiLine`, ported verbatim from upstream pi-tui
- * (identical in 1.0.2 and 1.1.0). NOT an alias of omp's `compositeLineAt`:
+ * (identical in 1.0.2 and 1.1.0). NOT an alias of oms's `compositeLineAt`:
  * upstream's segment reset closes OSC 8 hyperlinks (`\x1b]8;;\x07`) so the
  * overlay and suffix cannot inherit an open link, and image-line bases pass
- * through untouched; omp's canonical version resets only SGR and replaces
+ * through untouched; oms's canonical version resets only SGR and replaces
  * full-width overlays over image lines. Extensions built against upstream
  * (e.g. `pi-optchat` overlaying status text on hyperlink-bearing lines)
  * depend on the upstream reset semantics.

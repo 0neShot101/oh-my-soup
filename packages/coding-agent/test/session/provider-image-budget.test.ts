@@ -1,14 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import type { Context, ImageContent, ModelSpec, TextContent } from "@oh-my-pi/pi-ai";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
-import { decorateContextImages } from "@oh-my-pi/pi-coding-agent/blob-broker/context-images";
+import type { Context, ImageContent, ModelSpec, TextContent } from "@oh-my-soup/pi-ai";
+import { buildModel } from "@oh-my-soup/pi-catalog/build";
+import { getBundledModel } from "@oh-my-soup/pi-catalog/models";
+import { toModelSpec } from "@oh-my-soup/pi-catalog/provider-models/bundled-references";
+import { decorateContextImages } from "@oh-my-soup/pi-coding-agent/blob-broker/context-images";
 import {
 	capArchiveFrameBytes,
 	clampProviderContextImageBytes,
 	clampProviderContextImages,
-} from "@oh-my-pi/pi-coding-agent/session/provider-image-budget";
+} from "@oh-my-soup/pi-coding-agent/session/provider-image-budget";
 
 const UMANS_MODEL = buildModel({
 	id: "umans-glm-5.2",
@@ -157,7 +157,7 @@ describe("provider context image budgets", () => {
 		["Claude on Cursor", CURSOR_CLAUDE_MODEL, 64_000_000],
 		["GPT on Cursor", CURSOR_GPT_MODEL, 64_000_000],
 	] as const)(
-		"keeps %s under its measured body limit at omp's 500 KiB image resize target",
+		"keeps %s under its measured body limit at oms's 500 KiB image resize target",
 		(_label, model, bodyLimit) => {
 			// No byte budget applies on these hosts, so the count alone bounds the
 			// inline bytes of resized screenshots (`images.autoResize`, on by default).

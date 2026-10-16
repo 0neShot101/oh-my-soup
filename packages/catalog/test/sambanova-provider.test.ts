@@ -2,12 +2,12 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
-import { getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
-import { sambanovaModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
-import type { FetchImpl, Model } from "@oh-my-pi/pi-catalog/types";
+import { buildModel } from "@oh-my-soup/pi-catalog/build";
+import { Effort } from "@oh-my-soup/pi-catalog/effort";
+import { resolveProviderModels } from "@oh-my-soup/pi-catalog/model-manager";
+import { getModelPricingStatus } from "@oh-my-soup/pi-catalog/models";
+import { sambanovaModelManagerOptions } from "@oh-my-soup/pi-catalog/provider-models/openai-compat";
+import type { FetchImpl, Model } from "@oh-my-soup/pi-catalog/types";
 
 const BASE_URL = "https://api.sambanova.ai/v1";
 

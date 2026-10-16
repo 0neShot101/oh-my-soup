@@ -1,4 +1,4 @@
-import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
+import { THINKING_EFFORTS } from "@oh-my-soup/pi-catalog/effort";
 import { AUTO_THINKING, type ConfiguredThinkingLevel, getConfiguredThinkingLevelMetadata } from "../thinking";
 import { type SelectItem, SelectList, type SgrMouseEvent } from "../index";
 import { getSelectListTheme } from "../theme/theme";
@@ -20,7 +20,7 @@ export class ThinkingSelectorComponent extends OverlayPanel {
 		onSelect: (level: ConfiguredThinkingLevel) => void,
 		onCancel: () => void,
 	) {
-		super("Thinking Level", "omp.overlay.thinking");
+		super("Thinking Level", "oms.overlay.thinking");
 
 		const thinkingLevels: SelectItem[] = availableLevels.map(getConfiguredThinkingLevelMetadata);
 

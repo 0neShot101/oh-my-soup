@@ -7,15 +7,15 @@
  * Contract: a cached PR is only rendered for the branch it was resolved on.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
-import { github } from "@oh-my-pi/pi-coding-agent/utils/github";
-import type { VcsGitRepo, VcsGitRepoInfo, VcsHeadState, VcsRepo } from "@oh-my-pi/pi-natives";
-import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import type { StatusLineSettings } from "@oh-my-pi/pi-tui/status-line";
-import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
+import { resetSettingsForTest, Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { statusLineHost } from "@oh-my-soup/pi-coding-agent/modes/status-line-host";
+import { github } from "@oh-my-soup/pi-coding-agent/utils/github";
+import type { VcsGitRepo, VcsGitRepoInfo, VcsHeadState, VcsRepo } from "@oh-my-soup/pi-natives";
+import * as vcs from "@oh-my-soup/pi-natives/vcs";
+import type { StatusLineSettings } from "@oh-my-soup/pi-tui/status-line";
+import { StatusLineComponent } from "@oh-my-soup/pi-tui/status-line";
+import { initTheme } from "@oh-my-soup/pi-tui/theme";
+import { getProjectDir, setProjectDir } from "@oh-my-soup/pi-utils";
 
 const originalProjectDir = getProjectDir();
 const root = "/repo/pr-branch-switch";

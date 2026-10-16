@@ -1,5 +1,5 @@
 import * as readline from "node:readline";
-import { IpcConnection, IpcServer } from "@oh-my-pi/pi-natives";
+import { IpcConnection, IpcServer } from "@oh-my-soup/pi-natives";
 import {
 	STREAM_CHAT_TEXT_MAX,
 	STREAM_CLOSE_HOST_CONFLICT,
@@ -9,7 +9,7 @@ import {
 	type StreamChatMessage,
 	type StreamPaneFrame,
 	type StreamServerToHost,
-} from "@oh-my-pi/pi-wire";
+} from "@oh-my-soup/pi-wire";
 import {
 	applyScreenFrame,
 	isSessionFrame,
@@ -142,7 +142,7 @@ export class StreamMuxHost {
 			);
 		} catch (error) {
 			if (error instanceof Error && "code" in error && error.code === "EADDRINUSE") {
-				throw new Error(`another omp stream process is already running for this directory (${endpoint})`);
+				throw new Error(`another oms stream process is already running for this directory (${endpoint})`);
 			}
 			throw error;
 		}

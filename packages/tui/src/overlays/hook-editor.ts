@@ -7,7 +7,7 @@
  *   (Ctrl+Q / Ctrl+Enter) submits, bordered popup
  * - Prompt-style (ask): Enter submits, Shift+Enter inserts newline, legacy ask chrome
  */
-import type { ImageContent } from "@oh-my-pi/pi-ai";
+import type { ImageContent } from "@oh-my-soup/pi-ai";
 import { compactImageMarkers, formatVisionMarker, PLACEHOLDER_REGEX } from "../prompt/composer-attachments";
 import { extractImagePastePathsFromText } from "../prompt/custom-editor";
 import {
@@ -38,12 +38,12 @@ import { plainText } from "../native/spans";
 import { sanitizeCarriageReturns } from "../render/render-utils";
 
 /** Root role of the native sheet. */
-const ROLE = "omp.overlay.hook-editor";
+const ROLE = "oms.overlay.hook-editor";
 /**
  * Role prefix of its parts (`.head`, `.title`, `.detail`, `.eyebrow`, `.field`/`.line`); outside
- * `omp.overlay.*`, which Tern draws as a sheet of its own.
+ * `oms.overlay.*`, which Tern draws as a sheet of its own.
  */
-const PART = "omp.hook-editor";
+const PART = "oms.hook-editor";
 
 /** Most title rows the terminal prompt shows, so a long question cannot push the input row off-screen. */
 const MAX_PROMPT_TITLE_ROWS = 3;
@@ -204,7 +204,7 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 			head.push(
 				node(
 					"md",
-					{ text: replaceTabs(sanitizeCarriageReturns(question)), role: "omp.ask.question" },
+					{ text: replaceTabs(sanitizeCarriageReturns(question)), role: "oms.ask.question" },
 					undefined,
 					"question",
 				),

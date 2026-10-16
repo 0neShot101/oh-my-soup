@@ -1,5 +1,5 @@
 /**
- * `omp --restore`: a session goes on with what its last process left unfinished when
+ * `oms --restore`: a session goes on with what its last process left unfinished when
  * it ended ({@link restoreSession}): the turn it was in
  * ({@link AgentSession.restoreInterruptedTurn}) and the subagents it was running.
  *
@@ -13,7 +13,7 @@
  * job had, so a parent waiting on that job finds it again.
  */
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-soup/pi-utils";
 import { AsyncJobError } from "../async";
 import { ensurePersistedRoster } from "../registry/persisted-agents";
 import { AgentRegistry } from "../registry/agent-registry";
@@ -33,7 +33,7 @@ export interface RestoreOptions {
 	subagentEventBus?: EventBus;
 }
 
-/** What `omp --restore` went on with. */
+/** What `oms --restore` went on with. */
 export interface RestoreOutcome {
 	/** The session's own interrupted turn goes on. */
 	turn: boolean;

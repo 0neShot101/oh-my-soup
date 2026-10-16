@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { getCellDimensions, setCellDimensions } from "@oh-my-pi/pi-tui/terminal-capabilities";
-import type { Component } from "@oh-my-pi/pi-tui/tui";
+import { getCellDimensions, setCellDimensions } from "@oh-my-soup/pi-tui/terminal-capabilities";
+import type { Component } from "@oh-my-soup/pi-tui/tui";
 import { TspHarness } from "./tsp-harness";
 
 /** Focused component recording every keystroke the TUI hands it. */
@@ -21,7 +21,7 @@ afterEach(() => {
 	harness = undefined;
 });
 
-/** Started the way omp's prepaint starts inside Tern. */
+/** Started the way oms's prepaint starts inside Tern. */
 const TERN_PREPAINT = { expected: true, deferInput: true } as const;
 
 describe("keystrokes during a Tern startup prepaint", () => {

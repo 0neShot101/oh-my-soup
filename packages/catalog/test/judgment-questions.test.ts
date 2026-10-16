@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { resolveJudgmentQuestionsMax } from "@oh-my-pi/pi-catalog/compat/judgment-questions";
+import { buildModel } from "@oh-my-soup/pi-catalog/build";
+import { resolveJudgmentQuestionsMax } from "@oh-my-soup/pi-catalog/compat/judgment-questions";
 
 const base = {
 	reasoning: false,

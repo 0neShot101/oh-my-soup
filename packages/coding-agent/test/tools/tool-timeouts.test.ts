@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { deferredDiagnosticsWaitMs } from "@oh-my-pi/pi-coding-agent/lsp/diagnostics";
-import { clampTimeout, resolveLspTimeouts, TOOL_TIMEOUTS } from "@oh-my-pi/pi-coding-agent/tools/tool-timeouts";
+import { deferredDiagnosticsWaitMs } from "@oh-my-soup/pi-coding-agent/lsp/diagnostics";
+import { clampTimeout, resolveLspTimeouts, TOOL_TIMEOUTS } from "@oh-my-soup/pi-coding-agent/tools/tool-timeouts";
 
 describe("clampTimeout", () => {
 	it("returns the per-tool default when no raw timeout is given", () => {

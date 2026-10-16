@@ -12,7 +12,7 @@
 import type * as fsTypes from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, logger, withTimeout } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger, withTimeout } from "@oh-my-soup/pi-utils";
 import { resolveContainedPath } from "../discovery/contained-path";
 import { getActiveSkills, type Skill } from "../extensibility/skills";
 import { MCPManager } from "../mcp/manager";

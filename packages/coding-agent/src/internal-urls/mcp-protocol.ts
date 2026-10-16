@@ -1,4 +1,4 @@
-import { untilAborted, withTimeout } from "@oh-my-pi/pi-utils";
+import { untilAborted, withTimeout } from "@oh-my-soup/pi-utils";
 import { MCPManager } from "../mcp/manager";
 import type { MCPResourceReadResult } from "../mcp/types";
 import mcpDoc from "../prompts/internal-urls/mcp.md" with { type: "text" };
@@ -194,7 +194,7 @@ export async function readMcpResource(
  *
  * URL forms:
  * - mcp://<resource-uri> (e.g. mcp://test://notes, mcp://ibkr://portfolio/positions)
- * - A resource's native URI when its scheme has no OMP handler (e.g. ags://capabilities/current-host)
+ * - A resource's native URI when its scheme has no OMS handler (e.g. ags://capabilities/current-host)
  */
 export class McpProtocolHandler implements ProtocolHandler {
 	readonly scheme = "mcp";

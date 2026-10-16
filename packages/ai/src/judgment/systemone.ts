@@ -14,8 +14,8 @@
  *   `{ result, success, errors }` envelope. The credential is a Cloudflare
  *   API token plus the account id the URL needs.
  */
-import { parseCloudflareCredential } from "@oh-my-pi/pi-catalog/wire/cloudflare";
-import { $env, isRecord } from "@oh-my-pi/pi-utils";
+import { parseCloudflareCredential } from "@oh-my-soup/pi-catalog/wire/cloudflare";
+import { $env, isRecord } from "@oh-my-soup/pi-utils";
 import * as AIError from "../error";
 import { embeddedImageDataUrl } from "../images/shared";
 import { tokenUsage } from "./types";

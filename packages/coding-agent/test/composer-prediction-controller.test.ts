@@ -1,13 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { Message, Model } from "@oh-my-pi/pi-ai";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { AgentMessage } from "@oh-my-soup/pi-agent-core";
+import type { Message, Model } from "@oh-my-soup/pi-ai";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
 import {
 	ComposerPredictionController,
 	parseComposerPrediction,
-} from "@oh-my-pi/pi-coding-agent/modes/controllers/composer-prediction-controller";
-import type { EphemeralTurnOptions, EphemeralTurnResult } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+} from "@oh-my-soup/pi-coding-agent/modes/controllers/composer-prediction-controller";
+import type { EphemeralTurnOptions, EphemeralTurnResult } from "@oh-my-soup/pi-coding-agent/session/agent-session-types";
+import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
 
 describe("parseComposerPrediction", () => {
 	it("normalizes a reply to the single line the composer shows", () => {

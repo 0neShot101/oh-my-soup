@@ -2,11 +2,11 @@ import { afterAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { removeWithRetries } from "@oh-my-soup/pi-utils";
 import {
 	installLegacyPiSpecifierShim,
 	loadLegacyPiModule,
-} from "@oh-my-pi/pi-coding-agent/extensibility/plugins/legacy-pi-compat";
+} from "@oh-my-soup/pi-coding-agent/extensibility/plugins/legacy-pi-compat";
 
 // End-to-end resolution proof for the upstream-root bridges: legacy extensions
 // import the aliased package roots (`@earendil-works/pi-ai` etc.) and Bun's
@@ -25,7 +25,7 @@ afterAll(async () => {
 });
 
 async function writeFixtureExtension(source: string): Promise<string> {
-	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-legacy-upstream-bridges-"));
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "oms-legacy-upstream-bridges-"));
 	tempRoots.push(dir);
 	const entry = path.join(dir, "index.ts");
 	await fs.writeFile(entry, source, "utf8");

@@ -11,16 +11,16 @@
 
 import * as os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
-import * as attach from "@oh-my-pi/pi-coding-agent/tools/browser/attach";
-import { CmuxSocketClient } from "@oh-my-pi/pi-coding-agent/tools/browser/cmux/socket-client";
-import * as launch from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
-import * as registry from "@oh-my-pi/pi-coding-agent/tools/browser/registry";
-import { getTabsMapForTest, releaseTab } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
-import { ToolAbortError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { createBrowserPrelude } from "@oh-my-soup/pi-coding-agent/tools/browser";
+import * as attach from "@oh-my-soup/pi-coding-agent/tools/browser/attach";
+import { CmuxSocketClient } from "@oh-my-soup/pi-coding-agent/tools/browser/cmux/socket-client";
+import * as launch from "@oh-my-soup/pi-coding-agent/tools/browser/launch";
+import * as registry from "@oh-my-soup/pi-coding-agent/tools/browser/registry";
+import { getTabsMapForTest, releaseTab } from "@oh-my-soup/pi-coding-agent/tools/browser/tab-supervisor";
+import type { ToolSession } from "@oh-my-soup/pi-coding-agent/tools/index";
+import { ToolAbortError } from "@oh-my-soup/pi-coding-agent/tools/tool-errors";
+import { ToolError } from "@oh-my-soup/pi-tui/tools/tool-errors";
 import type { Browser } from "puppeteer-core";
 import { TimeoutError } from "puppeteer-core";
 import { rejectionOf } from "../helpers/rejection";
@@ -66,7 +66,7 @@ beforeEach(() => {
 	prevSocketPath = process.env.CMUX_SOCKET_PATH;
 	// Unique per test so the module-global browsers map (keyed by socket path)
 	// never carries a handle across tests.
-	process.env.CMUX_SOCKET_PATH = `/tmp/omp-open-lease-${process.pid}-${Math.random().toString(36).slice(2)}.sock`;
+	process.env.CMUX_SOCKET_PATH = `/tmp/oms-open-lease-${process.pid}-${Math.random().toString(36).slice(2)}.sock`;
 });
 
 afterEach(async () => {
@@ -235,7 +235,7 @@ describe("browser open — an abandoned browser acquisition does not hold up the
 	});
 
 	it("keeps the replacement acquisition shared when the abandoned one settles while it is still connecting", async () => {
-		const kind = { kind: "cmux" as const, socketPath: `/tmp/omp-open-lease-${process.pid}-late.sock` };
+		const kind = { kind: "cmux" as const, socketPath: `/tmp/oms-open-lease-${process.pid}-late.sock` };
 		const abandonedConnect = { entered: Promise.withResolvers<void>(), gate: Promise.withResolvers<void>() };
 		const replacementConnect = { entered: Promise.withResolvers<void>(), gate: Promise.withResolvers<void>() };
 		const gatedConnects = [abandonedConnect, replacementConnect];
@@ -313,7 +313,7 @@ describe("browser open — an abandoned browser acquisition does not hold up the
 });
 
 describe("browser open — failed spawned-app acquisition reaps its owned process (#9537)", () => {
-	it("kills the OMP-spawned process when no page target can be published", async () => {
+	it("kills the OMS-spawned process when no page target can be published", async () => {
 		const disconnectSpy = vi.fn();
 		const browser = {
 			key: "spawned:/tmp/chrome-headless-shell",

@@ -15,8 +15,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { $ } from "bun";
 import { dlopen, FFIType, ptr } from "bun:ffi";
-import { COMPRESS_SCRATCH_PREFIX } from "@oh-my-pi/omp-stats/parser";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { COMPRESS_SCRATCH_PREFIX } from "@oh-my-soup/oms-stats/parser";
+import { isEnoent } from "@oh-my-soup/pi-utils";
 import { FileSessionStorage } from "../session/session-storage";
 import { errorMessage } from "../slash-commands/helpers/parse";
 import { sha256File } from "../utils/file-hash";
@@ -27,7 +27,7 @@ const SCRATCH_GLOB = new Bun.Glob(`**/${COMPRESS_SCRATCH_PREFIX}*`);
  * recursively removes only directories gc created; a session artifact can
  * carry any name.
  */
-const SCRATCH_OWNER_MARKER = ".omp-gc-compress-owner";
+const SCRATCH_OWNER_MARKER = ".oms-gc-compress-owner";
 
 /** Formats whose bytes are already compressed; the filesystem would store them as-is. */
 const INCOMPRESSIBLE_EXTENSIONS: Record<string, true> = {
@@ -273,7 +273,7 @@ function unchangedSinceSelection(candidate: CompressCandidate): boolean {
 /**
  * Rename `copyPath` over `candidate.path` if the original is unchanged, checked
  * immediately before the rename. Transcripts swap under the session publish
- * lock, which serializes them against appends from any omp binary.
+ * lock, which serializes them against appends from any oms binary.
  */
 function swapIfUnchanged(
 	storage: FileSessionStorage,

@@ -1,22 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import type { Model, ProviderSessionState, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
-import { buildRequest as buildGeminiRequest } from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
-import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { buildTransformedCodexRequestBody } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
-import { buildParams as buildResponsesParams } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import * as sdk from "@oh-my-pi/pi-coding-agent/sdk";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import * as settingsStream from "@oh-my-pi/pi-coding-agent/session/settings-stream-fn";
-import type { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
-import * as discovery from "@oh-my-pi/pi-coding-agent/task/discovery";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import type { Model, ProviderSessionState, SimpleStreamOptions } from "@oh-my-soup/pi-ai";
+import { buildRequest as buildGeminiRequest } from "@oh-my-soup/pi-ai/providers/google-gemini-cli";
+import { createMockModel } from "@oh-my-soup/pi-ai/providers/mock";
+import { buildTransformedCodexRequestBody } from "@oh-my-soup/pi-ai/providers/openai-codex-responses";
+import { buildParams as buildResponsesParams } from "@oh-my-soup/pi-ai/providers/openai-responses";
+import { getBundledModel } from "@oh-my-soup/pi-catalog/models";
+import { ModelRegistry } from "@oh-my-soup/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
+import { AgentLifecycleManager } from "@oh-my-soup/pi-coding-agent/registry/agent-lifecycle";
+import { AgentRegistry } from "@oh-my-soup/pi-coding-agent/registry/agent-registry";
+import * as sdk from "@oh-my-soup/pi-coding-agent/sdk";
+import type { AgentSession } from "@oh-my-soup/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-soup/pi-coding-agent/session/auth-storage";
+import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
+import * as settingsStream from "@oh-my-soup/pi-coding-agent/session/settings-stream-fn";
+import type { TaskTool } from "@oh-my-soup/pi-coding-agent/task";
+import * as discovery from "@oh-my-soup/pi-coding-agent/task/discovery";
+import { TempDir } from "@oh-my-soup/pi-utils";
 
 describe("task sibling prompt-cache routing", () => {
 	const sessions: AgentSession[] = [];
@@ -100,7 +100,7 @@ describe("task sibling prompt-cache routing", () => {
 	] as const)(
 		"%s without sharing child conversation or response state",
 		async (_name, provider, modelId, parentCacheKey, parentTaskKey, expected) => {
-			using directory = TempDir.createSync("@omp-task-cache-");
+			using directory = TempDir.createSync("@oms-task-cache-");
 			vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network is disabled in this test"));
 			const authStorage = await AuthStorage.create(directory.join("auth.db"));
 			authStorage.keys.setRuntime(
@@ -321,7 +321,7 @@ describe("task sibling prompt-cache routing", () => {
 	] as const)(
 		"gates the authenticated fallback after deferred %s selection",
 		async (requested, provider, modelId, expected) => {
-			using directory = TempDir.createSync("@omp-task-cache-fallback-");
+			using directory = TempDir.createSync("@oms-task-cache-fallback-");
 			vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network is disabled in this test"));
 			const requests: Array<{ model: Model; cacheKey: string | undefined }> = [];
 			const mock = createMockModel({ handler: { content: [{ type: "text", text: "Done." }] } });
@@ -376,7 +376,7 @@ describe("task sibling prompt-cache routing", () => {
 
 	const cacheModels = ["muse-spark-1.3-contributor", "muse-wonder-full-1.0-contributor"];
 	it.each(cacheModels)("rechecks %s while explicit session and request keys win", async modelId => {
-		using directory = TempDir.createSync("@omp-task-cache-model-");
+		using directory = TempDir.createSync("@oms-task-cache-model-");
 		vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network is disabled in this test"));
 		const requests: Array<{ provider: string; options: SimpleStreamOptions | undefined; wireKey: unknown }> = [];
 		const mock = createMockModel({ handler: { content: [{ type: "text", text: "Done." }] } });

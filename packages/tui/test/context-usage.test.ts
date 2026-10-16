@@ -6,16 +6,16 @@
  * internals, which massively overcounts.
  */
 import { describe, expect, it } from "bun:test";
-import { type } from "@oh-my-pi/omptype";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import type { Model, ModelSpec } from "@oh-my-pi/pi-catalog/types";
-import { Tokenizer } from "@oh-my-pi/pi-agent-core";
+import { type } from "@oh-my-soup/omstype";
+import { buildModel } from "@oh-my-soup/pi-catalog/build";
+import type { Model, ModelSpec } from "@oh-my-soup/pi-catalog/types";
+import { Tokenizer } from "@oh-my-soup/pi-agent-core";
 import {
 	compactionContextTokens,
 	DEFAULT_COMPACTION_SETTINGS,
 	shouldCompact,
-} from "@oh-my-pi/pi-agent-core/compaction";
-import { arkToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+} from "@oh-my-soup/pi-agent-core/compaction";
+import { arkToWireSchema } from "@oh-my-soup/pi-ai/utils/schema";
 import {
 	type ContextBreakdown,
 	type NonMessageTokenSource,

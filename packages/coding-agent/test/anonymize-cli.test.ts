@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { TempDir } from "@oh-my-soup/pi-utils";
 import { runAnonymizeCommand } from "../src/cli/anonymize-cli";
 import { CliUsageError } from "../src/cli/usage-error";
 
@@ -9,11 +9,11 @@ const SESSION = `${JSON.stringify({ type: "session", version: 3, id: "01a0c9ac",
 ${JSON.stringify({ type: "message", id: "a1b2c3d4", parentId: null, timestamp: "2026-10-01T00:00:01.000Z", message: { role: "user", content: "keep me", timestamp: 1 } })}
 `;
 
-describe("omp anonymize output", () => {
+describe("oms anonymize output", () => {
 	let tempDir: TempDir;
 
 	beforeEach(() => {
-		tempDir = TempDir.createSync("@omp-anonymize-");
+		tempDir = TempDir.createSync("@oms-anonymize-");
 	});
 
 	afterEach(async () => {

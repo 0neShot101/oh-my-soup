@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { Tokenizer } from "@oh-my-pi/pi-agent-core";
+import { Tokenizer } from "@oh-my-soup/pi-agent-core";
 import {
 	countResponsesHistoryTokens,
 	trimRemoteCompactionInputToContextWindow,
-} from "@oh-my-pi/pi-agent-core/compaction/openai";
-import { estimateImageTokens } from "@oh-my-pi/pi-agent-core/image-tokens";
-import type { Model, UserMessage } from "@oh-my-pi/pi-ai/types";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+} from "@oh-my-soup/pi-agent-core/compaction/openai";
+import { estimateImageTokens } from "@oh-my-soup/pi-agent-core/image-tokens";
+import type { Model, UserMessage } from "@oh-my-soup/pi-ai/types";
+import { getBundledModel } from "@oh-my-soup/pi-catalog/models";
 
 /** Base64 PNG whose IHDR declares `width`x`height`; the pixel data is irrelevant to sizing. */
 function pngWithSize(width: number, height: number): string {
@@ -83,7 +83,7 @@ describe("image pricing by the reading model", () => {
 });
 
 describe("image-heavy remote compaction sizing", () => {
-	// 1568px is omp's default resize cap, so this is what screenshots look like on the wire.
+	// 1568px is oms's default resize cap, so this is what screenshots look like on the wire.
 	const screenshot = pngWithSize(1568, 882);
 	const imageCount = 25;
 

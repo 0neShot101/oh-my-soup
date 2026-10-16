@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { ValidationError } from "@oh-my-pi/pi-ai/error";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import type { Api, FetchImpl, Model } from "@oh-my-pi/pi-catalog/types";
+import { ValidationError } from "@oh-my-soup/pi-ai/error";
+import { buildModel } from "@oh-my-soup/pi-catalog/build";
+import type { Api, FetchImpl, Model } from "@oh-my-soup/pi-catalog/types";
 import { generateAntigravityImage } from "../src/images/google-antigravity";
 import { generateGoogleImage } from "../src/images/google-generative-ai";
 import { generateOpenAIImage } from "../src/images/openai-images";

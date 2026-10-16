@@ -1,4 +1,4 @@
-import { serializeCloudflareCredential } from "@oh-my-pi/pi-catalog/wire/cloudflare";
+import { serializeCloudflareCredential } from "@oh-my-soup/pi-catalog/wire/cloudflare";
 import * as AIError from "../../error";
 import type { OAuthController } from "./types";
 

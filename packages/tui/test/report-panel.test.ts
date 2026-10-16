@@ -1,10 +1,10 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { Container, Text } from "@oh-my-pi/pi-tui";
-import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
-import { ReportPanel } from "@oh-my-pi/pi-tui/overlays/report-panel";
-import { editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
-import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { Container, Text } from "@oh-my-soup/pi-tui";
+import { TranscriptContainer } from "@oh-my-soup/pi-tui/chrome/transcript-container";
+import { ReportPanel } from "@oh-my-soup/pi-tui/overlays/report-panel";
+import { editorKey } from "@oh-my-soup/pi-tui/chrome/keybinding-hints";
+import { COMPOSER_DEFAULTS, Composer } from "@oh-my-soup/pi-tui/prompt/composer";
+import { initTheme } from "@oh-my-soup/pi-tui/theme";
 import { withoutTerminalMultiplexer } from "./helpers/terminal-multiplexer";
 import { VirtualRenderScheduler } from "./virtual-render-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
@@ -206,11 +206,11 @@ describe("ReportPanel natively", () => {
 			closeKey: "Esc",
 			onClose: () => closed++,
 		});
-		expect(panel.nativeOverlay).toMatchObject({ role: "omp.overlay.report", size: "lg", head: "Report" });
+		expect(panel.nativeOverlay).toMatchObject({ role: "oms.overlay.report", size: "lg", head: "Report" });
 		type Described = { key?: string; p?: { role?: string }; c?: Described[]; scroll?: unknown };
 		const root = panel.describe() as Described;
-		expect(root.c?.[0]).toMatchObject({ key: "body", p: { role: "omp.report.body" } });
-		expect(root.c?.at(-1)?.p?.role).toBe("omp.actions");
+		expect(root.c?.[0]).toMatchObject({ key: "body", p: { role: "oms.report.body" } });
+		expect(root.c?.at(-1)?.p?.role).toBe("oms.actions");
 		panel.handleInput("\x1b[6~");
 		expect((panel.describe() as Described).c?.[0]?.scroll).toEqual({ by: "page-down", n: 1 });
 		panel.handleNativeEvent({ type: "action", key: "actions/close", act: "close", mods: [] });
