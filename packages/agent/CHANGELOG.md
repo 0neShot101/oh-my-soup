@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.11.4] - 2026-10-17
+
 ### Fixed
 
 - Included `cyber_policy` refusals in provider replay filtering so refusal details are stripped from replayed turns and synthetic tool results.

@@ -1593,9 +1593,9 @@
     url = "https://registry.npmjs.org/fdir/-/fdir-6.5.0.tgz";
     hash = "sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg==";
   };
-  "fingerprint-generator@2.1.88" = fetchurl {
-    url = "https://registry.npmjs.org/fingerprint-generator/-/fingerprint-generator-2.1.88.tgz";
-    hash = "sha512-rwYKE/UZTAnfu3DoBgFH+otrRewvkscG8TkiDY8xw7QBga0evHoL7H70HrtP/CBqjspVrfqE7ZYt7qDM3dYk+g==";
+  "fingerprint-generator@2.1.89" = fetchurl {
+    url = "https://registry.npmjs.org/fingerprint-generator/-/fingerprint-generator-2.1.89.tgz";
+    hash = "sha512-rDczTTrnAKlqkFNt9mFkO6fNCqYX+Xv1QKJsuPZ5L509mtT7be9a6IsI5RPsk3Af+wg4wrhAdeT8OPaL6tJBXw==";
   };
   "flatbuffers@25.9.23" = fetchurl {
     url = "https://registry.npmjs.org/flatbuffers/-/flatbuffers-25.9.23.tgz";
@@ -1613,9 +1613,9 @@
     url = "https://registry.npmjs.org/gearhash-jit/-/gearhash-jit-1.0.2.tgz";
     hash = "sha512-UhzJL4KXSdqAKepy/tZwmi2Rcy0YMmtiC4DQS4SURCuIWdh8ECZtnXK2ePRMLigfB61hRKdLK/Vgg2bSw73izQ==";
   };
-  "generative-bayesian-network@2.1.88" = fetchurl {
-    url = "https://registry.npmjs.org/generative-bayesian-network/-/generative-bayesian-network-2.1.88.tgz";
-    hash = "sha512-kxbW6CCsiEAVdBYPont/6ZVOa47Pyfv5ldYFIvj8wmOx9uQOZ4c8wdR0jEf2pE6DeVuIAfmolm+91bYne6/3uA==";
+  "generative-bayesian-network@2.1.89" = fetchurl {
+    url = "https://registry.npmjs.org/generative-bayesian-network/-/generative-bayesian-network-2.1.89.tgz";
+    hash = "sha512-oP5D5PsWpbM30dyAGPsyyZ4jogQA2aopy8TStSyCAtLRz85msdbh0l5tJ70pgeEXnQkaPWMhhvgxd7/qoss0FA==";
   };
   "gensync@1.0.0-beta.2" = fetchurl {
     url = "https://registry.npmjs.org/gensync/-/gensync-1.0.0-beta.2.tgz";
@@ -1669,9 +1669,9 @@
     url = "https://registry.npmjs.org/has-property-descriptors/-/has-property-descriptors-1.0.2.tgz";
     hash = "sha512-55JNKuIW+vq4Ke1BjOTjM2YctQIvCT7GFzHwmfZPGo5wnrgkid0YQtnAleFSqumZm4az3n2BS+erby5ipJdgrg==";
   };
-  "header-generator@2.1.88" = fetchurl {
-    url = "https://registry.npmjs.org/header-generator/-/header-generator-2.1.88.tgz";
-    hash = "sha512-12GkTL1CDaPTQ6gkd8TPwxNtn7t3wSExnWU9qgWfEDh8IqpD1NAVcvzfHphIzULez8WP2DK9YQsDegajjDdTKQ==";
+  "header-generator@2.1.89" = fetchurl {
+    url = "https://registry.npmjs.org/header-generator/-/header-generator-2.1.89.tgz";
+    hash = "sha512-FQL09ESlBWbHpG1lC0l3Au0uXHkje7d2z65o3lhbK1nR4bqIayAa0UT+i32hsXFZbE4vu8J4DMqPDm/MGCrpvg==";
   };
   "html-entities@2.3.3" = fetchurl {
     url = "https://registry.npmjs.org/html-entities/-/html-entities-2.3.3.tgz";
