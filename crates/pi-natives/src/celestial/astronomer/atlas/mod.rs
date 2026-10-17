@@ -7,7 +7,7 @@ pub use brave::Brave;
 pub use duckduckgo::DuckDuckGo;
 use tokio::task::{AbortHandle, JoinSet};
 
-#[allow(async_fn_in_trait)]
+#[allow(async_fn_in_trait, reason = "internal trait")]
 pub trait Engine: Send + Sync {
 	/// Identifier reported in votes and failures.
 	const NAME: &'static str;

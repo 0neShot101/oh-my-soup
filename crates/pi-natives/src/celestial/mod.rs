@@ -4,6 +4,16 @@
 //! Exposes both the Rust APIs (`astronomer`, `brave`, `devalue`, `duckduckgo`)
 //! and N-API bindings for the Oh My Soup TypeScript runtime.
 
+#![allow(
+	clippy::all,
+	clippy::nursery,
+	clippy::pedantic,
+	clippy::perf,
+	clippy::style,
+	clippy::suspicious,
+	clippy::allow_attributes_without_reason,
+	reason = "ported Celestial metasearch modules"
+)]
 pub mod astronomer;
 pub mod brave;
 pub mod devalue;
