@@ -1245,6 +1245,233 @@ export interface CaptureRegion {
   height: number
 }
 
+export interface CelestialAnswerDto {
+  text: string
+  votes?: number
+}
+
+export interface CelestialArticleDto {
+  authors: Array<CelestialAuthorDto>
+  publisher?: string
+  date?: string
+}
+
+export interface CelestialAuthorDto {
+  name: string
+  url?: string
+}
+
+export interface CelestialBraveParseOutput {
+  status: string
+  page?: CelestialPageDto
+  challengeSet?: CelestialChallengeSetDto
+}
+
+export interface CelestialChallengeSetDto {
+  setToken: string
+  tokens: Array<string>
+  zeroCount: number
+  solutionLimit: number
+  iterations: number
+  memorySize: number
+  hashLength?: number
+  parallelism: number
+}
+
+export interface CelestialDiscussionDto {
+  question?: string
+  answers: Array<CelestialAnswerDto>
+}
+
+export interface CelestialDuckEvalOutput {
+  status: string
+  retryUrl?: string
+  page?: CelestialPageDto
+}
+
+export interface CelestialEnginePageInput {
+  engine: string
+  weight?: number
+  page: CelestialPageDto
+}
+
+/**
+ * Evaluate a DuckDuckGo `d.js` script payload inside the pure-Rust `jsa`
+ * interpreter and convert it into an Astronomer [`CelestialPageDto`] or retry
+ * URL.
+ */
+export declare function celestialEvalDuckDuckGoScript(script: string, query?: string | undefined | null): CelestialDuckEvalOutput
+
+/**
+ * Extract the `https://links.duckduckgo.com/d.js...` script URL from
+ * DuckDuckGo's search page HTML.
+ */
+export declare function celestialExtractDuckDuckGoUrl(html: string): string
+
+export interface CelestialFactDto {
+  label: string
+  values: Array<string>
+}
+
+export interface CelestialFaqEntryDto {
+  question: string
+  answer: string
+  url?: string
+}
+
+export interface CelestialFusedImageHitDto {
+  hit: CelestialImageHitDto
+  score: number
+  votes: Array<CelestialVoteDto>
+}
+
+export interface CelestialFusedNewsHitDto {
+  hit: CelestialNewsHitDto
+  score: number
+  votes: Array<CelestialVoteDto>
+}
+
+export interface CelestialFusedPanelDto {
+  hit: CelestialPanelDto
+  score: number
+  votes: Array<CelestialVoteDto>
+}
+
+export interface CelestialFusedResultsDto {
+  web: Array<CelestialFusedWebHitDto>
+  news: Array<CelestialFusedNewsHitDto>
+  images: Array<CelestialFusedImageHitDto>
+  videos: Array<CelestialFusedVideoHitDto>
+  panels: Array<CelestialFusedPanelDto>
+  related: Array<string>
+}
+
+export interface CelestialFusedVideoHitDto {
+  hit: CelestialVideoHitDto
+  score: number
+  votes: Array<CelestialVoteDto>
+}
+
+export interface CelestialFusedWebHitDto {
+  hit: CelestialWebHitDto
+  score: number
+  votes: Array<CelestialVoteDto>
+}
+
+/**
+ * Fuse and align multiple engine result pages using Astronomer's deduplication
+ * (`Normalized<Canonical>`) and rank-fusion (`Rrf` or `CombMnz`) pipeline.
+ */
+export declare function celestialFusePages(inputs: Array<CelestialEnginePageInput>, alignmentMode?: string | undefined | null, rrfK?: number | undefined | null): CelestialFusedResultsDto
+
+export interface CelestialImageHitDto {
+  url: string
+  page: string
+  title: string
+  thumbnail: string
+  width: number
+  height: number
+}
+
+export interface CelestialLinkDto {
+  title: string
+  url: string
+}
+
+export interface CelestialMetadataDto {
+  discussion?: CelestialDiscussionDto
+  faq: Array<CelestialFaqEntryDto>
+  article?: CelestialArticleDto
+  video?: CelestialVideoDetailsDto
+  facts: Array<CelestialFactDto>
+}
+
+export interface CelestialNewsHitDto {
+  url: string
+  title: string
+  snippet: string
+  source?: string
+  published?: string
+  thumbnail?: string
+}
+
+/**
+ * Normalize a URL using Astronomer's [`Canonical`] pipeline (`Https` +
+ * `BareHost` + `DropFragment` + `TrimSlash` + `DropTracking` + `SortQuery` +
+ * `DecodeUnreserved`).
+ */
+export declare function celestialNormalizeUrl(url: string): string
+
+export interface CelestialPageDto {
+  web: Array<CelestialWebHitDto>
+  news: Array<CelestialNewsHitDto>
+  images: Array<CelestialImageHitDto>
+  videos: Array<CelestialVideoHitDto>
+  related: Array<string>
+  panels: Array<CelestialPanelDto>
+}
+
+export interface CelestialPanelDto {
+  kind: string
+  title: string
+  subtitle?: string
+  text: string
+  url?: string
+  image?: string
+  source?: string
+  facts: Array<CelestialFactDto>
+  links: Array<CelestialLinkDto>
+  related: Array<string>
+}
+
+/**
+ * Parse a Brave Search SSR HTML document (`__DATA__` SvelteKit `devalue`
+ * payload) and convert it into an Astronomer [`CelestialPageDto`] or
+ * [`CelestialChallengeSetDto`].
+ */
+export declare function celestialParseBraveHtml(html: string, query?: string | undefined | null): CelestialBraveParseOutput
+
+/** Solve a Brave Argon2id Proof-of-Work challenge in native Rust. */
+export declare function celestialSolveBravePow(challenge: string, difficulty: number, limit: number, memoryKib?: number | undefined | null, iterations?: number | undefined | null, parallelism?: number | undefined | null, hashLength?: number | undefined | null): string
+
+export interface CelestialVideoDetailsDto {
+  duration?: string
+  views?: number
+  creator?: string
+  publisher?: string
+}
+
+export interface CelestialVideoHitDto {
+  url: string
+  title: string
+  snippet: string
+  duration?: string
+  publisher?: string
+  creator?: string
+  views?: number
+  published?: string
+  thumbnail?: string
+}
+
+export interface CelestialVoteDto {
+  engine: string
+  rank: number
+  total: number
+  weight: number
+}
+
+export interface CelestialWebHitDto {
+  url: string
+  title: string
+  snippet: string
+  site?: string
+  favicon?: string
+  published?: string
+  thumbnail?: string
+  sitelinks: Array<CelestialLinkDto>
+  metadata?: CelestialMetadataDto
+}
+
 /** Clipboard image payload encoded as PNG bytes. */
 export interface ClipboardImage {
   /** PNG-encoded image bytes. */

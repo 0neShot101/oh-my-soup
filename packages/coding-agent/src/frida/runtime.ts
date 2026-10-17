@@ -11,7 +11,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { $which, getConfigRootDir, ptree } from "@oh-my-soup/pi-utils";
+import { $which, getConfigRootDir, getManagedPythonEnv, ptree } from "@oh-my-soup/pi-utils";
 
 const RUNTIME_FORMAT = 1;
 const PROCESS_TIMEOUT_MS = 300_000;
@@ -135,6 +135,7 @@ async function prepareRuntime(
 	env: Record<string, string | undefined>,
 	cwd: string,
 ): Promise<void> {
+	env = getManagedPythonEnv(env);
 	if (runtimeMarkerMatches(runtime) && (await probeRuntime(runtime.python, env, cwd))) return;
 	const parent = path.dirname(runtime.environmentDirectory);
 	fs.mkdirSync(parent, { recursive: true });

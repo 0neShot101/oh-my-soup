@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { buildAnthropicClientOptions, resolveAnthropicPrewarmTarget } from "@oh-my-soup/pi-ai/providers/anthropic";
-import { prewarmModelConnection, resetConnectionPrewarmForTesting } from "@oh-my-soup/pi-ai/providers/connection-prewarm";
+import {
+	prewarmModelConnection,
+	resetConnectionPrewarmForTesting,
+} from "@oh-my-soup/pi-ai/providers/connection-prewarm";
 import type { FetchImpl, Model } from "@oh-my-soup/pi-ai/types";
 import { resetDispatchOriginsForTesting, transportFetch } from "@oh-my-soup/pi-ai/utils/transport-fetch";
 import { buildModel } from "@oh-my-soup/pi-catalog/build";

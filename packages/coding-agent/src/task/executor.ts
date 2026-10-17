@@ -7,8 +7,15 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentMessage, AgentTelemetryConfig } from "@oh-my-soup/pi-agent-core";
-import { AgentBusyError, EventLoopKeepalive, recordHandoff, resolveTelemetry } from "@oh-my-soup/pi-agent-core";
-import type { Api, Model, ServiceTierByFamily, Usage } from "@oh-my-soup/pi-ai";
+import {
+	AgentBusyError,
+	EventLoopKeepalive,
+	isCyberRefusalMessage,
+	isProviderRefusalErrorMessage,
+	recordHandoff,
+	resolveTelemetry,
+} from "@oh-my-soup/pi-agent-core";
+import type { Api, AssistantMessage, Model, ServiceTierByFamily, Usage } from "@oh-my-soup/pi-ai";
 import { isCursorExecResolved } from "@oh-my-soup/pi-ai/utils/block-symbols";
 import { formatModelSelectorValue } from "@oh-my-soup/pi-tui/overlays/model-selector";
 import {
@@ -2256,6 +2263,11 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 			publishAdvisorState(session);
 			publishServingModel();
 			if (event.type === "auto_retry_start") {
+				if (isProviderRefusalErrorMessage(event.errorMessage)) {
+					progress.retryState = undefined;
+					progress.retryFailure = undefined;
+					return;
+				}
 				progress.retryState = {
 					attempt: event.attempt,
 					maxAttempts: event.maxAttempts,
@@ -2270,11 +2282,13 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 			if (event.type === "auto_retry_end") {
 				const attempt = progress.retryState?.attempt ?? event.attempt;
 				progress.retryState = undefined;
-				if (!event.success) {
+				if (!event.success && !isProviderRefusalErrorMessage(event.finalError)) {
 					progress.retryFailure = {
 						attempt,
 						errorMessage: event.finalError ?? "Auto-retry failed",
 					};
+				} else if (isProviderRefusalErrorMessage(event.finalError)) {
+					progress.retryFailure = undefined;
 				}
 				scheduleProgress(true);
 				return;
@@ -2580,6 +2594,23 @@ async function driveSessionToResult(
 
 		// The forced final turn must answer through `yield`, or with no tools at all.
 		const reminderToolChoice = structured ? buildNamedToolChoice("yield", session.model) : "none";
+		let cyberRefusalContinuationAttempted = false;
+		const stripSubagentCyberRefusal = (refused: AssistantMessage): void => {
+			const hasToolCall = Array.isArray(refused.content) && refused.content.some(block => block.type === "toolCall");
+			if (hasToolCall) {
+				refused.errorMessage = undefined;
+				refused.stopDetails = undefined;
+				return;
+			}
+			const agentMessages = session.agent?.state?.messages;
+			if (Array.isArray(agentMessages) && agentMessages.at(-1) === refused) {
+				agentMessages.pop();
+			}
+			const sessionMessages = session.state?.messages;
+			if (Array.isArray(sessionMessages) && sessionMessages.at(-1) === refused) {
+				sessionMessages.pop();
+			}
+		};
 
 		const runYieldLadder = async (): Promise<void> => {
 			let retryCount = 0;
@@ -2589,7 +2620,21 @@ async function driveSessionToResult(
 				// final yield: wait for the stop's session abort to settle, then
 				// prompt once with the wrap-up reminder + named tool choice.
 				const budgetStop = monitor.budgetStopRequested();
-				if (!structured && !budgetStop) break;
+				if (!structured && !budgetStop) {
+					const lastTurn = session.getLastAssistantMessage();
+					if (
+						!cyberRefusalContinuationAttempted &&
+						lastTurn &&
+						isCyberRefusalMessage(lastTurn) &&
+						monitor.progress.requests <= 1
+					) {
+						cyberRefusalContinuationAttempted = true;
+						stripSubagentCyberRefusal(lastTurn);
+						await dispatchPrompt(task, { attribution: "agent", synthetic: true }, "cyber refusal retry");
+						await awaitAbortable(session.waitForIdle());
+					}
+					break;
+				}
 				if (budgetStop) {
 					retryCount = MAX_YIELD_RETRIES - 1;
 					await monitor.waitForBudgetStop();
@@ -2598,9 +2643,22 @@ async function driveSessionToResult(
 				// Skip reminders when the model returned a terminal error (e.g.
 				// rate-limit cap hit, auth failure). Re-prompting would just
 				// hit the same wall, multiplying the failure noise without
-				// any chance of producing a yield.
+				// any chance of producing a yield. Exception: if the first turn
+				// hit a cyber refusal that TurnRecovery did not already retry,
+				// strip the refusal and allow one next-turn attempt.
 				const lastBeforeReminder = session.getLastAssistantMessage();
-				if (lastBeforeReminder?.stopReason === "error") break;
+				if (lastBeforeReminder?.stopReason === "error") {
+					if (
+						!cyberRefusalContinuationAttempted &&
+						isCyberRefusalMessage(lastBeforeReminder) &&
+						monitor.progress.requests <= 1
+					) {
+						cyberRefusalContinuationAttempted = true;
+						stripSubagentCyberRefusal(lastBeforeReminder);
+					} else {
+						break;
+					}
+				}
 				// A turn waiting on owner work is a scheduling pause. The outer
 				// barrier settles that work before a reminder counts against it.
 				if (!budgetStop && session.hasPendingAsyncWork()) break;
@@ -4688,7 +4746,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			// A seance fork inherits the source's model roles; they describe the
 			// source run, not this consult, so the consult still pins its own chain.
-			const hasExistingModelRole = !(forked || preparedSession) && sessionManager.getLastModelChangeRole() !== undefined;
+			const hasExistingModelRole =
+				!(forked || preparedSession) && sessionManager.getLastModelChangeRole() !== undefined;
 			// Subscribe before the builder mints proxies so a manager change during
 			// session startup is replayed on bind instead of lost.
 			const mcpFollower = mcpManager

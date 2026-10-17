@@ -456,6 +456,24 @@ Python subprocess filtering denies common API keys and allows safe base variable
 
 Shell subprocess filtering is separate (`packages/utils/src/env.ts`): it strips project-dotenv values rather than applying Python's key allowlist.
 
+### Managed dependency storage
+
+OMS-owned installers keep their package caches and downloaded Python interpreters under the active config root's `dependencies/` directory. The paths below use the default `~/.oms` root; `PI_CONFIG_DIR` and named profiles also apply. This subtree does not follow XDG paths or `PI_CODING_AGENT_DIR`.
+
+| Variable | Default for managed installs |
+| --- | --- |
+| `BUN_INSTALL_CACHE_DIR` | `~/.oms/dependencies/bun/cache` |
+| `BUN_RUNTIME_TRANSPILER_CACHE_PATH` | `~/.oms/dependencies/bun/transpiler-cache`; an explicit empty string or `0` keeps this cache disabled |
+| `PIP_CACHE_DIR` | `~/.oms/dependencies/pip/cache` |
+| `UV_CACHE_DIR` | `~/.oms/dependencies/uv/cache` |
+| `UV_PYTHON_INSTALL_DIR` | `~/.oms/dependencies/uv/python` |
+
+Explicit non-empty environment overrides win. These scoped environment defaults take precedence over cache paths in dependency config files, but leave registry settings, credentials, `HOME`, and XDG variables unchanged. Existing files outside `.oms` are not moved or deleted.
+
+The defaults cover managed JavaScript eval packages, plugins, local-model runtimes, and Python provisioning for MLX, Frida, IDA, and trafilatura. Automatically installed trafilatura uses `~/.oms/dependencies/trafilatura/venv`, not `uv tool install` or `pip install --user`. An existing trafilatura on `PATH` is still reused when no managed copy exists. Explicit project-mode JavaScript installs and user-run package-manager commands retain their own configuration.
+
+When launching OMS from TypeScript source, Bun can populate its own transpiler cache before OMS starts. Set `BUN_RUNTIME_TRANSPILER_CACHE_PATH` on that launch command to relocate or disable that pre-startup cache; the defaults above apply to the managed subprocesses OMS launches.
+
 ---
 
 ## 5) Agent/runtime behavior toggles

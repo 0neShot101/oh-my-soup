@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { type DownloadActivity, onDownloadActivity } from "@oh-my-soup/pi-coding-agent/downloads/activity";
 import { ensureTool } from "@oh-my-soup/pi-coding-agent/utils/tools-manager";
+import * as utils from "@oh-my-soup/pi-utils";
 import * as ptree from "@oh-my-soup/pi-utils/ptree";
 
 describe("ensureTool signal abort handling", () => {
 	const originalPath = process.env.PATH;
+	const roots: utils.TempDir[] = [];
 
 	beforeEach(() => {
+		const root = utils.TempDir.createSync("@oms-tool-abort-");
+		roots.push(root);
+		vi.spyOn(utils, "getManagedDependencyDir").mockImplementation(name => root.join(name));
 		process.env.PATH = "/mock/hermetic/path";
 		vi.spyOn(Bun, "which").mockImplementation(cmd => {
 			if (cmd === "trafilatura") return null;
@@ -16,9 +21,10 @@ describe("ensureTool signal abort handling", () => {
 		});
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		vi.restoreAllMocks();
 		process.env.PATH = originalPath;
+		await Promise.all(roots.splice(0).map(root => root.remove()));
 	});
 
 	it("returns undefined without spawning installer when signal is already aborted", async () => {
@@ -56,7 +62,6 @@ describe("ensureTool signal abort handling", () => {
 
 		const result = await ensureTool("trafilatura", { signal: controller.signal, silent: true });
 		expect(result).toBeUndefined();
-		expect(executedCommands.length).toBeGreaterThan(0);
 		const ranUv = executedCommands.some(cmd => cmd.some(arg => arg.includes("uv")));
 		const ranPip = executedCommands.some(cmd => cmd.some(arg => arg.includes("pip")));
 		expect(ranUv).toBe(true);

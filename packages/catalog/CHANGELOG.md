@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `web/celestial` as a selectable native-backed Brave/DuckDuckGo search engine.
+
 ## [18.11.1] - 2026-10-16
 ### Fixed
 

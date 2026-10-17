@@ -831,6 +831,11 @@ export function getPythonEnvDir(): string {
 	return dirs.rootSubdir("python-env", "data");
 }
 
+/** Private storage for OMS-managed dependencies (~/.oms/dependencies/<name>). */
+export function getManagedDependencyDir(name: string): string {
+	return dirs.rootSubdir(path.join("dependencies", name));
+}
+
 /** Get the shared Python gateway state directory (~/.oms/agent/python-gateway; XDG default: $XDG_STATE_HOME/oms/python-gateway). */
 export function getPythonGatewayDir(): string {
 	return dirs.agentSubdir(undefined, "python-gateway", "state");

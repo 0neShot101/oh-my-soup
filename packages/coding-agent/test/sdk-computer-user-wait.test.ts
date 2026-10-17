@@ -18,7 +18,10 @@ import { initializeExtensions } from "@oh-my-soup/pi-coding-agent/modes/runtime-
 import { createAgentSession } from "@oh-my-soup/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-soup/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
-import { computerTurnInFlight, registerComputerController } from "@oh-my-soup/pi-coding-agent/tools/computer/supervisor";
+import {
+	computerTurnInFlight,
+	registerComputerController,
+} from "@oh-my-soup/pi-coding-agent/tools/computer/supervisor";
 import { initTheme } from "@oh-my-soup/pi-tui/theme";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-soup/pi-utils";
 

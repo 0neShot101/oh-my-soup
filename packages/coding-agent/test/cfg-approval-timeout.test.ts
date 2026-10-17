@@ -10,7 +10,10 @@ import { type MCPAuthHandler, MCPManager } from "@oh-my-soup/pi-coding-agent/mcp
 import { ExtensionUiController } from "@oh-my-soup/pi-coding-agent/modes/controllers/extension-ui-controller";
 import { MCPCommandController } from "@oh-my-soup/pi-coding-agent/modes/controllers/mcp-command-controller";
 import { InteractiveMode } from "@oh-my-soup/pi-coding-agent/modes/interactive-mode";
-import { __resetAutoQaConsentForTests, resolveAutoQaConsent } from "@oh-my-soup/pi-coding-agent/tools/report-tool-issue";
+import {
+	__resetAutoQaConsentForTests,
+	resolveAutoQaConsent,
+} from "@oh-my-soup/pi-coding-agent/tools/report-tool-issue";
 import {
 	cfgMarketplaceAutoUpdate,
 	cfgStartupChangelogMode,

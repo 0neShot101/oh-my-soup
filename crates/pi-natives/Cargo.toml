@@ -24,16 +24,20 @@ wayland-pipewire = ["dep:pipewire"]
 
 [dependencies]
 anyhow.workspace = true
+argon2 = "0.6"
 async-trait.workspace = true
 arboard.workspace = true
 ast-grep-core.workspace = true
 base64.workspace = true
+challenge-bypass-ristretto = { version = "2.1", features = ["serde_base64"] }
 clap.workspace = true
 globset.workspace = true
 heapless.workspace = true
 fontdue.workspace = true
 grep-matcher.workspace = true
 futures.workspace = true
+hex = "0.4"
+hmac = "0.12"
 grep-pcre2.workspace = true
 grep-regex.workspace = true
 grep-searcher.workspace = true
@@ -72,10 +76,13 @@ pi-voice.workspace = true
 pi-walker.workspace = true
 portable-pty.workspace = true
 png.workspace = true
+rand = "0.8"
 rayon.workspace = true
 regex.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli"] }
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 smallvec.workspace = true
 syntect.workspace = true
 tokio.workspace = true
@@ -84,6 +91,8 @@ toml.workspace = true
 unicode-normalization.workspace = true
 unicode-properties.workspace = true
 unicode-script.workspace = true
+url = "2.5"
+urlencoding = "2.1"
 xutf.workspace = true
 zstd.workspace = true
 xxhash-rust.workspace = true

@@ -44,6 +44,14 @@ The native user path follows the active profile: with `oms --profile work`, `~/.
 
 The existing plain-text flags keep their resolution rules. For a single-line `--system-prompt` or `--append-system-prompt` value, OMS first tries to read that value as a file path. If reading fails because the path does not exist (or is too long to be a path), the value is used literally. A value containing a newline is used literally without a file read. Other file-read failures are logged and the original value is still used literally. This fallback does **not** apply to `--system-prompt-template`.
 
+### Per-model prompt files (`/sprompt`)
+
+`/sprompt set <file>` binds a readable, non-empty prompt file to the active `provider/model-id`. Its contents replace that model's system prompt; `systemPromptPlacement` still controls the delivery channel.
+
+Paths resolve relative to the session's working directory, not the directory that launched OMS. Absolute paths and `~/` home-relative paths are supported. Paired double quotes are optional and allow inputs such as `/sprompt set "~/.oms/prompts/model prompt.md"`; unquoted spaces also remain part of the path. Single quotes and backslashes remain literal filename characters on Linux, not shell quoting or escapes.
+
+The binding stores the resolved absolute path. `/sprompt` lists bindings, `/sprompt toggle` suspends or re-enables the current model's binding, and `/sprompt clear` removes it.
+
 ## What plain `SYSTEM.md` replaces
 
 `SYSTEM.md` does not become a raw, sole system message. The CLI stores it as `CreateAgentSessionOptions.customSystemPrompt`, and `buildSystemPrompt` renders `custom-system-prompt.md` instead of the default `system-prompt.md`.

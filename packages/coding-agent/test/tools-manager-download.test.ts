@@ -4,7 +4,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as platformUtils from "@oh-my-soup/pi-coding-agent/utils/platform";
-import { downloadFile, ensureTool, getLatestVersion, getToolPath } from "@oh-my-soup/pi-coding-agent/utils/tools-manager";
+import {
+	downloadFile,
+	ensureTool,
+	getLatestVersion,
+	getToolPath,
+} from "@oh-my-soup/pi-coding-agent/utils/tools-manager";
 import * as archiveUtils from "@oh-my-soup/pi-coding-agent/utils/zip";
 import * as utils from "@oh-my-soup/pi-utils";
 import { TempDir } from "@oh-my-soup/pi-utils";
@@ -527,6 +532,7 @@ describe("managed LLVM inspection bundle", () => {
 	it("does not treat uv/pip tools on PATH as managed or install them for localOnly", async () => {
 		using tempDir = TempDir.createSync("@oms-python-local-only-");
 		mockManagedHost(tempDir);
+		vi.spyOn(utils, "getManagedDependencyDir").mockImplementation(name => tempDir.join("dependencies", name));
 		const systemPath = tempDir.join("system", "trafilatura");
 		vi.spyOn(utils, "$which").mockReturnValue(systemPath);
 		const exec = vi.spyOn(utils.ptree, "exec");
@@ -537,5 +543,25 @@ describe("managed LLVM inspection bundle", () => {
 		expect(await ensureTool("trafilatura", { localOnly: true, silent: true })).toBeUndefined();
 		expect(exec).not.toHaveBeenCalled();
 		expect(globalThis.fetch).not.toHaveBeenCalled();
+	});
+
+	it("prefers a private Python executable over PATH and reuses it without installing", async () => {
+		using tempDir = TempDir.createSync("@oms-python-managed-");
+		mockManagedHost(tempDir, process.platform);
+		vi.spyOn(utils, "getManagedDependencyDir").mockImplementation(name => tempDir.join("dependencies", name));
+		vi.spyOn(utils, "$which").mockReturnValue(tempDir.join("system", "trafilatura"));
+		const executable = tempDir.join(
+			"dependencies",
+			"trafilatura",
+			"venv",
+			process.platform === "win32" ? "Scripts" : "bin",
+			process.platform === "win32" ? "trafilatura.exe" : "trafilatura",
+		);
+		await Bun.write(executable, "owned executable fixture");
+		const exec = vi.spyOn(utils.ptree, "exec");
+		expect(getToolPath("trafilatura")).toBe(executable);
+		expect(getToolPath("trafilatura", { localOnly: true })).toBe(executable);
+		expect(await ensureTool("trafilatura", { localOnly: true, silent: true })).toBe(executable);
+		expect(exec).not.toHaveBeenCalled();
 	});
 });

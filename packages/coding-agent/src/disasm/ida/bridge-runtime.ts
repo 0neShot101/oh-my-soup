@@ -2,7 +2,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { gunzipSync } from "node:zlib";
-import { getConfigRootDir, ptree } from "@oh-my-soup/pi-utils";
+import { getConfigRootDir, getManagedPythonEnv, ptree } from "@oh-my-soup/pi-utils";
 import bundleText from "./ida-bridge.bundle.txt" with { type: "text" };
 
 const BUNDLE_FORMAT = 1;
@@ -192,6 +192,7 @@ async function prepareRuntime(
 	env: Record<string, string | undefined>,
 	cwd: string,
 ): Promise<void> {
+	env = getManagedPythonEnv(env);
 	if (runtimeMarkerMatches(runtime) && (await probeRuntime(runtime.python, env, cwd))) return;
 	const parent = path.dirname(runtime.environmentDirectory);
 	fs.mkdirSync(parent, { recursive: true });

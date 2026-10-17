@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseEnv } from "node:util";
-import { getAgentDir, getConfigRootDir, getProjectDir, refreshDirsFromEnv } from "./dirs";
+import { getAgentDir, getConfigRootDir, getManagedDependencyDir, getProjectDir, refreshDirsFromEnv } from "./dirs";
 
 export * from "./worker-host";
 
@@ -64,6 +64,45 @@ export function filterProcessEnv(env: Record<string, string | undefined>): Recor
 		result[key] = value;
 	}
 	return result;
+}
+
+function setDependencyEnvDefault(
+	env: NodeJS.ProcessEnv,
+	name: string,
+	dependency: string,
+	subdir: string,
+	preserveEmpty = false,
+): void {
+	let key = name;
+	if (process.platform === "win32") {
+		for (const candidate in env) {
+			if (candidate.toUpperCase() === name) {
+				key = candidate;
+				break;
+			}
+		}
+	}
+	if (env[key] === undefined || (!preserveEmpty && env[key] === "")) {
+		env[key] = path.join(getManagedDependencyDir(dependency), subdir);
+	}
+}
+
+/** Keep managed Bun installs out of ~/.bun without changing registry configuration or the real home. */
+export function getManagedBunEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	const env = { ...baseEnv };
+	setDependencyEnvDefault(env, "BUN_INSTALL_CACHE_DIR", "bun", "cache");
+	// Bun treats an explicit empty string (or "0") as disabling this cache.
+	setDependencyEnvDefault(env, "BUN_RUNTIME_TRANSPILER_CACHE_PATH", "bun", "transpiler-cache", true);
+	return env;
+}
+
+/** Scoped storage defaults for pip/uv provisioning of OMS-owned Python runtimes. */
+export function getManagedPythonEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	const env = { ...baseEnv };
+	setDependencyEnvDefault(env, "PIP_CACHE_DIR", "pip", "cache");
+	setDependencyEnvDefault(env, "UV_CACHE_DIR", "uv", "cache");
+	setDependencyEnvDefault(env, "UV_PYTHON_INSTALL_DIR", "uv", "python");
+	return env;
 }
 /**
  * Git variables that pin a repository location. They describe the checkout the

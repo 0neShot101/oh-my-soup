@@ -6,7 +6,7 @@
 - Entry: `packages/coding-agent/src/web/search/index.ts`
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/web-search.md`
 - Key collaborators:
-  - `packages/coding-agent/src/web/search/provider.ts` — lazy provider registry; availability chain.
+  - `packages/coding-agent/src/web/search/provider.ts` — provider registry; availability chain.
   - `packages/coding-agent/src/web/search/types.ts` — unified `SearchResponse` / `SearchProviderError` types.
   - `packages/tui/src/tools/web-search.ts` / `web-search-types.ts` — transcript rendering and shared response/provider types.
   - `packages/coding-agent/src/web/search/providers/base.ts` — provider interface and shared params contract.
@@ -16,6 +16,7 @@
   - `packages/coding-agent/src/web/search/providers/browser-page.ts` — shared fetch/headless-browser page loader for scrape providers.
   - `packages/coding-agent/src/web/search/providers/anthropic.ts` — Claude web-search provider.
   - `packages/coding-agent/src/web/search/providers/brave.ts` — Brave Search API adapter.
+  - `packages/coding-agent/src/web/search/providers/celestial.ts` — credential-free Brave/DuckDuckGo search with native parsing and rank fusion.
   - `packages/coding-agent/src/web/search/providers/codex.ts` — OpenAI Codex SSE adapter.
   - `packages/coding-agent/src/web/search/providers/openai.ts` — billed OpenAI API Responses adapter, separate from Codex OAuth.
   - `packages/coding-agent/src/web/search/providers/openrouter.ts` — chat-completions grounding through OpenRouter's web plugin.
@@ -49,7 +50,7 @@
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `query` | `string` | Yes | Raw query. The parser recognizes `site:`/`-site:`, `after:`/`before:`, `inurl:`, `intitle:`, `intext:`, `filetype:`, `lang:`/`language:`, quoted phrases, exclusions, `OR`, and directive aliases. Providers map these to native filters or supported syntax; body/language directives are not central source filters. |
-| `recency` | `"day" \| "week" \| "month" \| "year"` | No | Relative time filter. Implemented by Brave, Perplexity, Parallel, Tavily, SearXNG, Kagi, TinyFish, Firecrawl, DuckDuckGo, Startpage, Google, and Mojeek. Public Web forwards it to its engines; other adapters ignore it. |
+| `recency` | `"day" \| "week" \| "month" \| "year"` | No | Relative time filter. Implemented by Brave, Celestial, Perplexity, Parallel, Tavily, SearXNG, Kagi, TinyFish, Firecrawl, DuckDuckGo, Startpage, Google, and Mojeek. Public Web forwards it to its engines; other adapters ignore it. |
 | `limit` | `number` | No | Max results to return. Usually becomes the provider request's result-count parameter when `num_search_results` is absent. TinyFish uses it for paginated fetches before slicing. xAI uses the collapsed value only as a local cap on parsed sources/citations, defaulting to `10` and max `30`. |
 | `max_tokens` | `number` | No | Token cap passed through by Anthropic, Gemini, OpenAI Responses, xAI, and Perplexity API-key mode. Ignored by the other providers. |
 | `temperature` | `number` | No | Passed through only by Anthropic models that support sampling parameters, Gemini, xAI, and Perplexity API-key mode. Ignored or omitted by the other provider/model paths. |
@@ -214,6 +215,12 @@ Each provider search transport receives a hard timeout from `providers.webSearch
     - Querying: GET `https://api.search.brave.com/res/v1/web/search` with `count`, `extra_snippets=true`, and recency `freshness=pd|pw|pm|py`. Absolute date bounds override recency; safe search defaults to `moderate`. The public tool path does not map `lang:` to Brave's optional language/country fields.
     - `limit` / `num_search_results`: `params.numSearchResults ?? params.limit`, clamped to `1..20`, default `10`.
     - Output: `sources`, `requestId`.
+  - **Celestial** — `packages/coding-agent/src/web/search/providers/celestial.ts`
+    - Availability: no API key; requires the native addon. Select `web/celestial` through the `web` role, an explicit fallback, or `oms q --model web/celestial "…"`. The built-in primary and fallback chain are unchanged.
+    - Queries Brave's public HTML search and DuckDuckGo's script endpoint concurrently. Rust parses both responses, normalizes duplicate URLs, and combines results with reciprocal-rank fusion. The imported Celestial implementation excludes Startpage; the existing independent `web/startpage` adapter is unchanged.
+    - Returns sources and related questions, never a model-generated answer. `num_search_results ?? limit` is clamped to `1..20`, default `10`; recency maps to each engine's date filter.
+    - One failed engine does not discard the other's results; failure of both surfaces their errors. Brave interactive challenges are reported, not solved automatically. Cancellation and the configured provider deadline still apply.
+    - Responses are capped at 2 MiB. DuckDuckGo script continuations are restricted to its HTTPS `/d.js` endpoint and at most five fetches; arbitrary script URLs and HTTP redirects are rejected.
   - **Kimi** — `packages/coding-agent/src/web/search/providers/kimi.ts`
     - Availability: `MOONSHOT_SEARCH_API_KEY`, `KIMI_SEARCH_API_KEY`, or an `agent.db` credential for `kimi-code`. `MOONSHOT_API_KEY` and stored `moonshot` credentials are intentionally rejected because the Open Platform key does not authenticate the Kimi Code search service.
     - Querying: POST to `MOONSHOT_SEARCH_BASE_URL` / `KIMI_SEARCH_BASE_URL` / default `https://api.kimi.com/coding/v1/search` with `text_query`, `limit`, `enable_page_crawling`, `timeout_seconds: 30`.
@@ -269,6 +276,7 @@ Each provider search transport receives a hard timeout from `providers.webSearch
 - Subprocesses / native bindings
   - Most HTTP/API adapters spawn nothing. Google, Ecosia, and Mojeek first try a plain fetch, but failed, non-2xx, or challenged production responses can acquire the project-shared broker-owned headless Chromium. Hosts without a CLI worker entry (such as an embedded SDK host) instead launch process-local Chromium.
   - This fallback can start a Chromium process and create its browser-profile lifecycle. On first browser use it can also download Chromium into the oms Puppeteer cache unless a system Chromium or `PUPPETEER_EXECUTABLE_PATH` is available. The search adapter itself uses no native binding.
+  - Celestial calls `@oh-my-soup/pi-natives` for Brave/devalue parsing, DuckDuckGo script interpretation, URL normalization, and rank fusion. Its search transport uses the shared bounded HTTP reader, not a browser or subprocess.
 - Session state (transcript, memory, jobs, checkpoints, registries)
   - Uses a module-global provider-instance cache in `packages/coding-agent/src/web/search/provider.ts`.
   - `packages/coding-agent/src/tools/index.ts` gates tool availability behind `cfgWebSearchEnabled.get(session.settings)` (`web_search.enabled`, defined in `packages/coding-agent/src/tools/settings.ts`).
@@ -312,9 +320,9 @@ Each provider search transport receives a hard timeout from `providers.webSearch
 
 ## Notes
 - The model-facing schema does not expose a provider or model; CLI/internal callers can pin one through `SearchQueryParams.model`.
-- `executeSearch()` loads provider modules lazily as the chain reaches them. Provider instances are cached per id (`packages/coding-agent/src/web/search/provider.ts`), and asking for labels via `getSearchProviderLabel()` does not trigger imports.
+- `executeSearch()` caches provider instances per id (`packages/coding-agent/src/web/search/provider.ts`). Most adapters load lazily as the chain reaches them; Celestial uses a static native-addon import.
 - Most providers treat `limit` and `num_search_results` as the same number because adapters pass `params.numSearchResults ?? params.limit`. Perplexity preserves both concepts. TinyFish uses the collapsed value as a local cap, serializes `num_results` per page, and paginates when more results are needed. xAI uses it only to cap parsed sources/citations (`10` default, `30` max).
-- `recency` has native or engine-query mappings in Brave, Perplexity, Parallel, Tavily, SearXNG, Kagi, TinyFish, Firecrawl, DuckDuckGo, Startpage, Google, and Mojeek. xAI retains absolute query dates as hints but ignores the separate recency field; Ecosia ignores it. Public Web forwards the request to its engines.
+- `recency` has native or engine-query mappings in Brave, Celestial, Perplexity, Parallel, Tavily, SearXNG, Kagi, TinyFish, Firecrawl, DuckDuckGo, Startpage, Google, and Mojeek. xAI retains absolute query dates as hints but ignores the separate recency field; Ecosia ignores it. Public Web forwards the request to its engines.
 - `SEARCH_PROVIDER_LABELS` in `packages/tui/src/tools/web-search-types.ts` is the id→label registry for every search implementation (engines and groundings); provider ids, `SearchResponse`, and the transcript renderer all derive from it. Selection itself lives only in the `web` model role.
 - The credential-free scrapers close the auto chain: Startpage and DuckDuckGo precede the browser-backed Ecosia, Google, and Mojeek paths; `public` is listed last and never auto-selected.
 - `/login exa` stores the pasted key in AuthStorage; Exa resolves stored or environment credentials before the unauthenticated `https://mcp.exa.ai/mcp` fallback.

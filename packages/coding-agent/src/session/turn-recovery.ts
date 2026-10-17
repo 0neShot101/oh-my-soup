@@ -2,6 +2,8 @@ import {
 	type Agent,
 	AgentBusyError,
 	type AgentMessage,
+	isCyberRefusalMessage,
+	isProviderRefusalMessage,
 	isSyntheticToolResultMessage,
 	type ThinkingLevel,
 } from "@oh-my-soup/pi-agent-core";
@@ -358,6 +360,7 @@ export class TurnRecovery {
 	#unexpectedStopRetryCount = 0;
 	#malformedFunctionCallRetryCount = 0;
 	#streamStallContinueCount = 0;
+	#cyberRefusalRetryCount = 0;
 	#acceptTerminalEmptyStopForPrompt = false;
 	// Three fields sit near the word "serve" and are deliberately distinct:
 	// `#activeRetryFallback.served` gates the one-shot `retry_fallback_succeeded`
@@ -496,6 +499,7 @@ export class TurnRecovery {
 		this.#unexpectedStopRetryCount = 0;
 		this.#malformedFunctionCallRetryCount = 0;
 		this.#streamStallContinueCount = 0;
+		this.#cyberRefusalRetryCount = 0;
 		this.#acceptTerminalEmptyStopForPrompt = false;
 		this.#activeFallbackCreditRedemption = undefined;
 	}
@@ -534,6 +538,7 @@ export class TurnRecovery {
 		// shake-and-retry. Back-to-back timeouts never reach this point, so the
 		// one-shot bound on an unchanged-request loop is unaffected.
 		this.#requestBodyReadTimeoutRecoveryPromptSequence = undefined;
+		this.#cyberRefusalRetryCount = 0;
 		const model = this.#host.model();
 		if (model) {
 			const level = this.#host.thinkingLevel();
@@ -730,6 +735,11 @@ export class TurnRecovery {
 	/** Removes a persisted failed assistant turn after its persistence slot settles; returns the dropped branch entry id. */
 	dropPersistedAssistantTurn(message: AssistantMessage): Promise<string | undefined> {
 		return this.#dropPersistedAssistantTurn(message);
+	}
+
+	/** Removes a cyber refusal (or strips its refusal reason when tool calls ran) and continues the turn once. */
+	handleCyberRefusalStop(message: AssistantMessage): Promise<boolean> {
+		return this.#handleCyberRefusalStop(message);
 	}
 
 	/** Runs recovery compaction and restores the failed turn when no rewrite occurs. */
@@ -1220,6 +1230,16 @@ export class TurnRecovery {
 			this.#host.agent.replaceMessages(messages.slice(0, -1));
 			return;
 		}
+		const turnEnd = syntheticToolResultTailStart(messages);
+		const anchor = messages[turnEnd - 1];
+		if (
+			turnEnd < messages.length &&
+			anchor?.role === "assistant" &&
+			this.#isSameAssistantMessage(anchor, assistantMessage)
+		) {
+			this.#host.agent.replaceMessages(messages.slice(0, turnEnd - 1));
+			return;
+		}
 		// A miss means the failed turn is still in active context (or was never
 		// there); log just enough to explain why the identity check failed.
 		logger.debug("agent active context assistant removal missed", {
@@ -1230,6 +1250,47 @@ export class TurnRecovery {
 			candidateStopReason: assistantMessage.stopReason,
 			lastStopReason: lastAssistant?.stopReason,
 		});
+	}
+
+	#stripRefusalReasonFromActiveContext(assistantMessage: AssistantMessage): void {
+		assistantMessage.errorMessage = undefined;
+		assistantMessage.stopDetails = undefined;
+		const messages = this.#host.agent.state.messages;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const candidate = messages[i];
+			if (
+				candidate.role === "assistant" &&
+				(candidate === assistantMessage || this.#isSameAssistantMessage(candidate, assistantMessage))
+			) {
+				candidate.errorMessage = undefined;
+				candidate.stopDetails = undefined;
+				break;
+			}
+		}
+	}
+
+	async #handleCyberRefusalStop(message: AssistantMessage): Promise<boolean> {
+		if (!isCyberRefusalMessage(message)) return false;
+		if (this.#host.abortInProgress() || this.#host.isDisposed()) return false;
+		if (!this.autoRetryEnabled) return false;
+		if (this.#cyberRefusalRetryCount > 0 || this.#refusalWalkTried.size > 1) return false;
+		const maxRetries = cfgRetry.get(this.#host.settings).maxRetries;
+		const hasToolCalls = message.content.some(block => block.type === "toolCall");
+		if (!hasToolCalls && maxRetries <= 0) return false;
+
+		this.#cyberRefusalRetryCount++;
+		const generation = this.#host.promptGeneration();
+		if (hasToolCalls && !this.#unexecutedToolCallsReplaySafe(message)) {
+			this.#stripRefusalReasonFromActiveContext(message);
+		} else {
+			await this.#dropAssistantTurnDurably(message);
+		}
+		this.#host.scheduleAgentContinue({
+			source: "cyber-refusal-retry",
+			delayMs: 1,
+			generation,
+		});
+		return true;
 	}
 
 	/**
@@ -1523,11 +1584,19 @@ export class TurnRecovery {
 		// proof that it never executed.
 		const replaySafeUnexecutedTools =
 			(this.isClassifierRefusal(message) ||
+				isProviderRefusalMessage(message) ||
+				AIError.is(id, AIError.Flag.AccountPolicy) ||
 				AIError.is(id, AIError.Flag.MalformedFunctionCall) ||
 				AIError.retriable(id)) &&
 			this.#unexecutedToolCallsReplaySafe(message);
 		if (this.#hasReplayUnsafeOutput(message) && !replaySafeUnexecutedTools) return false;
-		if (AIError.is(id, AIError.Flag.AccountPolicy) || this.isClassifierRefusal(message)) return true;
+		if (
+			AIError.is(id, AIError.Flag.AccountPolicy) ||
+			this.isClassifierRefusal(message) ||
+			isCyberRefusalMessage(message)
+		) {
+			return true;
+		}
 		return AIError.retriable(id);
 	}
 
@@ -2555,13 +2624,18 @@ export class TurnRecovery {
 
 		const errorMessage = message.errorMessage || "Unknown error";
 		const id = this.#classifyRetryMessage(message);
+		const accountPolicyDenial = AIError.is(id, AIError.Flag.AccountPolicy);
+		const cyberRefusal = isCyberRefusalMessage(message);
 		const preserveFailedTurn =
 			options?.preserveFailedTurn === true ||
-			((classifierRefusal || AIError.is(id, AIError.Flag.MalformedFunctionCall) || AIError.retriable(id)) &&
+			((classifierRefusal ||
+				accountPolicyDenial ||
+				cyberRefusal ||
+				AIError.is(id, AIError.Flag.MalformedFunctionCall) ||
+				AIError.retriable(id)) &&
 				this.#unexecutedToolCallsReplaySafe(message));
 		const rateLimitReason = parseRateLimitReason(errorMessage);
 		const staleOpenAIResponsesReplayError = AIError.is(id, AIError.Flag.StaleResponsesItem);
-		const accountPolicyDenial = AIError.is(id, AIError.Flag.AccountPolicy);
 		const recordedUsageLimitOutcome = await this.#usageLimitOutcomes.get(message);
 		const parsedRetryAfterMs = this.#parseRetryAfterMsFromError(errorMessage);
 		let delayMs = staleOpenAIResponsesReplayError
@@ -2828,7 +2902,9 @@ export class TurnRecovery {
 		if (retryBudgetExhausted) {
 			if (!switchedModel && !switchedCredential) {
 				const attempt = this.#retryAttempt - 1;
-				message.errorMessage = `Retry budget exhausted after ${attempt} ${attempt === 1 ? "retry" : "retries"}: ${errorMessage}`;
+				if (!cyberRefusal || this.#cyberRefusalRetryCount === 0) {
+					message.errorMessage = `Retry budget exhausted after ${attempt} ${attempt === 1 ? "retry" : "retries"}: ${errorMessage}`;
+				}
 				await this.#closeRetrySaga(
 					{ success: false, attempt, finalError: errorMessage },
 					{ terminalTurn: message, retryErrors: { status: "superseded" } },
@@ -2840,7 +2916,16 @@ export class TurnRecovery {
 			// same-route budget: every distinct account must be tried first.
 			if (switchedModel) this.#retryAttempt = 1;
 		}
-		if ((classifierRefusal || accountPolicyDenial) && !switchedCredential && !switchedModel) {
+		const allowSameModelCyberContinue =
+			cyberRefusal &&
+			!retryBudgetExhausted &&
+			this.#retryAttempt === 1 &&
+			this.#refusalWalkTried.size <= 1 &&
+			this.#cyberRefusalRetryCount === 0;
+		if (allowSameModelCyberContinue && !switchedCredential && !switchedModel) {
+			this.#cyberRefusalRetryCount++;
+			delayMs = 0;
+		} else if ((classifierRefusal || accountPolicyDenial || cyberRefusal) && !switchedCredential && !switchedModel) {
 			// A prior attempt in this saga already announced `auto_retry_start`
 			// (retryAttempt was incremented for each call to this method, so > 1
 			// means at least one earlier attempt started the loop) but this
@@ -2938,6 +3023,8 @@ export class TurnRecovery {
 		// synthetic results and cannot repeat a side effect.
 		if (!preserveFailedTurn) {
 			this.removeAssistantMessageFromActiveContext(message, "auto-retry");
+		} else if (classifierRefusal || accountPolicyDenial || cyberRefusal) {
+			this.#stripRefusalReasonFromActiveContext(message);
 		}
 
 		// A thinking/response loop retried into identical context loops again. Inject a

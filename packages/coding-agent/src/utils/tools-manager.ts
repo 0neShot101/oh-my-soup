@@ -1,9 +1,23 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $env, $which, getToolsDir, isEnoent, logger, ptree, TempDir, USER_AGENT } from "@oh-my-soup/pi-utils";
+import {
+	$env,
+	$which,
+	getManagedDependencyDir,
+	getManagedPythonEnv,
+	getProjectDir,
+	getToolsDir,
+	isEnoent,
+	logger,
+	ptree,
+	TempDir,
+	USER_AGENT,
+	withFileLock,
+} from "@oh-my-soup/pi-utils";
 import { extractArchive } from "@oh-my-soup/pi-utils/ar";
 import { type DownloadTracker, trackDownload, withDownload } from "../downloads/activity";
+import { resolvePythonRuntime } from "../eval/py/runtime";
 import { isMuslLinux } from "./platform";
 import { extractTarGzArchive } from "./zip";
 
@@ -169,6 +183,17 @@ const PYTHON_TOOLS: Record<string, PythonPackageToolConfig> = {
 		binaryName: "trafilatura",
 	},
 };
+
+function pythonToolPaths(config: PythonPackageToolConfig): { directory: string; python: string; binary: string } {
+	const directory = path.join(getManagedDependencyDir(config.name), "venv");
+	const windows = os.platform() === "win32";
+	const bin = path.join(directory, windows ? "Scripts" : "bin");
+	return {
+		directory,
+		python: path.join(bin, windows ? "python.exe" : "python"),
+		binary: path.join(bin, config.binaryName + (windows ? ".exe" : "")),
+	};
+}
 
 const LLVM_TOOLS_VERSION = "1.98.1";
 const LLVM_TOOLS_DIST = "https://static.rust-lang.org/dist/2026-09-03";
@@ -448,9 +473,11 @@ export function getToolPath(tool: ToolName, options?: { localOnly?: boolean }): 
 		const managed = asset ? managedLlvmPath(tool, asset) : null;
 		return managed ?? (options?.localOnly ? null : $which(`llvm-${tool}`));
 	}
-	// Check uv/pip-installed CLI packages first
+	// Owned Python environments take precedence; user-installed tools remain a fallback.
 	const pythonConfig = PYTHON_TOOLS[tool];
 	if (pythonConfig) {
+		const managed = pythonToolPaths(pythonConfig).binary;
+		if (fs.existsSync(managed)) return managed;
 		return options?.localOnly ? null : $which(pythonConfig.binaryName);
 	}
 
@@ -629,38 +656,45 @@ async function downloadTool(
 	return binaryPath;
 }
 
-// Install a Python package via uv (preferred) or pip
-async function installPythonPackage(pkg: string, signal?: AbortSignal): Promise<boolean> {
+// Provision a private venv; never install into the user's Python or executable directories.
+async function installPythonPackage(pkg: PythonPackageToolConfig, signal?: AbortSignal): Promise<boolean> {
 	if (signal?.aborted) return false;
+	const managed = pythonToolPaths(pkg);
+	const env = getManagedPythonEnv();
+	const options = { env, signal, allowNonZero: true, allowAbort: true, stderr: "full" as const };
 	try {
-		// Try uv first (faster, better isolation)
-		const uv = $which("uv");
-		if (uv) {
-			const result = await ptree.exec([uv, "tool", "install", pkg], {
-				signal,
-				allowNonZero: true,
-				allowAbort: true,
-				stderr: "full",
-			});
-			if (result.exitCode === 0) return true;
-			if (signal?.aborted) return false;
-		}
+		await fs.promises.mkdir(path.dirname(managed.directory), { recursive: true });
+		return await withFileLock(
+			`${managed.directory}.install`,
+			async () => {
+				if (fs.existsSync(managed.binary)) return true;
+				const uv = $which("uv");
+				if (uv) {
+					const venv = await ptree.exec([uv, "venv", managed.directory], options);
+					if (signal?.aborted) return false;
+					if (venv.exitCode === 0) {
+						const result = await ptree.exec(
+							[uv, "pip", "install", "--python", managed.python, pkg.package],
+							options,
+						);
+						if (result.exitCode === 0) return true;
+						if (signal?.aborted) return false;
+					}
+				}
 
-		// Fall back to pip
-		const pip = $which("pip3") || $which("pip");
-		if (pip) {
-			const result = await ptree.exec([pip, "install", "--user", pkg], {
-				signal,
-				allowNonZero: true,
-				allowAbort: true,
-				stderr: "full",
-			});
-			return result.exitCode === 0;
-		}
-
-		return false;
+				const runtime = resolvePythonRuntime(getProjectDir(), env);
+				const venv = await ptree.exec([runtime.pythonPath, "-m", "venv", managed.directory], options);
+				if (venv.exitCode !== 0 || signal?.aborted) return false;
+				const result = await ptree.exec(
+					[managed.python, "-m", "pip", "install", "--disable-pip-version-check", pkg.package],
+					options,
+				);
+				return result.exitCode === 0;
+			},
+			{ signal, retries: 240, retryDelayMs: 250 },
+		);
 	} catch (error) {
-		logger.warn(`Failed to install Python package ${pkg}`, {
+		logger.warn(`Failed to install Python package ${pkg.package}`, {
 			error: error instanceof Error ? error.message : String(error),
 		});
 		return false;
@@ -717,27 +751,26 @@ export async function ensureTool(tool: ToolName, silentOrOptions?: EnsureToolOpt
 	// Handle uv/pip-installed CLI packages
 	const pythonConfig = PYTHON_TOOLS[tool];
 	if (pythonConfig) {
-		// uv/pip install outside the managed tools directory; they cannot satisfy localOnly.
+		// localOnly may reuse an owned environment, but never provisions Python tools.
 		if (localOnly) return undefined;
 		if (!silent) {
 			logger.debug(`${pythonConfig.name} not found. Installing via uv/pip...`);
 		}
 		notify?.(`Installing ${pythonConfig.name}…`);
 		const tracker = trackDownload(pythonConfig.name, { detail: "installing" });
-		const success = await installPythonPackage(pythonConfig.package, signal);
+		const success = await installPythonPackage(pythonConfig, signal);
 		if (signal?.aborted) {
 			tracker.done();
 			return undefined;
 		}
 		if (success) {
-			// Re-check for the command after installation
-			const path = $which(pythonConfig.binaryName);
-			if (path) {
+			const installedPath = getToolPath(tool, { localOnly: true });
+			if (installedPath) {
 				tracker.done();
 				if (!silent) {
 					logger.debug(`${pythonConfig.name} installed successfully`);
 				}
-				return path;
+				return installedPath;
 			}
 		}
 		tracker.fail(new Error(`could not install ${pythonConfig.package} with uv or pip`));

@@ -37,6 +37,8 @@ import {
 	type BeforeToolCallContext,
 	type BeforeToolCallResult,
 	EventLoopKeepalive,
+	filterProviderReplayMessages,
+	isProviderRefusalMessage,
 	type QueuedMessagePreparation,
 	type QueuedMessageQueue,
 	resolveTelemetry,
@@ -2240,7 +2242,7 @@ export class AgentSession implements SettingsScope {
 			}
 			return thunks;
 		});
-		this.#convertToLlm = config.convertToLlm ?? convertToLlm;
+		this.#convertToLlm = config.convertToLlm ?? (messages => filterProviderReplayMessages(convertToLlm(messages)));
 		this.getXdevToolEntries = config.getXdevToolEntries ?? (() => []);
 		const sessionToolsHost: SessionToolsHost = {
 			agent: this.agent,
@@ -3917,7 +3919,7 @@ export class AgentSession implements SettingsScope {
 		if (this.#sessionMessageAlreadyPersisted(message)) return;
 		if (message.role === "assistant") {
 			const assistantMsg = message as AssistantMessage;
-			if (this.#recovery.isClassifierRefusal(assistantMsg)) return;
+			if (this.#recovery.isClassifierRefusal(assistantMsg) || isProviderRefusalMessage(assistantMsg)) return;
 			if (isEmptyErrorTurn(assistantMsg)) return;
 			if (assistantMsg.contextSnapshot?.importantNotesTokens === undefined) {
 				this.#captureAssistantContextSnapshot(assistantMsg);
@@ -4835,16 +4837,20 @@ export class AgentSession implements SettingsScope {
 					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
+			} else if (!requestBodyTimeoutTerminal && (await this.#recovery.handleCyberRefusalStop(msg))) {
+				maintenanceRoute("cyber-refusal-continued");
+				await emitAgentEndNotification({ willContinue: true });
+				return;
 			}
-			// Classifier refusals are persisted-skipped above; also prune the trailing
-			// stub from active context so the next turn's prompt does not replay it.
-			// Keep a reference for post-settle readers (print mode, task executor via
-			// getLastAssistantMessage) — pruning made the terminal error invisible to
-			// anything inspecting agent state after prompt() resolved.
+			// Classifier and provider refusals are persisted-skipped above; also prune
+			// the trailing stub from active context so the next turn's prompt does not
+			// replay it. Keep a reference for post-settle readers (print mode, task
+			// executor via getLastAssistantMessage) — pruning made the terminal error
+			// invisible to anything inspecting agent state after prompt() resolved.
 			// Fall through to the standard error tail so `session_stop` hooks (block,
 			// continue, telemetry) still fire — matching the pre-fix flow for
 			// `stopReason === "error"`.
-			if (this.#recovery.isClassifierRefusal(msg)) {
+			if (this.#recovery.isClassifierRefusal(msg) || isProviderRefusalMessage(msg)) {
 				this.#prunedTerminalFailure = msg;
 				this.#recovery.removeAssistantMessageFromActiveContext(msg);
 			} else if (!AIError.isContextOverflow(msg, this.model?.contextWindow ?? 0)) {

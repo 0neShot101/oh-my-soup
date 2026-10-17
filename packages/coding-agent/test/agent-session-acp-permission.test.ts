@@ -25,7 +25,10 @@ import { convertToLlm } from "@oh-my-soup/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-soup/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-soup/pi-coding-agent/tools/bash";
-import { computerTurnInFlight, registerComputerController } from "@oh-my-soup/pi-coding-agent/tools/computer/supervisor";
+import {
+	computerTurnInFlight,
+	registerComputerController,
+} from "@oh-my-soup/pi-coding-agent/tools/computer/supervisor";
 import { dispatchXdevTool, resolveMountedXdevExecutable, type XdevState } from "@oh-my-soup/pi-coding-agent/tools/xdev";
 import { TempDir } from "@oh-my-soup/pi-utils";
 

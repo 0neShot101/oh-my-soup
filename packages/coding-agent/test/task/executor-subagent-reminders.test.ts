@@ -1336,6 +1336,84 @@ describe("runSubprocess yield reminders", () => {
 		expect(errorSpy).not.toHaveBeenCalledWith("Subagent prompt failed", expect.anything());
 		expect(debugSpy).toHaveBeenCalledWith("Subagent prompt aborted");
 	});
+
+	it("attempts the next turn after stripping a cyber refusal and reports 'failure' if cyber refused again", async () => {
+		const cyberError =
+			"Codex error event: This content was flagged for possible cybersecurity risk. Join Trusted Access for Cyber. (code=cyber_policy)";
+		let recoveredPrompts = 0;
+		const recoveredSession = createMockSession(({ emit, state }) => {
+			recoveredPrompts += 1;
+			if (recoveredPrompts === 1) {
+				const refused: AssistantMessage = {
+					...createAssistantStopMessage(""),
+					stopReason: "error",
+					errorMessage: cyberError,
+				};
+				state.messages.push(refused);
+				emit({
+					type: "auto_retry_start",
+					attempt: 1,
+					maxAttempts: 2,
+					delayMs: 0,
+					errorMessage: cyberError,
+				});
+				return;
+			}
+			expect(JSON.stringify(state.messages)).not.toContain("cyber_policy");
+			state.messages.push(createAssistantStopMessage("completed after retry"));
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-yield-after-cyber",
+				toolName: "yield",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: "recovered result" },
+				},
+				isError: false,
+			});
+		});
+
+		mockCreateAgentSession(recoveredSession);
+		const recovered = await runSubprocess({
+			...baseOptions,
+			id: "subagent-cyber-recover",
+		});
+		expect(recoveredPrompts).toBe(2);
+		expect(recovered.exitCode).toBe(0);
+		expect(recovered.error).toBeUndefined();
+		expect(recovered.retryFailure).toBeUndefined();
+		expect(recovered.output).toContain("recovered result");
+
+		let failedPrompts = 0;
+		const failedSession = createMockSession(({ emit, state }) => {
+			failedPrompts += 1;
+			const refused: AssistantMessage = {
+				...createAssistantStopMessage(""),
+				stopReason: "error",
+				stopDetails: { type: "refusal", category: "cyber", explanation: "Declined." },
+				errorMessage: "Refusal (cyber): Declined.",
+			};
+			state.messages.push(refused);
+			emit({
+				type: "auto_retry_end",
+				success: false,
+				attempt: 1,
+				finalError: "Refusal (cyber): Declined.",
+			});
+		});
+
+		mockCreateAgentSession(failedSession);
+		const failed = await runSubprocess({
+			...baseOptions,
+			id: "subagent-cyber-fail",
+		});
+		expect(failedPrompts).toBe(2);
+		expect(failed.exitCode).toBe(1);
+		expect(failed.error).toBe("failure");
+		expect(failed.stderr).toBe("failure");
+		expect(failed.retryFailure).toBeUndefined();
+		expect(JSON.stringify(failed)).not.toContain("Refusal (cyber)");
+	});
 });
 
 describe("runSubprocess telemetry propagation", () => {

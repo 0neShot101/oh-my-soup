@@ -1,6 +1,6 @@
 /** Provider-facing message, image, secret, and stream normalization for a session. */
 
-import type { Agent, AgentMessage } from "@oh-my-soup/pi-agent-core";
+import { type Agent, type AgentMessage, filterProviderReplayMessages } from "@oh-my-soup/pi-agent-core";
 import type { CompactionPreparation } from "@oh-my-soup/pi-agent-core/compaction";
 import type {
 	AssistantMessage,
@@ -207,7 +207,7 @@ export class SessionProviderBoundary {
 
 	/** Converts side-request messages through the session's secret boundary. */
 	convertToLlmForSideRequest(messages: AgentMessage[]): Message[] {
-		const converted = convertToLlm(messages);
+		const converted = filterProviderReplayMessages(convertToLlm(messages));
 		const obfuscator = this.#host.obfuscator();
 		return obfuscator ? obfuscateMessages(obfuscator, converted) : converted;
 	}

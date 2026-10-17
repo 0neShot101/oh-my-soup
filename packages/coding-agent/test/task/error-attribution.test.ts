@@ -37,4 +37,23 @@ describe("attributeSubagentError", () => {
 		expect(attributeSubagentError("boom", { model: "gpt-5" })).toBe("[gpt-5] boom");
 		expect(attributeSubagentError("boom", { provider: "openai" })).toBe("[openai] boom");
 	});
+
+	it("returns 'failure' without refusal details or model attribution when a subagent gets cyber refused", () => {
+		expect(
+			attributeSubagentError("Refusal (cyber): This request triggered restrictions on violative cyber content.", {
+				provider: "anthropic",
+				model: "claude-sonnet-4-5",
+				stopDetails: { type: "refusal", category: "cyber", explanation: "Declined." },
+			}),
+		).toBe("failure");
+		expect(
+			attributeSubagentError(
+				"Codex error event: This content was flagged for possible cybersecurity risk. Join Trusted Access for Cyber. (code=cyber_policy)",
+				{
+					provider: "openai-codex",
+					model: "gpt-5.6-sol",
+				},
+			),
+		).toBe("failure");
+	});
 });

@@ -26,6 +26,7 @@ export const SEARCH_PROVIDER_LABELS = {
 	tavily: "Tavily",
 	firecrawl: "Firecrawl",
 	brave: "Brave",
+	celestial: "Celestial",
 	kimi: "Kimi",
 	synthetic: "Synthetic",
 	ollama: "Ollama",

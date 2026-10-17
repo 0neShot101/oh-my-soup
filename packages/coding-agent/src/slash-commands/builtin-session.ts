@@ -17,6 +17,7 @@ import { getEditorCommand, openInEditor } from "../utils/external-editor";
 import { completeSimple, retryTransientCompletion } from "@oh-my-soup/pi-ai";
 import { logger, prompt } from "@oh-my-soup/pi-utils";
 import { collectOnlineTinyCandidates } from "../tiny/online-candidates";
+import { expandPath, stripOuterDoubleQuotes } from "../tools/path-utils";
 import searchNotesTemplate from "../prompts/system/important-notes-search.md" with { type: "text" };
 import searchNotesInputTemplate from "../prompts/system/important-notes-search-input.md" with { type: "text" };
 import { findBeadsWorkspaceRoot, NativeBeadsRepository } from "../beads/repository";
@@ -423,12 +424,12 @@ async function handleSpromptCommand(
 			await output("No active model to bind a prompt file to.");
 			return;
 		}
-		const fileArg = rest.trim();
+		const fileArg = stripOuterDoubleQuotes(rest.trim());
 		if (!fileArg) {
 			await output("Usage: /sprompt set <file>");
 			return;
 		}
-		const absolute = path.resolve(session.sessionManager.getCwd(), fileArg);
+		const absolute = path.resolve(session.sessionManager.getCwd(), expandPath(fileArg));
 		let text = "";
 		try {
 			text = (await Bun.file(absolute).text()).trim();

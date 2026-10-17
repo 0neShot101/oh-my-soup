@@ -1,14 +1,10 @@
+import { CelestialProvider } from "./providers/celestial";
 import { getSearchProviderLabel, SearchProviderError } from "./types";
 
 // Lazy registry of web search providers.
 //
-// Each provider is loaded on first use; importing this module loads zero
-// provider implementations. Provider modules are heavy (each pulls in
-// fetch/parse/format helpers) and only one — at most — is needed per session,
-// so eager construction was wasted work at startup.
-//
-// Search modules stay behind dynamic imports; provider metadata is a separate
-// lightweight contract so UI listings do not load implementations.
+// Legacy provider implementations load on first use. Celestial is a native
+// adapter imported statically; it opens no clients or browser sessions here.
 
 import type { SearchProvider } from "./providers/base";
 import type { WebSearchGrounding } from "@oh-my-soup/pi-catalog/types";
@@ -18,10 +14,8 @@ export type { SearchParams } from "./providers/base";
 export { SearchProvider } from "./providers/base";
 
 /**
- * Search-first-use boundary: every provider module (and its HTTP/MCP/browser
- * dependencies) loads only when a search actually selects it, so the ~40
- * provider modules stay out of interactive startup. Instances are memoized
- * per id, matching the previous singleton-per-provider behavior.
+ * Instances are memoized per id. Legacy HTTP/MCP/browser implementations
+ * remain deferred until selected.
  */
 type ProviderLoader = () => Promise<SearchProvider>;
 
@@ -37,6 +31,7 @@ const PROVIDER_LOADERS: ProviderRegistry<SearchEngineId> = {
 	tavily: () => import("./providers/tavily").then(m => new m.TavilyProvider()),
 	firecrawl: () => import("./providers/firecrawl").then(m => new m.FirecrawlProvider()),
 	brave: () => import("./providers/brave").then(m => new m.BraveProvider()),
+	celestial: async () => new CelestialProvider(),
 	kimi: () => import("./providers/kimi").then(m => new m.KimiProvider()),
 	parallel: () => import("./providers/parallel").then(m => new m.ParallelProvider()),
 	synthetic: () => import("./providers/synthetic").then(m => new m.SyntheticProvider()),

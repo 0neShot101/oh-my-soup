@@ -6,6 +6,10 @@
 
 - Added `sanitizeTextDeep()`, which applies `sanitizeText()` to every string in a JSON-shaped value without mutating it ([#15963](https://github.com/can1357/oh-my-pi/issues/15963))
 
+### Changed
+
+- Managed runtime installations now keep Bun caches under the active OMS config root while respecting explicit cache overrides.
+
 ### Fixed
 
 - Fixed Windows archive extraction overwriting existing files or following existing symlinks when copying a symlink entry without symlink privileges ([#15931](https://github.com/can1357/oh-my-pi/pull/15931) by [@jchanghong023](https://github.com/jchanghong023)).

@@ -139,6 +139,68 @@ describe("assistant refusal replay policy", () => {
 		expect(JSON.stringify(replayed)).not.toContain("Refusal (cyber)");
 		expect(JSON.stringify(replayed)).not.toContain("blocked by policy");
 	});
+
+	it("drops Codex cyber_policy refusals and strips their synthetic tool result reason on replay", () => {
+		const cyberPolicyError =
+			"Codex error event: This content was flagged for possible cybersecurity risk. Join Trusted Access for Cyber. (code=cyber_policy)";
+		const messages: AgentMessage[] = [
+			{ role: "user", content: [{ type: "text", text: "inspect binary" }], timestamp: 1 },
+			{
+				role: "assistant",
+				content: [{ type: "thinking", thinking: "Checking request." }],
+				stopReason: "error",
+				errorMessage: cyberPolicyError,
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+				model: "gpt-5.6-sol",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: 2,
+			},
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.bin" } }],
+				stopReason: "error",
+				errorMessage: cyberPolicyError,
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+				model: "gpt-5.6-sol",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: 3,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "call-1",
+				toolName: "read",
+				isError: true,
+				content: [
+					{
+						type: "text",
+						text: `Tool call was not executed because the provider stream ended with an error before the tool could run: ${cyberPolicyError}`,
+					},
+				],
+				timestamp: 4,
+			},
+		];
+
+		const replayed = filterProviderReplayMessages(convertToLlm(messages));
+		expect(replayed.map(message => message.role)).toEqual(["user", "assistant", "toolResult"]);
+		expect(JSON.stringify(replayed)).not.toContain("cyber_policy");
+		expect(JSON.stringify(replayed)).not.toContain("cybersecurity risk");
+	});
 });
 
 describe("convertToLlm custom message mapping", () => {

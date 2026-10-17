@@ -28,6 +28,7 @@ export const SEARCH_PROVIDER_ORDER: readonly SearchProviderId[] = [
 	"tavily",
 	"firecrawl",
 	"brave",
+	"celestial",
 	"kimi",
 	"synthetic",
 	"ollama",

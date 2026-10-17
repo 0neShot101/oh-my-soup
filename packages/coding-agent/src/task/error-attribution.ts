@@ -13,7 +13,7 @@
  */
 
 /** Minimal shape of the assistant message a failed turn leaves behind. */
-import { isProviderRefusalErrorMessage } from "@oh-my-soup/pi-agent-core";
+import { isCyberRefusalErrorMessage, isProviderRefusalErrorMessage } from "@oh-my-soup/pi-agent-core";
 import type { StopDetails } from "@oh-my-soup/pi-ai";
 
 export interface FailedAssistantModelInfo {
@@ -37,9 +37,10 @@ export function attributeSubagentError(
 		source?.stopDetails?.type === "refusal" ||
 		source?.stopDetails?.type === "sensitive" ||
 		source?.stopDetails?.type === "content_filter" ||
+		isCyberRefusalErrorMessage(message) ||
 		isProviderRefusalErrorMessage(message);
-	const sanitized = isRefusal ? undefined : message;
-	const text = sanitized?.trim() ? sanitized : fallback;
+	if (isRefusal) return "failure";
+	const text = message?.trim() ? message : fallback;
 	const provider = source?.provider?.trim() || undefined;
 	const model = source?.model?.trim() || undefined;
 	const identity = provider && model ? `${provider}/${model}` : (provider ?? model);

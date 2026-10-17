@@ -29,7 +29,10 @@ import { parseModelString } from "@oh-my-soup/pi-tui/overlays/model-selector";
 import { parseModelPattern } from "@oh-my-soup/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
 import { editVariantForModel } from "@oh-my-soup/pi-coding-agent/utils/edit-mode";
-import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-soup/pi-coding-agent/extensibility/extensions/loader";
+import {
+	ExtensionRuntime,
+	loadExtensionFromFactory,
+} from "@oh-my-soup/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-soup/pi-coding-agent/extensibility/extensions/runner";
 import { initTheme } from "@oh-my-soup/pi-tui/theme";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-soup/pi-coding-agent/session/agent-session";
@@ -39,7 +42,10 @@ import {
 	validateRetryFallbackChains,
 } from "@oh-my-soup/pi-coding-agent/session/retry-fallback-chains";
 import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
-import { computerTurnInFlight, registerComputerController } from "@oh-my-soup/pi-coding-agent/tools/computer/supervisor";
+import {
+	computerTurnInFlight,
+	registerComputerController,
+} from "@oh-my-soup/pi-coding-agent/tools/computer/supervisor";
 import { convertToLlm } from "@oh-my-soup/pi-coding-agent/session/messages";
 import { EventBus } from "@oh-my-soup/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-soup/pi-utils";
@@ -4249,6 +4255,11 @@ describe("AgentSession retry fallback", () => {
 
 		const mock = createMockModel({
 			responses: [
+				{
+					stopReason: "error",
+					stopDetails: { type: "refusal", category: "cyber", explanation: "Declined." },
+					errorMessage: "Refusal (cyber): Declined.",
+				},
 				{
 					stopReason: "error",
 					stopDetails: { type: "refusal", category: "cyber", explanation: "Declined." },

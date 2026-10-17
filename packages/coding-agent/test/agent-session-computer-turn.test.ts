@@ -16,7 +16,10 @@ import { AgentSession } from "@oh-my-soup/pi-coding-agent/session/agent-session"
 import type { AuthStorage } from "@oh-my-soup/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-soup/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
-import { computerTurnInFlight, registerComputerController } from "@oh-my-soup/pi-coding-agent/tools/computer/supervisor";
+import {
+	computerTurnInFlight,
+	registerComputerController,
+} from "@oh-my-soup/pi-coding-agent/tools/computer/supervisor";
 import { TempDir } from "@oh-my-soup/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
