@@ -16,6 +16,7 @@ on:
          - ".bazelversion"
          - "Cargo.toml"
          - "Cargo.lock"
+         - "deny.toml"
          - "rust-toolchain.toml"
          - "rustfmt.toml"
          # A root dependency change (lockfile/catalog/patches) affects every
@@ -42,6 +43,7 @@ on:
          - "Cargo.toml"
          - "Cargo.lock"
          - "rust-toolchain.toml"
+         - "deny.toml"
          - "rustfmt.toml"
          - "bun.lock"
          - "bunfig.toml"
