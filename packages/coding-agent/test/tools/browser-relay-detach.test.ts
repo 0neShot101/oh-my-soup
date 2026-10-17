@@ -375,7 +375,7 @@ describe("relay tabs Chrome detaches omp from", () => {
 			});
 			try {
 				const evaluating = ext.hanging();
-				const code = `void __omp_call_tool__("probe", {}); ${HANG.code}`;
+				const code = `void __oms_call_tool__("probe", {}); ${HANG.code}`;
 				const stalled = invoke({ action: "run", code, timeout: HANG.timeout }).catch((error: unknown) => error);
 				const signal = await started.promise;
 				await evaluating;

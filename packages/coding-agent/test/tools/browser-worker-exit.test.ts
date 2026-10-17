@@ -171,7 +171,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser tab worker exit", () => {
 		});
 		try {
 			// The tool call is posted before the rejection ends the worker, so the host registers it first.
-			const code = `void __omp_call_tool__("probe", {}); ${UNOWNED_REJECTION}`;
+			const code = `void __oms_call_tool__("probe", {}); ${UNOWNED_REJECTION}`;
 			expect(await messageOf(run(name, code))).toContain("the tab is being reattached");
 			expect(await messageOf(run(name, code))).toContain("again right after being replaced");
 			expect(signals.map(signal => signal.aborted)).toEqual([true, true]);
