@@ -414,6 +414,7 @@ export async function buildInMemoryTextResult(
 
 	const shouldAddHashLines = displayMode.hashLines;
 	const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
+	details.rowPrefixes = shouldAddHashLines || shouldAddLineNumbers;
 	const hashContext =
 		shouldAddHashLines && options.sourcePath
 			? recordFullHashlineContext(
@@ -555,6 +556,7 @@ export async function buildInMemoryMultiRangeResult(
 	details.totalLines = totalLines;
 	const shouldAddHashLines = displayMode.hashLines;
 	const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
+	details.rowPrefixes = shouldAddHashLines || shouldAddLineNumbers;
 	const hashContext =
 		shouldAddHashLines && options.sourcePath
 			? recordFullHashlineContext(

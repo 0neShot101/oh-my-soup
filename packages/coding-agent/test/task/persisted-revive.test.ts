@@ -958,17 +958,26 @@ describe("persisted subagent revival", () => {
 			const observer = handle.observer();
 			expect(observer).toBeDefined();
 
+			const delivered: IrcMessage[] = [];
+			AgentRegistry.global().register({
+				id: "Main",
+				displayName: "Main",
+				kind: "main",
+				status: "idle",
+				session: {
+					deliverIrcMessage: async (msg: IrcMessage) => {
+						delivered.push(msg);
+						return "injected" as const;
+					},
+				} as unknown as AgentSession,
+			});
 			const finish = observer?.([wakeRecord("Main")]);
-			const bus = IrcBus.global();
-			const answered = bus.wait("Main", { from: ref.id }, 5000);
-			await bus.send({ from: ref.id, to: "Main", body: "here you go" });
-			expect((await answered)?.body).toBe("here you go");
+			await IrcBus.global().send({ from: ref.id, to: "Main", body: "here you go" });
 			handle.setLastAssistantText("Sent the table via hub.");
-			const duplicate = bus.wait("Main", { from: ref.id }, 200);
 			await finish?.();
 			await handle.trackedReplies[0];
 
-			expect(await duplicate).toBeNull();
+			expect(delivered.map(message => message.body)).toEqual(["here you go"]);
 			AgentLifecycleManager.resetGlobalForTests();
 			AgentRegistry.resetGlobalForTests();
 			IrcBus.resetGlobalForTests();

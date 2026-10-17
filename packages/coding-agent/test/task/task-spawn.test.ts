@@ -139,6 +139,7 @@ describe("task spawn routing", () => {
 			agent: "task",
 			name: "Spawnling",
 			task: "Do the thing.",
+			model: "openai/gpt-4.1",
 		} as TaskParams);
 
 		// Tool returned while the job body is still gated on the deferred.
@@ -157,7 +158,7 @@ describe("task spawn routing", () => {
 		expect(job!.status).toBe("completed");
 		expect(job!.resultText).toContain("history://Spawnling");
 		expect(runSpy).toHaveBeenCalledTimes(1);
-		expect(runSpy.mock.calls[0]?.[0].modelOverride).toEqual(["openai/gpt-4.1-mini"]);
+		expect(runSpy.mock.calls[0]?.[0].modelOverride).toEqual(["openai/gpt-4.1"]);
 	});
 
 	it("uses the persisted /agents model after replacing a session-only task selection", async () => {

@@ -23,6 +23,7 @@ import { parseToolCallArguments } from "../utils/tool-call-arguments";
 import { waitForRetry } from "../utils/retry-wait";
 import { getEnvApiKey } from "../env-api-key";
 import { OUTPUT_FALLBACK_BUFFER } from "../stream";
+import { wrapFetchForRequestCompression } from "../utils/request-compression";
 import type {
 	AnthropicCompactionFiles,
 	AnthropicCompactionPayload,
@@ -146,7 +147,7 @@ import { prepareAnthropicImageContext } from "./anthropic-images";
 import { servedModelFromAnthropicSignature } from "./anthropic-signature";
 import { getOpenAIPromptCacheKey } from "./openai-shared";
 import { applyInferenceHeaders } from "./inference-headers";
-import { redactSensitiveCredentials, transformMessages } from "./transform-messages";
+import { isAnthropicMessagesModel, redactSensitiveCredentials, transformMessages } from "./transform-messages";
 import { NON_VISION_IMAGE_PLACEHOLDER } from "./vision-guard";
 import {
 	injectedClientBaseUrl,
@@ -4136,7 +4137,10 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	// per request, so the native ceiling can only short-circuit slow-prefill
 	// streams before the configured watchdog gets to govern them.
 	const fetchOptions: AnthropicFetchOptions = { ...tlsFetchOptions, timeout: false };
-	const baseFetch = args.fetch ?? fetch;
+	// Compression sits beneath the cch rewriter, which must hash the uncompressed
+	// body. Catalog rules scope it to verified hosts (official API, Copilot), so
+	// proxies pass through.
+	const baseFetch = wrapFetchForRequestCompression(args.fetch ?? fetch, model);
 	// Only OAuth requests inject the CC billing header; no API-key request can ever
 	// contain it, so there is no need to install the rewriter for those.
 	const cchFetch = oauthToken ? wrapFetchForCch(baseFetch) : baseFetch;
@@ -4300,6 +4304,20 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		fetch: cchFetch,
 		fetchOptions,
 	};
+}
+
+/**
+ * Warm-up target for a first-party `anthropic` model: the effective official
+ * API URL plus the TLS options real requests use (sockets pool per TLS
+ * configuration, so a warm-up made with other options is never reused).
+ * `undefined` when requests resolve elsewhere — `ANTHROPIC_BASE_URL` or
+ * Foundry gateways never receive unsolicited probes.
+ */
+export function resolveAnthropicPrewarmTarget(model: Model<Api>): { url: string; init: RequestInit } | undefined {
+	if (!isAnthropicMessagesModel(model)) return undefined;
+	const baseUrl = resolveAnthropicBaseUrl(model) ?? "https://api.anthropic.com";
+	if (!isOfficialAnthropicApiUrl(baseUrl)) return undefined;
+	return { url: baseUrl, init: { ...buildClaudeCodeTlsFetchOptions(model, baseUrl) } };
 }
 
 function createClient(
@@ -5778,9 +5796,9 @@ export function convertAnthropicMessages(
 		compactionRequest?: AnthropicCompactionRequest;
 	},
 ): AnthropicMessageParam[] {
-	// Indices of params emitted from `developer` messages. After the main pass,
-	// the ones whose placement satisfies Anthropic's mid-conversation rules are
-	// upgraded from the `user` role to the authoritative `system` role.
+	// Indices of params emitted from agent-owned `developer` messages. After the
+	// main pass, the ones whose placement satisfies Anthropic's mid-conversation
+	// rules are upgraded from the `user` role to the authoritative `system` role.
 	const developerParams: Array<{ index: number; payload?: AnthropicMessagePayload }> = [];
 	const params: AnthropicMessageParam[] = [];
 	// Controls rendered from request-control markers. The assistant repairs
@@ -5907,7 +5925,13 @@ export function convertAnthropicMessages(
 				blocks.push(...anthropicToolChangeBlocks(payload.toolChanges, isOAuthToken, model));
 				content = blocks;
 			}
-			if (msg.role === "developer") developerParams.push({ index: params.length, payload });
+			// User-attributed developer turns (text `@file` mentions, hidden extension
+			// messages) only borrow the slot: their content is the user's, so it stays
+			// on `user` instead of gaining system authority or ending the request in
+			// place of the user's turn. Provider controls only exist on `system`.
+			if (msg.role === "developer" && (msg.attribution !== "user" || hasProviderControls)) {
+				developerParams.push({ index: params.length, payload });
+			}
 			const param: AnthropicMessageParam & ConversationalUserCarrier = { role: "user", content };
 			// Record that this wire `user` came from a real conversational turn, so
 			// prompt-cache decimation can tell it apart from everything else that

@@ -17,6 +17,7 @@ import type { MessageCreateParams, TextBlockParam } from "@oh-my-soup/pi-ai/prov
 import { streamAnthropic } from "@oh-my-soup/pi-ai/providers/anthropic";
 import type { AssistantMessage, CacheRetention, Context, Message, Model, ModelSpec } from "@oh-my-soup/pi-ai/types";
 import { markPerCallContextMessage } from "@oh-my-soup/pi-ai/utils/block-symbols";
+import { requestBodyText } from "@oh-my-soup/pi-ai/utils/request-body";
 import { buildModel } from "@oh-my-soup/pi-catalog/build";
 
 const MODEL_SPEC: ModelSpec<"anthropic-messages"> = {
@@ -59,7 +60,7 @@ async function captureWireBody(
 ): Promise<MessageCreateParams> {
 	let body: MessageCreateParams | undefined;
 	const fetchMock = (async (_input: string | URL | Request, init?: RequestInit) => {
-		body = JSON.parse(String(init?.body ?? "{}")) as MessageCreateParams;
+		body = JSON.parse(requestBodyText(init) ?? "{}") as MessageCreateParams;
 		return new Response(
 			JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "captured" } }),
 			{ status: 400, headers: { "Content-Type": "application/json" } },

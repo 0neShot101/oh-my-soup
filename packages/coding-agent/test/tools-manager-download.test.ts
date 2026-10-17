@@ -4,12 +4,81 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as platformUtils from "@oh-my-soup/pi-coding-agent/utils/platform";
-import { downloadFile, ensureTool, getToolPath } from "@oh-my-soup/pi-coding-agent/utils/tools-manager";
+import { downloadFile, ensureTool, getLatestVersion, getToolPath } from "@oh-my-soup/pi-coding-agent/utils/tools-manager";
 import * as archiveUtils from "@oh-my-soup/pi-coding-agent/utils/zip";
 import * as utils from "@oh-my-soup/pi-utils";
 import { TempDir } from "@oh-my-soup/pi-utils";
 
 const hasherPrototype: { digest(encoding: "hex"): string } = Bun.CryptoHasher.prototype;
+
+describe("github release lookup", () => {
+	const TOKEN_ENV = ["GITHUB_TOKEN", "GH_TOKEN"] as const;
+
+	function snapshotTokenEnv(): Record<string, string | undefined> {
+		return { GITHUB_TOKEN: process.env.GITHUB_TOKEN, GH_TOKEN: process.env.GH_TOKEN };
+	}
+
+	function restoreTokenEnv(previous: Record<string, string | undefined>): void {
+		for (const name of TOKEN_ENV) {
+			const value = previous[name];
+			if (value === undefined) {
+				delete process.env[name];
+			} else {
+				process.env[name] = value;
+			}
+		}
+	}
+
+	function captureFetch(tag: string): RequestInit[] {
+		const requests: RequestInit[] = [];
+		const fetchMock: typeof globalThis.fetch = Object.assign(
+			async (_input: string | URL | Request, init?: RequestInit | BunFetchRequestInit): Promise<Response> => {
+				requests.push(init ?? {});
+				return new Response(JSON.stringify({ tag_name: `v${tag}` }));
+			},
+			{ preconnect: globalThis.fetch.preconnect },
+		);
+		vi.spyOn(globalThis, "fetch").mockImplementation(fetchMock);
+		return requests;
+	}
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("sends the environment token as a bearer credential", async () => {
+		const previous = snapshotTokenEnv();
+		delete process.env.GITHUB_TOKEN;
+		process.env.GH_TOKEN = "gho_test_token";
+		try {
+			const requests = captureFetch("1.2.3");
+
+			await expect(getLatestVersion("chmln/sd")).resolves.toBe("1.2.3");
+
+			const headers = requests[0]?.headers as Record<string, string>;
+			expect(headers.Authorization).toBe("Bearer gho_test_token");
+		} finally {
+			restoreTokenEnv(previous);
+		}
+	});
+
+	it("omits the credential when no token is configured", async () => {
+		const previous = snapshotTokenEnv();
+		for (const name of TOKEN_ENV) {
+			delete process.env[name];
+		}
+		try {
+			const requests = captureFetch("1.2.3");
+
+			await expect(getLatestVersion("chmln/sd")).resolves.toBe("1.2.3");
+
+			const headers = requests[0]?.headers as Record<string, string>;
+			expect(headers.Authorization).toBeUndefined();
+		} finally {
+			restoreTokenEnv(previous);
+		}
+	});
+});
 
 function mockDownloadResponse(response: Response): void {
 	const fetchMock: typeof globalThis.fetch = Object.assign(async () => response, {

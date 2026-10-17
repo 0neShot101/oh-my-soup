@@ -41,7 +41,9 @@ import { hasWaitTool } from "../tools/wait";
 import { isIrcEnabled } from "../irc/messaging";
 import { isReadOnlyAgent } from "./read-only-policy";
 import { formatTaskResultSummary } from "./result-summary";
-import { isScoutSpawnable, resolveSpawnPolicy } from "./spawn-policy";
+import { isScoutSpawnable, type ResolvedSpawnPolicy, resolveSpawnPolicy } from "./spawn-policy";
+import { isBundledSeance, seanceTaskGuidance, seanceTaskSchemaFields, validateSeanceParams } from "./seance";
+import { SEANCE_AGENT_NAME } from "./seance-policy";
 import { type AgentDefinition, canSpawnAtDepth, getTaskSchema, type TaskToolSchemaInstance } from "./types";
 import {
 	type AgentProgress,
@@ -201,8 +203,15 @@ interface TaskDescriptionOptions {
 	structured: boolean;
 	asyncEnabled: boolean;
 	ircEnabled: boolean;
+	planMode: boolean;
 	asyncGuidance: string;
 	parentSpawns: string;
+}
+
+/** Plan mode hides seance; a `spawns` list led by it defaults to the next permitted agent. */
+function defaultAgentFor(spawnPolicy: ResolvedSpawnPolicy, planMode: boolean): string {
+	if (!planMode || spawnPolicy.defaultAgent !== SEANCE_AGENT_NAME) return spawnPolicy.defaultAgent;
+	return spawnPolicy.allowedAgents?.find(agent => agent !== SEANCE_AGENT_NAME) ?? spawnPolicy.defaultAgent;
 }
 
 /** Render the tool description from a cached agent list and current settings. */
@@ -218,6 +227,9 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		const allowed = new Set(spawnPolicy.allowedAgents);
 		filteredAgents = filteredAgents.filter(agent => allowed.has(agent.name));
 	}
+	if (options.planMode) {
+		filteredAgents = filteredAgents.filter(agent => !isBundledSeance(agent));
+	}
 	const renderedAgents = filteredAgents.map(agent => ({
 		name: agent.name,
 		description: agent.description,
@@ -226,12 +238,13 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		// Marked only while `task.structured` is off; with it on, every agent's result is structured.
 		structured: !options.structured && agent.structured === true,
 	}));
+	const seanceAgent = filteredAgents.find(agent => agent.name === SEANCE_AGENT_NAME);
 	const scoutAvailable = isScoutSpawnable(options.disabledAgents, options.parentSpawns);
 	return prompt.render(taskDescriptionTemplate, {
 		agents: renderedAgents,
 		scoutAvailable,
 		spawningDisabled,
-		defaultAgent: spawnPolicy.defaultAgent,
+		defaultAgent: defaultAgentFor(spawnPolicy, options.planMode),
 		isolationEnabled: options.isolationEnabled,
 		applyIsolatedChanges: options.applyIsolatedChanges,
 		batchEnabled: options.batchEnabled,
@@ -242,11 +255,11 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		hasBlockingAgents: renderedAgents.some(agent => agent.blocking),
 		hasStructuredAgents: renderedAgents.some(agent => agent.structured),
 		hasModelMentions: options.sessionAgents.length > 0,
+		seanceGuidance: seanceAgent && isBundledSeance(seanceAgent) ? seanceTaskGuidance : "",
 		ircEnabled: options.ircEnabled,
 		asyncGuidance: options.asyncGuidance,
 	});
 }
-
 function createTaskModeError(text: string): AgentToolResult<TaskToolDetails> {
 	return {
 		content: [{ type: "text", text }],
@@ -351,6 +364,7 @@ function resolveSpawnItems(params: TaskParams): TaskItem[] {
 	if ("toolNames" in params) item.toolNames = params.toolNames;
 	if ("effort" in params) item.effort = params.effort;
 	if ("isolated" in params) item.isolated = params.isolated;
+	if ("sourceSession" in params) item.sourceSession = params.sourceSession;
 	return [item];
 }
 
@@ -374,6 +388,7 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
 	if ("tools" in item) spawn.tools = item.tools;
 	if ("toolNames" in item) spawn.toolNames = item.toolNames;
 	if ("effort" in item) spawn.effort = item.effort;
+	if ("sourceSession" in item) spawn.sourceSession = item.sourceSession;
 	if ("model" in item) spawn.model = item.model;
 	if (item.isolated !== undefined) {
 		spawn.isolated = item.isolated;
@@ -395,9 +410,17 @@ interface SpawnPlan {
  * validation error the call reports instead when the shape is rejected. Shared
  * by dispatch and the speculative launcher so both derive identical spawns.
  */
-function planSpawns(rawParams: unknown, batchEnabled: boolean, defaultAgent: string): SpawnPlan | string {
+function planSpawns(
+	rawParams: unknown,
+	batchEnabled: boolean,
+	defaultAgent: string,
+	seanceAdvertised: boolean,
+): SpawnPlan | string {
 	const params = repairTaskParams(rawParams as TaskParams);
-	const error = validateShapeParams(batchEnabled, params) ?? validateSpawnParams(params, batchEnabled);
+	const error =
+		validateShapeParams(batchEnabled, params) ??
+		validateSpawnParams(params, batchEnabled) ??
+		validateSeanceParams({ params, batchEnabled, defaultAgent, seanceAdvertised });
 	if (error) return error;
 	const items = resolveSpawnItems(params);
 	return { params, items, spawns: items.map(item => spawnParamsFor(params, item, defaultAgent)) };
@@ -697,7 +720,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	readonly #launchSessions = new Map<string, TaskLaunchSession>();
 	readonly #launcher: TaskLauncher = {
 		spawns: args => {
-			const plan = planSpawns(args, this.#isBatchEnabled(), this.#defaultAgent());
+			const plan = planSpawns(
+				args,
+				this.#isBatchEnabled(),
+				this.#defaultAgent(),
+				this.#seanceSchemaFields() !== undefined,
+			);
 			return typeof plan === "string" ? undefined : plan.spawns;
 		},
 		start: (toolCallId, spawn, index, signal) => this.#startSpeculative(toolCallId, spawn, index, signal),
@@ -737,6 +765,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			evalToolsEnabled: evalToolsEnabled(this.session),
 			structured: this.#isStructured(),
 			defaultAgent: this.#defaultAgent(),
+			seanceFields: this.#seanceSchemaFields(),
 		});
 	}
 
@@ -756,13 +785,15 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	/** Dynamic description that reflects current task settings. */
 	get description(): string {
 		const disabledAgents = cfgTaskDisabledAgents.get(this.session.settings);
+		const agents =
+			discoverySnapshots.get(discoveryCacheKey(this.session.cwd, this.session.effectiveExtensionRoots?.())) ??
+			this.#discoveredAgents;
+		const sessionAgents = this.session.advertisedSessionAgents?.() ?? this.session.getSessionAgents?.() ?? [];
 		const planMode = this.session.getPlanModeState?.()?.enabled === true;
 		const isolationEnabled = cfgTaskIsolationEnabled.get(this.session.settings);
 		return renderDescription({
-			agents:
-				discoverySnapshots.get(discoveryCacheKey(this.session.cwd, this.session.effectiveExtensionRoots?.())) ??
-				this.#discoveredAgents,
-			sessionAgents: this.session.advertisedSessionAgents?.() ?? this.session.getSessionAgents?.() ?? [],
+			agents,
+			sessionAgents,
 			isolationEnabled: !planMode && isolationEnabled,
 			applyIsolatedChanges: cfgTaskIsolationApply.get(this.session.settings),
 			disabledAgents,
@@ -772,6 +803,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			structured: this.#isStructured(),
 			asyncEnabled: cfgAsyncEnabled.get(this.session.settings),
 			ircEnabled: isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0),
+			planMode,
 			asyncGuidance: this.delegationGuidance,
 			parentSpawns: this.session.getSessionSpawns() ?? "*",
 		});
@@ -806,8 +838,31 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		};
 	}
 
+	#seanceSchemaFields() {
+		const spawnPolicy = resolveSpawnPolicy(this.session.getSessionSpawns());
+		const planMode = this.session.getPlanModeState?.()?.enabled === true;
+		const disabledAgents = cfgTaskDisabledAgents.get(this.session.settings);
+		if (
+			planMode ||
+			!spawnPolicy.enabled ||
+			disabledAgents.includes(SEANCE_AGENT_NAME) ||
+			(spawnPolicy.allowedAgents !== null && !spawnPolicy.allowedAgents.includes(SEANCE_AGENT_NAME))
+		) {
+			return undefined;
+		}
+		const agents =
+			discoverySnapshots.get(discoveryCacheKey(this.session.cwd, this.session.effectiveExtensionRoots?.())) ??
+			this.#discoveredAgents;
+		const sessionAgents = this.session.advertisedSessionAgents?.() ?? this.session.getSessionAgents?.() ?? [];
+		const seanceAgent = [...agents, ...sessionAgents].find(agent => agent.name === SEANCE_AGENT_NAME);
+		return seanceAgent && isBundledSeance(seanceAgent) ? seanceTaskSchemaFields : undefined;
+	}
+
 	#defaultAgent(): string {
-		return resolveSpawnPolicy(this.session.getSessionSpawns()).defaultAgent;
+		return defaultAgentFor(
+			resolveSpawnPolicy(this.session.getSessionSpawns()),
+			this.session.getPlanModeState?.()?.enabled === true,
+		);
 	}
 
 	/** Session-retained id allocator; async ids are claimed before job registration. */
@@ -908,6 +963,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			agent: params.agent,
 			toolNames: params.toolNames,
 			parentToolNames,
+			sourceSession: params.sourceSession,
 			...(params.model !== undefined ? { model: params.model } : {}),
 			...this.#resultParams(params),
 			...(params.effort !== undefined ? { effort: params.effort } : {}),
@@ -955,7 +1011,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		// item's agent type against the session's actual default agent.
 		const defaultAgent = this.#defaultAgent();
 		const batchEnabled = this.#isBatchEnabled();
-		const plan = planSpawns(rawParams, batchEnabled, defaultAgent);
+		const plan = planSpawns(rawParams, batchEnabled, defaultAgent, this.#seanceSchemaFields() !== undefined);
 		if (typeof plan === "string") {
 			return createTaskModeError(plan);
 		}
@@ -1728,6 +1784,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				agent: params.agent,
 				toolNames: params.toolNames,
 				parentToolNames,
+				sourceSession: params.sourceSession,
 				...(params.model !== undefined ? { model: params.model } : {}),
 				...this.#resultParams(params),
 				...(params.effort !== undefined ? { effort: params.effort } : {}),
@@ -1813,7 +1870,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		mergeSummary: string,
 	): AgentToolResult<TaskToolDetails> {
 		const summary = formatTaskResultSummary(result, { totalDurationMs, mergeSummary });
-
 		return {
 			content: [{ type: "text", text: summary }],
 			details: {

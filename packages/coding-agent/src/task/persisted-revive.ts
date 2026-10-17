@@ -31,6 +31,8 @@ import {
 	subagentRetryFallbackRole,
 } from "./executor";
 import { cfgTaskAgentAccountPools } from "./settings";
+import { type RestoredSeanceSession, restoreSeanceSession } from "./seance";
+import { seanceIsolationOptions } from "./seance-policy";
 import type { AgentDefinition } from "./types";
 import { resolveSpawnPolicy } from "./spawn-policy";
 import { captureSubagentToolSources, readSubagentToolState } from "./tool-contract";
@@ -100,6 +102,24 @@ export function createPersistedSubagentReviverFactory(
 		// is gone (isolated/merged worktree, moved dir): leave it transcript-only
 		// (history://) rather than resurrect a wrong or broken session.
 		if (!peek?.init) return undefined;
+		let restoredSeance: RestoredSeanceSession | undefined;
+		if (peek.seanceSource !== undefined) {
+			try {
+				restoredSeance = await restoreSeanceSession({
+					init: peek.init,
+					cwd: peek.cwd,
+					modelRegistry: ctx.modelRegistry,
+				});
+			} catch (error) {
+				logger.warn("Unable to restore persisted seance session", {
+					sessionFile,
+					error: error instanceof Error ? error.message : String(error),
+				});
+				return undefined;
+			}
+			if (!restoredSeance) return undefined;
+		}
+		const seanceOptions = restoredSeance ? seanceIsolationOptions(restoredSeance.cwd) : {};
 		// Isolated runs are never resumable: their worktree is merged + cleaned,
 		// and the parent was told messaging is impossible. A retained workspace
 		// (capture/persist failure) still exists on disk and would pass the cwd
@@ -108,7 +128,7 @@ export function createPersistedSubagentReviverFactory(
 		// parent cwd, contradicting the delivery notice.
 		if (peek.init.isolated) return undefined;
 		try {
-			await fs.stat(peek.cwd);
+			await fs.stat(restoredSeance?.cwd ?? peek.cwd);
 		} catch {
 			return undefined;
 		}
@@ -179,16 +199,25 @@ export function createPersistedSubagentReviverFactory(
 			const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(ctx.settings));
 			const oauthAccountPools =
 				init.agent && Object.hasOwn(agentAccountPools, init.agent) ? agentAccountPools[init.agent] : undefined;
-			const persistedModelPattern =
-				init.modelRole && init.modelRole !== "default"
+			const persistedModelPattern = restoredSeance
+				? restoredSeance.modelPattern
+				: init.modelRole && init.modelRole !== "default"
 					? [formatModelRoleAlias(init.modelRole), ...(init.resolvedModel ? [init.resolvedModel] : [])]
 					: init.resolvedModel;
+			// Older session files persisted the synthetic xd:// write transport in the
+			// enabled set. A read-only agent definition could never grant full write,
+			// so remove that transport name before replaying tools as explicit grants.
+			const legacyToolNames =
+				init.readOnly === true && init.tools.includes("write")
+					? init.tools.filter(name => name !== "write")
+					: init.tools;
 			const toolState = readSubagentToolState(entries, init);
 			if (!toolState) {
 				await reopened.close();
 				throw new Error(`Cannot revive subagent "${ref.id}": persisted tool state is unavailable.`);
 			}
-			const revivedToolNames = toolState.tools;
+			const restoredToolNames = restoredSeance?.toolNames;
+			const revivedToolNames = restoredToolNames ?? toolState.tools;
 			const currentOwnerTools = ctx.session.getEnabledToolNames?.();
 			const ownerToolSet = currentOwnerTools
 				? new Set(currentOwnerTools.filter(name => name !== "write" || ctx.session.isDeviceOnlyWrite?.() !== true))
@@ -212,7 +241,9 @@ export function createPersistedSubagentReviverFactory(
 							: ""),
 				);
 			}
-			const toolAllowlist = toolState.toolAllowlist.filter(name => !ownerToolSet || ownerToolSet.has(name));
+			const toolAllowlist = restoredSeance
+				? [...restoredSeance.toolNames]
+				: toolState.toolAllowlist.filter(name => !ownerToolSet || ownerToolSet.has(name));
 			if (!toolAllowlist.includes("yield")) toolAllowlist.push("yield");
 			const savedSpawns = resolveSpawnPolicy(init.spawns ?? "");
 			const ownerSpawns = resolveSpawnPolicy(ctx.session.getSessionSpawns?.());
@@ -223,10 +254,13 @@ export function createPersistedSubagentReviverFactory(
 							.filter(name => ownerSpawns.allowedAgents === null || ownerSpawns.allowedAgents.includes(name))
 							.join(",");
 			const artifactManager = ctx.session.sessionManager.getArtifactManager();
-			if (artifactManager) reopened.adoptArtifactManager(artifactManager);
+			if (artifactManager && !restoredSeance) reopened.adoptArtifactManager(artifactManager);
 			// A restricted persisted contract must not consult process-global MCP
 			// state: same-name MCP tools are untrusted capability sources.
-			const restrictToolNames = init.restrictToolNames === true || ctx.session.isRestrictedToolSession?.() === true;
+			const restrictToolNames =
+				restoredSeance !== undefined ||
+				init.restrictToolNames === true ||
+				ctx.session.isRestrictedToolSession?.() === true;
 			// The spawn's result contract: a session persisted without `yield` returned its final message.
 			const structured = revivedToolNames.includes("yield");
 			const mcpManager = restrictToolNames ? undefined : MCPManager.instance();
@@ -237,17 +271,18 @@ export function createPersistedSubagentReviverFactory(
 				? followMCPTools(mcpManager, new Set(inheritedCustomTools.map(tool => tool.name)))
 				: undefined;
 			const mcpProxyTools = mcpManager ? createMCPProxyTools(mcpManager) : [];
+
 			let session: AgentSession;
 			try {
 				({ session } = await createAgentSession({
-					cwd: ctx.session.sessionManager.getCwd(),
+					cwd: restoredSeance?.cwd ?? ctx.session.sessionManager.getCwd(),
 					authStorage: ctx.authStorage,
 					// Revived agents join the root session tree, so their observability
 					// frames ride the same bus the RPC/collab surfaces subscribed to.
 					subagentEventBus: ctx.subagentEventBus,
 					modelRegistry: ctx.modelRegistry,
 					...(persistedModelPattern ? { modelPattern: persistedModelPattern } : {}),
-					modelPatternAuthFallback: init.resolvedModel,
+					modelPatternAuthFallback: restoredSeance ? undefined : init.resolvedModel,
 					settings: subagentSettings,
 					sessionManager: reopened,
 					agentId: ref.id,
@@ -309,6 +344,7 @@ export function createPersistedSubagentReviverFactory(
 								mcpManager,
 								mcpTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
 							}),
+					...seanceOptions,
 				}));
 			} catch (error) {
 				mcpFollower?.dispose();
@@ -319,7 +355,9 @@ export function createPersistedSubagentReviverFactory(
 			// Clamp the active set to the persisted list: createAgentSession's
 			// `alwaysInclude` can re-add non-defaultInactive extension/custom tools
 			// the original run didn't carry. Unknown/missing names are ignored.
-			await session.setActiveToolsByName([...revivedToolNames, ...session.getMountedXdevToolNames()]);
+			await session.setActiveToolsByName(
+				restoredSeance ? revivedToolNames : [...revivedToolNames, ...session.getMountedXdevToolNames()],
+			);
 			// The yield tool's schema carries the last batch's items; the replayed prefix must match it.
 			if (init.workPoolYieldItems) await session.setWorkPoolYieldItems(init.workPoolYieldItems);
 			// Wire the extension runtime exactly as the live executor does. Without
