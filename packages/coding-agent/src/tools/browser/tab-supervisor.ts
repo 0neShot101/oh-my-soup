@@ -1999,11 +1999,11 @@ async function recycleTimedOutWorkerTab(
 	timeoutMs: number,
 	opts: { recover?: boolean } = {},
 ): Promise<boolean> {
+	const oldWorker = tab.worker;
+	await oldWorker.terminate().catch(() => undefined);
 	// Same deadline carry-over as acquireTabImpl: the inline-fallback retry
 	// must not restart the recycle's init budget.
 	const startedAt = performance.now();
-	const oldWorker = tab.worker;
-	await oldWorker.terminate().catch(() => undefined);
 	const browserWSEndpoint = tab.browser.browser.wsEndpoint();
 	if (!browserWSEndpoint) throw new ToolError("Browser websocket endpoint is unavailable");
 	const payload: WorkerInitPayload = {
