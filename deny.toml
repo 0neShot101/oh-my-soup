@@ -45,7 +45,7 @@ exceptions = [
     # attach to our unmodified use. Keep them package-scoped like inferno.
     { allow = ["MPL-2.0"], crate = "challenge-bypass-ristretto@2.1.0" },
     { allow = ["MPL-2.0"], crate = "uluru@3.1.0" },
-    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots@1.0.9" },
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-root-certs@1.0.9" },
 ]
 
 [sources]

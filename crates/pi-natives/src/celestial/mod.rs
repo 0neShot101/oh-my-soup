@@ -18,7 +18,6 @@ pub mod astronomer;
 pub mod brave;
 pub mod devalue;
 pub mod duckduckgo;
-mod http;
 
 use napi::{Error, Result};
 use napi_derive::napi;

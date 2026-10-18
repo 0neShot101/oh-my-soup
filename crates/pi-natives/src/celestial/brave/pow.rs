@@ -25,7 +25,7 @@ pub enum Error {
 	DifficultyTooHigh { difficulty: usize, max: usize },
 	CountMismatch { expected: usize, actual: usize },
 	NoSolution { token: String },
-	NetworkError(String),
+	NetworkError(wreq::Error),
 	ServerError(String),
 }
 
@@ -43,8 +43,15 @@ impl fmt::Display for Error {
 			Self::NoSolution { token } => {
 				write!(f, "no solution for token '{token}' within attempt limit")
 			},
-			Self::NetworkError(e) | Self::ServerError(e) => f.write_str(e),
+			Self::NetworkError(e) => e.fmt(f),
+			Self::ServerError(e) => f.write_str(e),
 		}
+	}
+}
+
+impl From<wreq::Error> for Error {
+	fn from(value: wreq::Error) -> Self {
+		Self::NetworkError(value)
 	}
 }
 

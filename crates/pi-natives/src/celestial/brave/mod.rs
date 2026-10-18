@@ -4,20 +4,26 @@
 pub mod model;
 pub mod pow;
 
-use std::{collections::VecDeque, fmt, time::Instant};
+use std::{collections::VecDeque, fmt, sync::LazyLock, time::Instant};
 
 pub use model::SearchPage;
 use parking_lot::Mutex;
 use rayon::prelude::*;
 use serde::de::Error as _;
 use urlencoding::encode;
+use wreq_util::Emulation;
 
 use crate::celestial::{
 	brave::pow::{IssuanceResponse, PublicKey, Redemption},
 	devalue::{self, Error},
-	http::{get as http_get, post_json as http_post_json},
 };
 
+static CLIENT: LazyLock<wreq::Client> = LazyLock::new(|| {
+	wreq::Client::builder()
+		.emulation(Emulation::Chrome149)
+		.build()
+		.unwrap()
+});
 static JAR: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 
 #[derive(Debug, Clone)]
@@ -60,7 +66,7 @@ impl fmt::Display for SafeSearch {
 
 #[derive(Debug)]
 pub enum SearchError {
-	NetworkError(String),
+	NetworkError(wreq::Error),
 	PowError(pow::Error),
 	ParseError(String),
 }
@@ -68,7 +74,7 @@ pub enum SearchError {
 impl fmt::Display for SearchError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
-			Self::NetworkError(e) => f.write_str(e),
+			Self::NetworkError(e) => e.fmt(f),
 			Self::PowError(e) => e.fmt(f),
 			Self::ParseError(e) => f.write_str(e),
 		}
@@ -78,9 +84,16 @@ impl fmt::Display for SearchError {
 impl std::error::Error for SearchError {
 	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
 		match self {
+			Self::NetworkError(e) => std::error::Error::source(e),
 			Self::PowError(e) => std::error::Error::source(e),
-			Self::NetworkError(_) | Self::ParseError(_) => None,
+			Self::ParseError(_) => None,
 		}
+	}
+}
+
+impl From<wreq::Error> for SearchError {
+	fn from(value: wreq::Error) -> Self {
+		Self::NetworkError(value)
 	}
 }
 
@@ -104,15 +117,21 @@ pub async fn search(query: &str, params: SearchParams) -> Result<SearchPage, Sea
 		.map(|item| format!("; {item}"))
 		.unwrap_or_default();
 
-	let cookie = format!(
-		"safesearch={}; country={}; useLocation=0{}",
-		params.safesearch, params.country, extra
-	);
-	let body = http_get(&url, &[("Cookie", &cookie)])
-		.await
-		.map_err(SearchError::NetworkError)?;
+	let resp = CLIENT
+		.get(&url)
+		.header(
+			"Cookie",
+			format!(
+				"safesearch={}; country={}; useLocation=0{}",
+				&params.safesearch.to_string(),
+				&params.country,
+				&extra
+			),
+		)
+		.send()
+		.await?;
 
-	match parse_search(&body) {
+	match parse_search(&resp.text().await?) {
 		Ok(parsed) => Ok(parsed),
 		Err(model::ParseError::Captcha(Some(challenge))) => {
 			solve_pow(challenge, url).await?;
@@ -177,11 +196,15 @@ pub async fn solve_pow(challenge: model::ChallengeSet, referer: String) -> Resul
 		.collect::<Result<Vec<_>, _>>()?;
 	let taken_time = started.elapsed().as_millis() as u32;
 
-	let keys_text = http_get("https://search.brave.com/api/tokens/keys", &[("Referer", &referer)])
-		.await
-		.map_err(pow::Error::NetworkError)?;
-	let keys: pow::BraveKeysResponse = serde_json::from_str(&keys_text)
-		.map_err(|_| pow::Error::ServerError("token response invalid".into()))?;
+	let keys: pow::BraveKeysResponse = CLIENT
+		.get("https://search.brave.com/api/tokens/keys")
+		.header("Referer", &referer)
+		.send()
+		.await?
+		.error_for_status()
+		.map_err(|_| pow::Error::ServerError("token response invalid".into()))?
+		.json()
+		.await?;
 
 	let key = keys
 		.keys
@@ -192,21 +215,22 @@ pub async fn solve_pow(challenge: model::ChallengeSet, referer: String) -> Resul
 
 	let request = pow::TokenRequest::new(keys.tokens_per_challenge.unwrap_or(30) as usize);
 
-	let sign_body = serde_json::to_string(&pow::BravePoWSignRequest {
-		blinded_messages: request.encode_blinded(),
-		key_id: key_id.clone(),
-		set_token: challenge.set_token.clone(),
-		solutions: challenge.tokens.into_iter().zip(answers).collect(),
-		taken_time,
-	})
-	.map_err(|e| pow::Error::ServerError(e.to_string()))?;
-
-	let signed_text =
-		http_post_json("https://search.brave.com/api/captcha/pow?brave=0", &referer, &sign_body)
-			.await
-			.map_err(pow::Error::NetworkError)?;
-	let signed: pow::BravePoWSignResponse = serde_json::from_str(&signed_text)
-		.map_err(|_| pow::Error::ServerError("pow verification failed".into()))?;
+	let signed: pow::BravePoWSignResponse = CLIENT
+		.post("https://search.brave.com/api/captcha/pow?brave=0")
+		.header("Referer", &referer)
+		.json(&pow::BravePoWSignRequest {
+			blinded_messages: request.encode_blinded(),
+			key_id: key_id.clone(),
+			set_token: challenge.set_token.clone(),
+			solutions: challenge.tokens.clone().into_iter().zip(answers).collect(),
+			taken_time,
+		})
+		.send()
+		.await?
+		.error_for_status()
+		.map_err(|_| pow::Error::ServerError("pow verification failed".into()))?
+		.json()
+		.await?;
 
 	let unblinded = request.finalize(
 		&IssuanceResponse::from_base64(&signed.signed_tokens, &signed.batch_proof)?,
