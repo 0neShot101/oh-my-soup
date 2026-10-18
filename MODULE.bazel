@@ -202,6 +202,40 @@ crate.annotation(
     crate = "opusic-sys",
 )
 
+# btls-sys (wreq's TLS backend for Celestial browser emulation) builds its
+# bundled BoringSSL via `cmake` from PATH; @msvc_cc CMake toolchain files and Zig
+# UBSan opt-out as opusic-sys, extended to BoringSSL's C++ libssl sources.
+# On linux exec hosts CMake (CMAKE_OSX_SYSROOT=macosx) and bindgen find the
+# macOS SDK via `xcrun`, and clang-sys finds libclang via `llvm-config`: the
+# leading entries are @darwin_cc_*'s bin/ (canonical repo paths, see the darwin
+# cross toolchain section below) with shims answering from @macos_sdk and
+# @llvm_darwin_tools. Dirs exist only when staged; mac hosts keep host tools.
+# Cross bindgen otherwise parses the exec host's /usr/include: the
+# target-suffixed BINDGEN_EXTRA_CLANG_ARGS put the headers the target's
+# compiler uses first — zig's libc dirs (the hermetic_cc_toolchain include
+# lists, glibc floor 2.17) and the xwin CRT/SDK splats. Same paths on every
+# exec host; native linux-x64 keeps host headers. MSVC targets need an explicit
+# Ninja generator (cmake-rs otherwise probes for Visual Studio and panics), and
+# win32-x64 takes @msvc_cc's toolchain-no-asm.cmake: BoringSSL's x86 Windows asm
+# is NASM-only and no NASM is available, so it builds the portable C crypto.
+crate.annotation(
+    build_script_env = {
+        "CMAKE_TOOLCHAIN_FILE_x86_64_pc_windows_msvc": "$${pwd}/external/+msvc_cc_repository+msvc_cc/toolchain-no-asm.cmake",
+        "CMAKE_TOOLCHAIN_FILE_aarch64_pc_windows_msvc": "$${pwd}/external/+msvc_cc_repository+msvc_cc_arm64/toolchain.cmake",
+        "CMAKE_GENERATOR_x86_64_pc_windows_msvc": "Ninja",
+        "CMAKE_GENERATOR_aarch64_pc_windows_msvc": "Ninja",
+        "BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_gnu": "-D__GLIBC_MINOR__=17 -isystem $${pwd}/external/hermetic_cc_toolchain++toolchains+zig_config/lib/libc/include/aarch64-linux-gnu -isystem $${pwd}/external/hermetic_cc_toolchain++toolchains+zig_config/lib/libc/include/generic-glibc -isystem $${pwd}/external/hermetic_cc_toolchain++toolchains+zig_config/lib/libc/include/aarch64-linux-any -isystem $${pwd}/external/hermetic_cc_toolchain++toolchains+zig_config/lib/libc/include/any-linux-any",
+        "BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_musl": "-isystem $${pwd}/external/hermetic_cc_toolchain++toolchains+zig_config/lib/libc/include/aarch64-linux-musl -isystem $${pwd}/external/hermetic_cc_toolchain++toolchains+zig_config/lib/libc/include/generic-musl -isystem $${pwd}/external/hermetic_cc_toolchain++toolchains+zig_config/lib/libc/include/aarch64-linux-any -isystem $${pwd}/external/hermetic_cc_toolchain++toolchains+zig_config/lib/libc/include/any-linux-any",
+        "BINDGEN_EXTRA_CLANG_ARGS_x86_64_unknown_linux_musl": "-isystem $${pwd}/external/hermetic_cc_toolchain++toolchains+zig_config/lib/libc/include/x86_64-linux-musl -isystem $${pwd}/external/hermetic_cc_toolchain++toolchains+zig_config/lib/libc/include/generic-musl -isystem $${pwd}/external/hermetic_cc_toolchain++toolchains+zig_config/lib/libc/include/x86-linux-any -isystem $${pwd}/external/hermetic_cc_toolchain++toolchains+zig_config/lib/libc/include/any-linux-any",
+        "BINDGEN_EXTRA_CLANG_ARGS_x86_64_pc_windows_msvc": "-isystem $${pwd}/external/+xwin_sysroot_repository+xwin_sysroot/splat/crt/include -isystem $${pwd}/external/+xwin_sysroot_repository+xwin_sysroot/splat/sdk/include/ucrt -isystem $${pwd}/external/+xwin_sysroot_repository+xwin_sysroot/splat/sdk/include/um -isystem $${pwd}/external/+xwin_sysroot_repository+xwin_sysroot/splat/sdk/include/shared",
+        "BINDGEN_EXTRA_CLANG_ARGS_aarch64_pc_windows_msvc": "-isystem $${pwd}/external/+xwin_sysroot_repository+xwin_sysroot_arm64/splat/crt/include -isystem $${pwd}/external/+xwin_sysroot_repository+xwin_sysroot_arm64/splat/sdk/include/ucrt -isystem $${pwd}/external/+xwin_sysroot_repository+xwin_sysroot_arm64/splat/sdk/include/um -isystem $${pwd}/external/+xwin_sysroot_repository+xwin_sysroot_arm64/splat/sdk/include/shared",
+        "CFLAGS": "-fno-sanitize=undefined",
+        "CXXFLAGS": "-fno-sanitize=undefined",
+        "PATH": "$${pwd}/external/+darwin_cc_repository+darwin_cc_arm64/bin:$${pwd}/external/+darwin_cc_repository+darwin_cc_x64/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/run/current-system/sw/bin",
+    },
+    crate = "btls-sys",
+)
+
 # wasmtime-c-api-impl (tree-sitter's `wasm` feature) runs `cmake -P` to install
 # the C API headers tree-sitter compiles against; same host PATH as opusic-sys.
 crate.annotation(

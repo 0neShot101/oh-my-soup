@@ -10,7 +10,10 @@ pruned trees are a few hundred MiB instead of ~10 GiB.
                                   and mac exec hosts)
     llvm_darwin_tools_repository  LLVM 23.1.3, clang / ld64.lld / llvm-ar /
                                   llvm-libtool-darwin for
-                                  //bazel/toolchains/darwin (linux exec hosts).
+                                  //bazel/toolchains/darwin (linux exec hosts),
+                                  plus libclang.so for build-script bindgen
+                                  (the runner's own libclang is too old for the
+                                  macOS 27 SDK headers).
                                   23.1.3 is the first release whose ld64.lld
                                   reads the arm64e.x1 targets in the macOS 27
                                   SDK's .tbd stubs (llvm/llvm-project#222721);
@@ -58,10 +61,16 @@ filegroup(
 )
 
 filegroup(
+    name = "libs",
+    srcs = glob(["lib/*.so*"], allow_empty = True),
+)
+
+filegroup(
     name = "all",
     srcs = [
         ":bin",
         ":builtin_headers",
+        ":libs",
     ],
 )
 """
@@ -97,13 +106,15 @@ def _llvm_tools_impl(rctx):
         if entry.basename not in keep:
             rctx.delete(entry)
 
-    # Prune everything outside bin/ and lib/clang/<ver>/include.
+    # Prune everything outside bin/, lib/clang/<ver>/include and the kept
+    # lib/ entries (prefix match: libclang.so -> libclang.so.23.1 -> ...).
     for entry in rctx.path(".").readdir():
         if entry.basename not in ("bin", "lib"):
             rctx.delete(entry)
     lib_dir = rctx.path("lib")
     for entry in lib_dir.readdir():
-        if entry.basename != "clang":
+        name = entry.basename
+        if name != "clang" and not [p for p in rctx.attr.libs if name.startswith(p)]:
             rctx.delete(entry)
     for verdir in lib_dir.get_child("clang").readdir():
         for entry in verdir.readdir():
@@ -118,7 +129,7 @@ def _llvm_tools_impl(rctx):
     # fresh output base on ephemeral CI pods (profiled: run 30510579596).
     return rctx.repo_metadata(reproducible = True)
 
-def _llvm_tools_repository(consumer, version, dists, bins):
+def _llvm_tools_repository(consumer, version, dists, bins, libs = []):
     return repository_rule(
         implementation = _llvm_tools_impl,
         doc = "Pruned LLVM {} release binaries for the {} cross toolchain.".format(version, consumer),
@@ -127,6 +138,8 @@ def _llvm_tools_repository(consumer, version, dists, bins):
             "consumer": attr.string(default = consumer),
             # host key -> [release asset suffix, sha256]
             "dists": attr.string_list_dict(default = dists),
+            # lib/ entry-name prefixes kept beside lib/clang.
+            "libs": attr.string_list(default = libs),
             "version": attr.string(default = version),
         },
     )
@@ -166,6 +179,7 @@ llvm_darwin_tools_repository = _llvm_tools_repository(
         "ld64.lld",
         "lld",
         "llvm-ar",
+        "llvm-install-name-tool",
         "llvm-libtool-darwin",
         "llvm-nm",
         "llvm-objcopy",
@@ -173,4 +187,5 @@ llvm_darwin_tools_repository = _llvm_tools_repository(
         "llvm-ranlib",
         "llvm-strip",
     ],
+    libs = ["libclang.so"],
 )

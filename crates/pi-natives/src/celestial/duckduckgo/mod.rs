@@ -5,13 +5,21 @@ pub mod deserialize;
 pub mod jsa;
 pub mod model;
 
-use std::{fmt, rc::Rc};
+use std::{fmt, rc::Rc, sync::LazyLock};
 
 pub use deserialize::Error as DeserializeError;
 pub use model::SearchPage;
 use urlencoding::encode;
+use wreq_util::Emulation;
 
 const MAX_RETRIES: u64 = 5;
+
+static CLIENT: LazyLock<wreq::Client> = LazyLock::new(|| {
+	wreq::Client::builder()
+		.emulation(Emulation::Safari26_4)
+		.build()
+		.unwrap()
+});
 
 #[derive(Debug, Clone)]
 pub struct SearchParams {
@@ -34,7 +42,7 @@ pub enum SafeSearch {
 
 #[derive(Debug)]
 pub enum SearchError {
-	NetworkError(String),
+	NetworkError(wreq::Error),
 	ParseError(String),
 	JSAError(String),
 	DeserializeError(DeserializeError),
@@ -44,7 +52,7 @@ pub enum SearchError {
 impl fmt::Display for SearchError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
-			Self::NetworkError(e) => f.write_str(e),
+			Self::NetworkError(e) => e.fmt(f),
 			Self::ParseError(e) => f.write_str(e),
 			Self::JSAError(e) => f.write_str(e),
 			Self::DeserializeError(e) => e.fmt(f),
@@ -56,9 +64,16 @@ impl fmt::Display for SearchError {
 impl std::error::Error for SearchError {
 	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
 		match self {
+			Self::NetworkError(e) => std::error::Error::source(e),
 			Self::DeserializeError(e) => std::error::Error::source(e),
-			Self::NetworkError(_) | Self::ParseError(_) | Self::JSAError(_) | Self::RetryError => None,
+			Self::ParseError(_) | Self::JSAError(_) | Self::RetryError => None,
 		}
+	}
+}
+
+impl From<wreq::Error> for SearchError {
+	fn from(value: wreq::Error) -> Self {
+		Self::NetworkError(value)
 	}
 }
 
@@ -85,18 +100,24 @@ pub fn extract_duck_url(page: &str) -> Result<String, SearchError> {
 }
 
 pub async fn search(query: &str, params: SearchParams) -> Result<SearchPage, SearchError> {
-	let cookie = format!(
-		"{safesearch}ah={country}; l={country}",
-		safesearch = match params.safesearch {
-			SafeSearch::Strict => "p=1; ",
-			SafeSearch::Moderate => "",
-			SafeSearch::Off => "p=-2; ",
-		},
-		country = params.country
-	);
-	let page =
-		http_get(&format!("https://duckduckgo.com/?q={}", encode(query)), &[("Cookie", &cookie)])
-			.await?;
+	let page = CLIENT
+		.get(format!("https://duckduckgo.com/?q={}", encode(query)))
+		.header(
+			"Cookie",
+			format!(
+				"{safesearch}ah={country}; l={country}",
+				safesearch = match params.safesearch {
+					SafeSearch::Strict => "p=1; ",
+					SafeSearch::Moderate => "",
+					SafeSearch::Off => "p=-2; ",
+				},
+				country = params.country
+			),
+		)
+		.send()
+		.await?
+		.text()
+		.await?;
 	let duck = extract_duck_url(&page)?;
 	follow(duck).await
 }
@@ -131,14 +152,17 @@ async fn follow(mut duck: String) -> Result<SearchPage, SearchError> {
 }
 
 async fn get_duck(duck: &str) -> Result<DuckAction, SearchError> {
-	let page = http_get(duck, &[
-		("Referer", "https://duckduckgo.com/"),
-		("Priority", "u=1, i"),
-		("Sec-Fetch-Dest", "script"),
-		("Sec-Fetch-Mode", "no-cors"),
-		("Sec-Fetch-Site", "same-origin"),
-	])
-	.await?;
+	let page = CLIENT
+		.get(duck)
+		.header("Referer", "https://duckduckgo.com/")
+		.header("Priority", "u=1, i")
+		.header("Sec-Fetch-Dest", "script")
+		.header("Sec-Fetch-Mode", "no-cors")
+		.header("Sec-Fetch-Site", "same-origin")
+		.send()
+		.await?
+		.text()
+		.await?;
 	eval_duck_script(&page)
 }
 
@@ -276,10 +300,4 @@ pub fn eval_duck_script(page: &str) -> Result<DuckAction, SearchError> {
 			.transpose()?,
 		deep_meta,
 	}))
-}
-
-async fn http_get(url: &str, headers: &[(&str, &str)]) -> Result<String, SearchError> {
-	crate::celestial::http::get(url, headers)
-		.await
-		.map_err(SearchError::NetworkError)
 }
