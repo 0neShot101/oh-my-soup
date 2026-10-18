@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [18.11.5] - 2026-10-18
+
+### Fixed
+
+- Restored `wreq` browser emulation and cross-target `btls-sys` (BoringSSL) builds for Celestial search ([#12](https://github.com/pickpocket/oh-my-soup/pull/12) by [@Neulus](https://github.com/Neulus)).
+
 ## [18.11.4] - 2026-10-17
 
 ### Breaking Changes
