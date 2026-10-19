@@ -1240,7 +1240,18 @@ export class TurnRecovery {
 			this.#host.agent.replaceMessages(messages.slice(0, turnEnd - 1));
 			return;
 		}
-		// A miss means the failed turn is still in active context (or was never
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const candidate = messages[i];
+			if (candidate.role === "assistant" && this.#isSameAssistantMessage(candidate, assistantMessage)) {
+				let removeEnd = i + 1;
+				while (removeEnd < messages.length && isSyntheticToolResultMessage(messages[removeEnd])) {
+					removeEnd++;
+				}
+				const next = [...messages.slice(0, i), ...messages.slice(removeEnd)];
+				this.#host.agent.replaceMessages(next);
+				return;
+			}
+		}
 		// there); log just enough to explain why the identity check failed.
 		logger.debug("agent active context assistant removal missed", {
 			reason,
@@ -1269,21 +1280,52 @@ export class TurnRecovery {
 		}
 	}
 
+	#hasExecutedToolCalls(message: AssistantMessage): boolean {
+		const emittedToolCallIds = new Set<string>();
+		for (const block of message.content) {
+			if (block.type === "toolCall") emittedToolCallIds.add(block.id);
+		}
+		if (emittedToolCallIds.size === 0) return false;
+		const messages = this.#host.agent.state.messages;
+		let assistantIndex = -1;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const candidate = messages[i];
+			if (candidate.role === "assistant" && this.#isSameAssistantMessage(candidate, message)) {
+				assistantIndex = i;
+				break;
+			}
+		}
+		if (assistantIndex < 0) return false;
+		for (let i = assistantIndex + 1; i < messages.length; i++) {
+			const candidate = messages[i];
+			if (candidate.role !== "toolResult" || !emittedToolCallIds.has(candidate.toolCallId)) continue;
+			if (!isSyntheticToolResultMessage(candidate) || candidate.details?.executed !== false) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	async #handleCyberRefusalStop(message: AssistantMessage): Promise<boolean> {
 		if (!isCyberRefusalMessage(message)) return false;
 		if (this.#host.abortInProgress() || this.#host.isDisposed()) return false;
 		if (!this.autoRetryEnabled) return false;
-		if (this.#cyberRefusalRetryCount > 0 || this.#refusalWalkTried.size > 1) return false;
 		const maxRetries = cfgRetry.get(this.#host.settings).maxRetries;
 		const hasToolCalls = message.content.some(block => block.type === "toolCall");
 		if (!hasToolCalls && maxRetries <= 0) return false;
+		const maxCyberRetries = this.isClassifierRefusal(message) ? 1 : Math.max(1, maxRetries);
+		if (this.#cyberRefusalRetryCount >= maxCyberRetries || this.#refusalWalkTried.size > 1) return false;
 
 		this.#cyberRefusalRetryCount++;
 		const generation = this.#host.promptGeneration();
-		if (hasToolCalls && !this.#unexecutedToolCallsReplaySafe(message)) {
+		this.#host.resetCurrentResponsesProviderSession("cyber refusal");
+		if (hasToolCalls && this.#hasExecutedToolCalls(message)) {
 			this.#stripRefusalReasonFromActiveContext(message);
 		} else {
 			await this.#dropAssistantTurnDurably(message);
+			if (this.#host.promptGeneration() === generation) {
+				this.#stripFailedAssistantTail();
+			}
 		}
 		this.#host.scheduleAgentContinue({
 			source: "cyber-refusal-retry",
@@ -2628,11 +2670,12 @@ export class TurnRecovery {
 		const cyberRefusal = isCyberRefusalMessage(message);
 		const preserveFailedTurn =
 			options?.preserveFailedTurn === true ||
-			((classifierRefusal ||
-				accountPolicyDenial ||
-				cyberRefusal ||
-				AIError.is(id, AIError.Flag.MalformedFunctionCall) ||
-				AIError.retriable(id)) &&
+			((!cyberRefusal || this.#hasExecutedToolCalls(message)) &&
+				(classifierRefusal ||
+					accountPolicyDenial ||
+					cyberRefusal ||
+					AIError.is(id, AIError.Flag.MalformedFunctionCall) ||
+					AIError.retriable(id)) &&
 				this.#unexecutedToolCallsReplaySafe(message));
 		const rateLimitReason = parseRateLimitReason(errorMessage);
 		const staleOpenAIResponsesReplayError = AIError.is(id, AIError.Flag.StaleResponsesItem);
@@ -2854,6 +2897,13 @@ export class TurnRecovery {
 			// to spend an attempt. The walk is bounded here instead — a refusal visits any
 			// one model at most once per turn, so A -> B -> A terminates whatever the
 			// chains say.
+			const maxCyberRetries = classifierRefusal ? 1 : Math.max(1, maxRetries);
+			const canContinueSameModelOnCyber =
+				cyberRefusal &&
+				!classifierRefusal &&
+				!retryBudgetExhausted &&
+				this.#refusalWalkTried.size <= 1 &&
+				this.#cyberRefusalRetryCount < maxCyberRetries;
 			const refusalWalkKey = this.#refusalWalkKey(currentSelector);
 			const refusalWalkRepeats = classifierRefusal && this.#refusalWalkTried.has(refusalWalkKey);
 			if (
@@ -2864,6 +2914,7 @@ export class TurnRecovery {
 				!sameModelSteerReplay &&
 				!waitForSiblingCredential &&
 				!refusalWalkRepeats &&
+				!canContinueSameModelOnCyber &&
 				!this.#isFirstAttemptMidStreamSocketDrop(message, id, retryBudgetExhausted)
 			) {
 				if (classifierRefusal) {
@@ -2916,12 +2967,13 @@ export class TurnRecovery {
 			// same-route budget: every distinct account must be tried first.
 			if (switchedModel) this.#retryAttempt = 1;
 		}
+		const maxCyberRetries = classifierRefusal ? 1 : Math.max(1, maxRetries);
 		const allowSameModelCyberContinue =
 			cyberRefusal &&
 			!retryBudgetExhausted &&
-			this.#retryAttempt === 1 &&
+			(classifierRefusal ? this.#retryAttempt === 1 : true) &&
 			this.#refusalWalkTried.size <= 1 &&
-			this.#cyberRefusalRetryCount === 0;
+			this.#cyberRefusalRetryCount < maxCyberRetries;
 		if (allowSameModelCyberContinue && !switchedCredential && !switchedModel) {
 			this.#cyberRefusalRetryCount++;
 			delayMs = 0;
@@ -3021,6 +3073,9 @@ export class TurnRecovery {
 		// Resolved stream-stall tools and proven-unexecuted malformed/refused
 		// calls keep their assistant/result pair. Continuation then sees explicit
 		// synthetic results and cannot repeat a side effect.
+		if (cyberRefusal) {
+			this.#host.resetCurrentResponsesProviderSession("cyber refusal");
+		}
 		if (!preserveFailedTurn) {
 			this.removeAssistantMessageFromActiveContext(message, "auto-retry");
 		} else if (classifierRefusal || accountPolicyDenial || cyberRefusal) {

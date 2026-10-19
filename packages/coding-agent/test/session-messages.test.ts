@@ -97,7 +97,7 @@ describe("assistant refusal replay policy", () => {
 		expect(JSON.stringify(replayed)).not.toContain("Refusal (bio)");
 	});
 
-	it("strips refusal reasons from tool-bearing refused turns and synthetic tool results on replay", () => {
+	it("drops cyber-refused turns and their unexecuted synthetic tool results on replay", () => {
 		const messages: AgentMessage[] = [
 			{ role: "user", content: [{ type: "text", text: "inspect file" }], timestamp: 1 },
 			{
@@ -135,7 +135,7 @@ describe("assistant refusal replay policy", () => {
 		];
 
 		const replayed = filterProviderReplayMessages(convertToLlm(messages));
-		expect(replayed.map(message => message.role)).toEqual(["user", "assistant", "toolResult"]);
+		expect(replayed.map(message => message.role)).toEqual(["user"]);
 		expect(JSON.stringify(replayed)).not.toContain("Refusal (cyber)");
 		expect(JSON.stringify(replayed)).not.toContain("blocked by policy");
 	});
@@ -197,7 +197,7 @@ describe("assistant refusal replay policy", () => {
 		];
 
 		const replayed = filterProviderReplayMessages(convertToLlm(messages));
-		expect(replayed.map(message => message.role)).toEqual(["user", "assistant", "toolResult"]);
+		expect(replayed.map(message => message.role)).toEqual(["user"]);
 		expect(JSON.stringify(replayed)).not.toContain("cyber_policy");
 		expect(JSON.stringify(replayed)).not.toContain("cybersecurity risk");
 	});

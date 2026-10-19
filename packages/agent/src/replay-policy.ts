@@ -41,14 +41,48 @@ export function isProviderRefusalMessage(message: AssistantMessage): boolean {
 const SYNTHETIC_TOOL_ERROR_PREFIX =
 	"Tool call was not executed because the provider stream ended with an error before the tool could run: ";
 
+function isUnexecutedSyntheticRefusalToolResult(message: Message): boolean {
+	if (message.role !== "toolResult" || !message.isError) return false;
+	const details = (message as { details?: { __synthetic?: boolean; executed?: boolean } }).details;
+	if (details?.__synthetic === true && details.executed === false) return true;
+	return message.content.some(
+		block =>
+			block.type === "text" &&
+			block.text.startsWith(
+				"Tool call was not executed because the provider stream ended with an error before the tool could run",
+			),
+	);
+}
+
 /** Removes API-level provider refusals and strips refusal reasons from live provider replay. */
 export function filterProviderReplayMessages(messages: readonly Message[]): Message[] {
 	const out: Message[] = [];
-	for (const message of messages) {
+	const droppedRefusalToolCallIds = new Set<string>();
+	for (let i = 0; i < messages.length; i++) {
+		const message = messages[i];
 		if (message.role === "assistant") {
 			if (isProviderRefusalMessage(message)) {
-				const hasToolCall = message.content.some(block => block.type === "toolCall");
-				if (!hasToolCall) continue;
+				const toolCallIds = message.content
+					.filter(
+						(block): block is Extract<AssistantMessage["content"][number], { type: "toolCall" }> =>
+							block.type === "toolCall",
+					)
+					.map(block => block.id);
+				if (toolCallIds.length === 0) continue;
+				if (isCyberRefusalMessage(message)) {
+					const executedCallIds = new Set<string>();
+					for (let j = i + 1; j < messages.length; j++) {
+						const candidate = messages[j];
+						if (candidate.role !== "toolResult" || !toolCallIds.includes(candidate.toolCallId)) continue;
+						if (!isUnexecutedSyntheticRefusalToolResult(candidate)) {
+							executedCallIds.add(candidate.toolCallId);
+						}
+					}
+					if (executedCallIds.size === 0) {
+						for (const id of toolCallIds) droppedRefusalToolCallIds.add(id);
+						continue;
+					}
+				}
 				out.push({
 					...message,
 					errorMessage: undefined,
@@ -57,6 +91,9 @@ export function filterProviderReplayMessages(messages: readonly Message[]): Mess
 				continue;
 			}
 			out.push(message);
+			continue;
+		}
+		if (message.role === "toolResult" && droppedRefusalToolCallIds.delete(message.toolCallId)) {
 			continue;
 		}
 		if (message.role === "toolResult" && message.isError) {

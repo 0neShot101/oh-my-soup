@@ -114,12 +114,10 @@ describe("AgentSession Anthropic wrap-up hint", () => {
 
 	const wrapUpCount = (messages: string | undefined) => (messages ?? "").split(WRAP_UP_MARKER).length - 1;
 
-	it("tells the model to wrap up once, mid-run, when nothing continues past the allowance", async () => {
+	it("tracks wrap-up allowance state for the status line without steering usage warnings into model context", async () => {
 		const contexts = await run("off");
 		expect(contexts).toHaveLength(3);
-		expect(wrapUpCount(contexts[0])).toBe(0);
-		expect(wrapUpCount(contexts[1])).toBe(1);
-		expect(wrapUpCount(contexts[2])).toBe(1);
+		for (const context of contexts) expect(wrapUpCount(context)).toBe(0);
 		expect(session?.getUsageLimitState()).toEqual({
 			stage: "wrap_up",
 			resetsAtSec: expect.any(Number),

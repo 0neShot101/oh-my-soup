@@ -443,7 +443,7 @@ export const cfgTaskAgentSoftRequestBudget = register({
 export const cfgTaskSoftRequestBudgetNotice = register({
 	id: "task.softRequestBudgetNotice",
 	type: "boolean",
-	default: true,
+	default: false,
 	ui: {
 		tab: "tasks",
 		group: "Subagents",

@@ -4314,6 +4314,145 @@ describe("AgentSession retry fallback", () => {
 		expect(recovered?.content).toEqual([{ type: "text", text: "recovered" }]);
 	});
 
+	it("auto-removes Codex cyber_policy refusals (including streamed commentary and unexecuted tool calls) from context and continues to the next turn", async () => {
+		const codexModel = getBundledModel("openai-codex", "gpt-5.6-sol");
+		const fallbackModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!codexModel || !fallbackModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		const cyberError =
+			"Codex error event: This content was flagged for possible cybersecurity risk. Join Trusted Access for Cyber. (code=cyber_policy)";
+		const seenContextSnapshots: string[] = [];
+		const requestedModels: string[] = [];
+		let callCount = 0;
+		const noopTool: AgentTool = {
+			name: "inspect",
+			label: "Inspect",
+			description: "Inspect target",
+			parameters: type({}),
+			execute: async () => ({ content: [{ type: "text", text: "inspected" }] }),
+		};
+
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: {
+				model: codexModel,
+				systemPrompt: ["Test"],
+				tools: [noopTool],
+				messages: [],
+			},
+			streamFn: (model, context) => {
+				callCount += 1;
+				requestedModels.push(`${model.provider}/${model.id}`);
+				seenContextSnapshots.push(JSON.stringify(context.messages));
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					if (callCount <= 2) {
+						const partial: AssistantMessage = {
+							role: "assistant",
+							content: [
+								{ type: "thinking", thinking: `Checking target attempt ${callCount}` },
+								{ type: "text", text: `Commentary before tool call ${callCount}` },
+								{ type: "toolCall", id: `call-cyber-${callCount}`, name: "inspect", arguments: {} },
+							],
+							api: model.api,
+							provider: model.provider,
+							model: model.id,
+							usage: {
+								input: 10,
+								output: 5,
+								cacheRead: 0,
+								cacheWrite: 0,
+								totalTokens: 15,
+								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+							},
+							stopReason: "error",
+							errorMessage: cyberError,
+							timestamp: Date.now() + callCount,
+						};
+						stream.push({ type: "start", partial });
+						stream.push({ type: "text_start", contentIndex: 1, partial });
+						stream.push({
+							type: "text_delta",
+							contentIndex: 1,
+							delta: `Commentary before tool call ${callCount}`,
+							partial,
+						});
+						stream.push({
+							type: "text_end",
+							contentIndex: 1,
+							content: `Commentary before tool call ${callCount}`,
+							partial,
+						});
+						stream.push({ type: "error", reason: "error", error: partial });
+						stream.end();
+						return;
+					}
+					const recovered: AssistantMessage = {
+						role: "assistant",
+						content: [{ type: "text", text: "Recovered cleanly on Codex next turn" }],
+						api: model.api,
+						provider: model.provider,
+						model: model.id,
+						usage: {
+							input: 10,
+							output: 5,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 15,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "stop",
+						timestamp: Date.now() + callCount,
+					};
+					stream.push({ type: "start", partial: recovered });
+					stream.push({ type: "done", reason: "stop", message: recovered });
+					stream.end();
+				});
+				return stream;
+			},
+		});
+
+		const codexSelector = `${codexModel.provider}/${codexModel.id}`;
+		const fallbackSelector = `${fallbackModel.provider}/${fallbackModel.id}`;
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 3,
+			"retry.modelFallback": true,
+			"retry.fallbackChains": { [codexSelector]: [fallbackSelector] },
+		});
+		settings.setModelRole("default", codexSelector);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+			toolRegistry: new Map([[noopTool.name, noopTool]]),
+		});
+
+		await session.prompt("Audit target");
+		await session.waitForIdle();
+
+		expect(callCount).toBe(3);
+		expect(requestedModels).toEqual([codexSelector, codexSelector, codexSelector]);
+		for (const snapshot of seenContextSnapshots.slice(1)) {
+			expect(snapshot).not.toContain("cyber_policy");
+			expect(snapshot).not.toContain("Commentary before tool call");
+			expect(snapshot).not.toContain("call-cyber-");
+		}
+		expect(JSON.stringify(session.agent.state.messages)).not.toContain("cyber_policy");
+		expect(JSON.stringify(session.agent.state.messages)).not.toContain("Commentary before tool call");
+		expect(JSON.stringify(session.agent.state.messages)).not.toContain("call-cyber-");
+		expect(JSON.stringify(session.sessionManager.getBranch())).not.toContain("cyber_policy");
+		expect(JSON.stringify(session.sessionManager.getBranch())).not.toContain("call-cyber-");
+		const finalMsg = session.getLastAssistantMessage();
+		expect(finalMsg?.stopReason).toBe("stop");
+		expect(finalMsg?.content).toEqual([{ type: "text", text: "Recovered cleanly on Codex next turn" }]);
+	});
+
 	it("keeps walking the chain on a refusal after the retry budget is spent, each model once", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const firstFallback = getBundledModel("openai", "gpt-4o-mini");

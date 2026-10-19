@@ -1618,7 +1618,7 @@ export const cfgNotesInjectWindowPercent = register({
 export const cfgNotesAutoUpdate = register({
 	id: "notes.autoUpdate",
 	type: "boolean",
-	default: true,
+	default: false,
 	ui: {
 		tab: "memory",
 		group: "Session Notes",

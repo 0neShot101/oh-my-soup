@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Disabled automatic wrap-up steering notices, soft request budget notices, and periodic session-notes nudges by default so agents do not see usage or context-headroom warnings in their prompt context.
+
+### Fixed
+
+- Fixed Codex `cyber_policy` refusals (including turns that streamed commentary text or unexecuted tool calls) remaining in active context or failing to continue automatically on the next turn.
+
 ## [18.11.4] - 2026-10-17
 
 ### Added

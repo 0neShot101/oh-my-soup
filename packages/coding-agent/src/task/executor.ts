@@ -2596,20 +2596,37 @@ async function driveSessionToResult(
 		const reminderToolChoice = structured ? buildNamedToolChoice("yield", session.model) : "none";
 		let cyberRefusalContinuationAttempted = false;
 		const stripSubagentCyberRefusal = (refused: AssistantMessage): void => {
-			const hasToolCall = Array.isArray(refused.content) && refused.content.some(block => block.type === "toolCall");
-			if (hasToolCall) {
-				refused.errorMessage = undefined;
-				refused.stopDetails = undefined;
-				return;
-			}
-			const agentMessages = session.agent?.state?.messages;
-			if (Array.isArray(agentMessages) && agentMessages.at(-1) === refused) {
-				agentMessages.pop();
-			}
-			const sessionMessages = session.state?.messages;
-			if (Array.isArray(sessionMessages) && sessionMessages.at(-1) === refused) {
-				sessionMessages.pop();
-			}
+			const removeTurnAndSyntheticResults = (list: unknown[] | undefined): void => {
+				if (!Array.isArray(list)) return;
+				let refusedIdx = -1;
+				for (let i = list.length - 1; i >= 0; i--) {
+					const entry = list[i] as { role?: string; timestamp?: number; errorMessage?: string } | undefined;
+					if (
+						entry === refused ||
+						(entry?.role === "assistant" &&
+							entry.timestamp === refused.timestamp &&
+							entry.errorMessage === refused.errorMessage)
+					) {
+						refusedIdx = i;
+						break;
+					}
+				}
+				if (refusedIdx < 0) return;
+				let endIdx = refusedIdx + 1;
+				while (endIdx < list.length) {
+					const next = list[endIdx] as
+						| { role?: string; isError?: boolean; details?: { __synthetic?: boolean; executed?: boolean } }
+						| undefined;
+					if (next?.role === "toolResult" && (next.details?.__synthetic === true || next.isError === true)) {
+						endIdx++;
+					} else {
+						break;
+					}
+				}
+				list.splice(refusedIdx, endIdx - refusedIdx);
+			};
+			removeTurnAndSyntheticResults(session.agent?.state?.messages as unknown[] | undefined);
+			removeTurnAndSyntheticResults(session.state?.messages as unknown[] | undefined);
 		};
 
 		const runYieldLadder = async (): Promise<void> => {
@@ -2622,12 +2639,7 @@ async function driveSessionToResult(
 				const budgetStop = monitor.budgetStopRequested();
 				if (!structured && !budgetStop) {
 					const lastTurn = session.getLastAssistantMessage();
-					if (
-						!cyberRefusalContinuationAttempted &&
-						lastTurn &&
-						isCyberRefusalMessage(lastTurn) &&
-						monitor.progress.requests <= 1
-					) {
+					if (!cyberRefusalContinuationAttempted && lastTurn && isCyberRefusalMessage(lastTurn)) {
 						cyberRefusalContinuationAttempted = true;
 						stripSubagentCyberRefusal(lastTurn);
 						await dispatchPrompt(task, { attribution: "agent", synthetic: true }, "cyber refusal retry");
@@ -2648,11 +2660,7 @@ async function driveSessionToResult(
 				// strip the refusal and allow one next-turn attempt.
 				const lastBeforeReminder = session.getLastAssistantMessage();
 				if (lastBeforeReminder?.stopReason === "error") {
-					if (
-						!cyberRefusalContinuationAttempted &&
-						isCyberRefusalMessage(lastBeforeReminder) &&
-						monitor.progress.requests <= 1
-					) {
+					if (!cyberRefusalContinuationAttempted && isCyberRefusalMessage(lastBeforeReminder)) {
 						cyberRefusalContinuationAttempted = true;
 						stripSubagentCyberRefusal(lastBeforeReminder);
 					} else {

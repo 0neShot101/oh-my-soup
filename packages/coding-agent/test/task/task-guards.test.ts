@@ -197,9 +197,9 @@ describe("runSubprocess request guards", () => {
 		expect(handle.steerCalls[0].options?.deliverAs).toBe("steer");
 	});
 
-	it("injects the steering notice by default when the soft request budget is crossed", async () => {
-		// Budget 4 is crossed at request 4; the notice defaults ON, so exactly
-		// one steer lands without task.softRequestBudgetNotice being set.
+	it("does not inject the steering notice by default when the soft request budget is crossed", async () => {
+		// Budget 4 is crossed at request 4; notices default OFF so agents do not
+		// see remaining request budget warnings unless explicitly opted in.
 		const settings = Settings.isolated({
 			"task.maxRuntimeMs": 0,
 			"task.softRequestBudget": 4,
@@ -220,8 +220,7 @@ describe("runSubprocess request guards", () => {
 
 		expect(result.requests).toBe(5);
 		expect(result.aborted).toBe(false);
-		expect(handle.steerCalls.length).toBe(1);
-		expect(handle.steerCalls[0].content).toContain("[budget notice]");
+		expect(handle.steerCalls).toEqual([]);
 	});
 
 	it("uses the agent's own task.agentSoftRequestBudget entry instead of the global budget", async () => {
@@ -230,6 +229,7 @@ describe("runSubprocess request guards", () => {
 		const settings = Settings.isolated({
 			"task.maxRuntimeMs": 0,
 			"task.softRequestBudget": 2,
+			"task.softRequestBudgetNotice": true,
 			"task.agentSoftRequestBudget": { task: 4 },
 		});
 		const handle = createFakeSession({

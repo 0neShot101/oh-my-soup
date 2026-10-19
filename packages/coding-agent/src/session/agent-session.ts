@@ -190,7 +190,6 @@ import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import type { PlanModeState } from "../plan-mode/state";
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
-import anthropicUsageWrapUpPrompt from "../prompts/system/anthropic-usage-wrap-up.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import checkpointActiveNoticeTemplate from "../prompts/system/checkpoint-active-notice.md" with { type: "text" };
 import interruptedThinkingTemplate from "../prompts/system/interrupted-thinking.md" with { type: "text" };
@@ -1105,8 +1104,6 @@ export class AgentSession implements SettingsScope {
 	#detachUsageBeforeModelCall: (() => void) | undefined;
 	/** Claude account lane (`cred:<id>`/`key:<hash>`) that served the latest Anthropic request. */
 	#anthropicSlowModeLane: string | undefined;
-	/** `<lane>#<window>` of the wrap-up window this session already told the model about. */
-	#anthropicWrapUpHinted: string | undefined;
 
 	#transformContext: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
 	#onPayload: SimpleStreamOptions["onPayload"] | undefined;
@@ -1222,6 +1219,7 @@ export class AgentSession implements SettingsScope {
 	#pendingRewindReport: string | undefined = undefined;
 	#lastCompletedRewind: CompletedRewindState | undefined = undefined;
 	#rewoundToolResultIds = new Set<string>();
+	#skippedRefusalToolCallIds = new Set<string>();
 	#lastSuccessfulYieldToolCallId: string | undefined = undefined;
 	/**
 	 * Sticky across an in-flight prompt run: a successful `yield` makes the run
@@ -3919,11 +3917,21 @@ export class AgentSession implements SettingsScope {
 		if (this.#sessionMessageAlreadyPersisted(message)) return;
 		if (message.role === "assistant") {
 			const assistantMsg = message as AssistantMessage;
-			if (this.#recovery.isClassifierRefusal(assistantMsg) || isProviderRefusalMessage(assistantMsg)) return;
+			if (this.#recovery.isClassifierRefusal(assistantMsg) || isProviderRefusalMessage(assistantMsg)) {
+				for (const block of assistantMsg.content) {
+					if (block.type === "toolCall") {
+						this.#skippedRefusalToolCallIds.add(block.id);
+					}
+				}
+				return;
+			}
 			if (isEmptyErrorTurn(assistantMsg)) return;
 			if (assistantMsg.contextSnapshot?.importantNotesTokens === undefined) {
 				this.#captureAssistantContextSnapshot(assistantMsg);
 			}
+		}
+		if (message.role === "toolResult" && this.#skippedRefusalToolCallIds.delete(message.toolCallId)) {
+			return;
 		}
 		const skipPersistedRewindResult =
 			message.role === "toolResult" &&
@@ -4826,6 +4834,10 @@ export class AgentSession implements SettingsScope {
 				maintenanceRoute("committed-text-stream-stall-continued");
 				await emitAgentEndNotification({ willContinue: true });
 				return;
+			} else if (!requestBodyTimeoutTerminal && (await this.#recovery.handleCyberRefusalStop(msg))) {
+				maintenanceRoute("cyber-refusal-continued");
+				await emitAgentEndNotification({ willContinue: true });
+				return;
 			} else if (!requestBodyTimeoutTerminal && this.#recovery.isHardErrorFallbackEligible(msg)) {
 				// A non-retryable hard error on a model covered by a configured
 				// fallback chain: retrying the SAME model is pointless, but a
@@ -4837,10 +4849,6 @@ export class AgentSession implements SettingsScope {
 					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
-			} else if (!requestBodyTimeoutTerminal && (await this.#recovery.handleCyberRefusalStop(msg))) {
-				maintenanceRoute("cyber-refusal-continued");
-				await emitAgentEndNotification({ willContinue: true });
-				return;
 			}
 			// Classifier and provider refusals are persisted-skipped above; also prune
 			// the trailing stub from active context so the next turn's prompt does not
@@ -10772,23 +10780,7 @@ export class AgentSession implements SettingsScope {
 	 * extra usage) will carry the work past it.
 	 */
 	#steerAnthropicWrapUp(): void {
-		const lane = this.#anthropicSlowModeLane;
-		if (lane === undefined || this.model?.provider !== "anthropic") return;
-		const window = anthropicSlowModeLanes
-			.lane(lane)
-			.wrapUpHintKey(cfgProvidersAnthropicSlowMode.get(this.settings) === "auto");
-		if (window === undefined) return;
-		const key = `${lane}#${window}`;
-		if (this.#anthropicWrapUpHinted === key) return;
-		this.#anthropicWrapUpHinted = key;
-		this.agent.steer({
-			role: "custom",
-			customType: "anthropic-usage-wrap-up",
-			content: anthropicUsageWrapUpPrompt,
-			attribution: "agent",
-			display: false,
-			timestamp: Date.now(),
-		});
+		// Never steer usage-limit / wrap-up allowance warnings into the agent's context.
 	}
 
 	/** Sets or clears one model family's live service tier. */

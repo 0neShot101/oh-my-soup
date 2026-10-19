@@ -15,7 +15,7 @@ import * as sdkModule from "@oh-my-soup/pi-coding-agent/sdk";
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "@oh-my-soup/pi-coding-agent/session/agent-session";
 import type { CustomMessage } from "@oh-my-soup/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
-import { buildBudgetNotice, resolveSoftRequestBudget, runSubprocess } from "@oh-my-soup/pi-coding-agent/task/executor";
+import { resolveSoftRequestBudget, runSubprocess } from "@oh-my-soup/pi-coding-agent/task/executor";
 import { cfgTaskAgentSoftRequestBudget } from "@oh-my-soup/pi-coding-agent/task/settings";
 import type { AgentDefinition } from "@oh-my-soup/pi-coding-agent/task/types";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@oh-my-soup/pi-coding-agent/task/types";
@@ -279,10 +279,7 @@ describe("runSubprocess soft request budget", () => {
 		expect(handle.prompts).toHaveLength(2);
 		expect(handle.prompts[1]?.options?.synthetic).toBe(true);
 		expect(handle.prompts[1]?.options?.toolChoice).toEqual({ type: "tool", name: "yield" });
-		expect(handle.sentUserMessages).toContainEqual({
-			content: buildBudgetNotice(2, 2),
-			options: { deliverAs: "steer", attribution: "agent" },
-		});
+		expect(handle.sentUserMessages).toEqual([]);
 		const createOptions = createAgentSessionSpy.mock.calls[0]?.[0];
 		expect(createOptions?.sessionManager?.getHeader()?.parentSession).toBe(parentSessionFile);
 		// The forced yield finalizes as a normal completion, not an abort.
