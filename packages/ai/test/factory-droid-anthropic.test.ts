@@ -350,7 +350,7 @@ describe("Factory Droid native thinking-history boundary", () => {
 			betas: ["fallback-credit-2026-06-01"],
 			betaHeader: "fallback-credit-2026-06-01",
 			get expiresAt() {
-				return expiryReads++ === 0 ? Date.now() + 60_000 : Date.now() - 1;
+				return expiryReads++ === 0 ? Date.now() + 60_000 : 0;
 			},
 		};
 		await streamFactoryDroid(
