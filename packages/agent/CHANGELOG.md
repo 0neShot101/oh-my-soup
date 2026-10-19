@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.11.6] - 2026-10-19
+
 ### Fixed
 
 - Dropped cyber-refused assistant turns and their unexecuted synthetic tool results from provider replay instead of replaying the refused tool-call turn.

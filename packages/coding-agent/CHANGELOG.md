@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.11.6] - 2026-10-19
+
 ### Changed
 
 - Disabled automatic wrap-up steering notices, soft request budget notices, and periodic session-notes nudges by default so agents do not see usage or context-headroom warnings in their prompt context.
