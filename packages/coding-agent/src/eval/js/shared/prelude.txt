@@ -584,11 +584,6 @@ if (!globalThis.__oms_js_prelude_loaded__) {
 		run: async instructions =>
 			await __compactCall(instructions === undefined ? { op: "run" } : { op: "run", instructions: String(instructions) }),
 	};
-
-	const display = value => {
-		globalThis.__oms_display__(value);
-	};
-
 	const formatArgs = args => args.map(arg => (typeof arg === "string" ? arg : arg));
 
 	const consoleTimers = new Map();
@@ -656,7 +651,6 @@ if (!globalThis.__oms_js_prelude_loaded__) {
 
 	globalThis.console = consoleBridge;
 	globalThis.print = consoleBridge.log;
-	globalThis.display = display;
 	globalThis.tool = tool;
 	globalThis.completion = completion;
 	globalThis.output = output;

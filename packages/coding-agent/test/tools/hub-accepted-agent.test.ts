@@ -75,6 +75,8 @@ describe("wait accepted-agent watchdog", () => {
 			agentRegistry: registry,
 			getAgentId: () => SELF_ID,
 		} as unknown as ToolSession);
-		await expect(tool.execute("call", {})).rejects.toThrow("Nothing to wait for");
+		const result = await tool.execute("call", {});
+		expect(result.useless).toBe(true);
+		expect(result.content[0]).toMatchObject({ text: expect.stringContaining("Nothing to wait for") });
 	});
 });

@@ -15,7 +15,7 @@ import {
 } from "@oh-my-soup/pi-agent-core";
 import type { AssistantMessage, Judge, ToolCall } from "@oh-my-soup/pi-ai";
 import { logger, prompt, relativePathWithinRoot, withTimeout } from "@oh-my-soup/pi-utils";
-import type { Rule } from "../capability/rule";
+import { BUILTIN_DEFAULTS_PROVIDER_ID, type Rule } from "../capability/rule";
 import type { Settings } from "../config/settings";
 import {
 	judgeRules,
@@ -319,6 +319,7 @@ export class TtsrCoordinator {
 					name: rule.name,
 					path: this.#displayRulePath(rule.path),
 					content: rule.content,
+					builtin: rule._source?.provider === BUILTIN_DEFAULTS_PROVIDER_ID,
 				}),
 			)
 			.join("\n\n");

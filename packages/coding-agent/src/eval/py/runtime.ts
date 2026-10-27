@@ -7,7 +7,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $env, $which, getPythonEnvDir } from "@oh-my-soup/pi-utils";
+import { $env, $whichAll, getPythonEnvDir } from "@oh-my-soup/pi-utils";
 
 const SYSTEM_PYTHON_COMMANDS = [
 	"python",
@@ -239,10 +239,11 @@ export function resolveExplicitPythonRuntime(
 
 /**
  * Enumerate candidate Python runtimes in priority order: an active/project venv,
- * the managed `~/.oms/python-env`, then the system interpreter on PATH. Every
+ * the managed `~/.oms/python-env`, then every `python` and `python3` on PATH. Every
  * candidate that physically exists is returned so callers can probe each in turn
  * rather than committing to the first — a managed env left behind by a removed
- * `uv` install no longer shadows a working system Python.
+ * `uv` install, or a version-manager shim with no version selected for the cwd,
+ * no longer shadows a working system Python.
  */
 export function enumeratePythonRuntimes(cwd: string, baseEnv: Record<string, string | undefined>): PythonRuntime[] {
 	const runtimes: PythonRuntime[] = [];
@@ -272,11 +273,10 @@ export function enumeratePythonRuntimes(cwd: string, baseEnv: Record<string, str
 		});
 	}
 
-	const systemPath = SYSTEM_PYTHON_COMMANDS.map(command => $which(command)).find(
-		(candidate): candidate is string => candidate !== null,
-	);
-	if (systemPath) {
-		push({ pythonPath: systemPath, env: { ...baseEnv } });
+	for (const command of SYSTEM_PYTHON_COMMANDS) {
+		for (const systemPath of $whichAll(command)) {
+			push({ pythonPath: systemPath, env: { ...baseEnv } });
+		}
 	}
 
 	return runtimes;

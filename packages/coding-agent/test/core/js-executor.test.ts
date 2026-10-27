@@ -36,11 +36,7 @@ function createTool(
 }
 
 function getJsonData(result: JsResult): unknown {
-	const jsonOutputs = result.displayOutputs.filter(
-		(output): output is Extract<JsResult["displayOutputs"][number], { type: "json" }> => output.type === "json",
-	);
-	expect(jsonOutputs).toHaveLength(1);
-	return jsonOutputs[0].data;
+	return JSON.parse(result.output);
 }
 
 function getStatusEvents(result: JsResult) {
@@ -221,7 +217,9 @@ describe("executeJs", () => {
 		]);
 		expect(described.missing).toEqual(["missing"]);
 		expect(await describeEvalTools(evalSession, ["dbl"])).toEqual(described.tools);
-		await expect(describeEvalTools(evalSession, ["nope"])).rejects.toThrow("Unknown eval tool(s): nope");
+		// Bun's rejects matcher can starve the follow-up IPC request on Windows.
+		const missingToolError = await describeEvalTools(evalSession, ["nope"]).catch((error: unknown) => error);
+		expect(missingToolError).toMatchObject({ message: expect.stringContaining("Unknown eval tool(s): nope") });
 
 		const called = await invokeJsTool(
 			{ op: "call", name: "dbl", args: { n: 2 } },
@@ -385,14 +383,14 @@ describe("executeJs", () => {
 	it("exposes the worker's real process object", async () => {
 		const result = await executeJs(
 			[
-				"return {",
+				"return JSON.stringify({",
 				"  version: process.version,",
 				"  versionsNode: typeof process.versions.node,",
 				"  platform: process.platform,",
 				"  arch: process.arch,",
 				"  hasEnv: 'env' in process,",
 				"  hasExit: 'exit' in process,",
-				"};",
+				"});",
 			].join("\n"),
 			{ sessionId, session, sessionFile },
 		);
@@ -422,7 +420,7 @@ describe("executeJs", () => {
 				"const stat = fs.statSync(base + '/nested/copy.txt');",
 				"const entries = fs.readdirSync(base + '/nested');",
 				"const start = performance.now();",
-				"return {",
+				"return JSON.stringify({",
 				"  uuid: typeof uuid,",
 				"  digestBytes: digest.byteLength,",
 				"  text,",
@@ -432,7 +430,7 @@ describe("executeJs", () => {
 				"  hasConstants: typeof fs.constants.R_OK,",
 				"  buffer: Buffer.from('ok').toString('hex'),",
 				"  performance: typeof start,",
-				"};",
+				"});",
 			].join("\n"),
 			{ sessionId, session, sessionFile },
 		);
@@ -459,7 +457,7 @@ describe("executeJs", () => {
 				"const positionalSliced = await read('config.json', 3, 1);",
 				"const nullOffsetLimit = await read('config.json', null, 2);",
 				"const undefinedOffsetLimit = await read('config.json', undefined, 1);",
-				"return { isString: typeof full === 'string', full, objectSliced, positionalSliced, nullOffsetLimit, undefinedOffsetLimit };",
+				"return JSON.stringify({ isString: typeof full === 'string', full, objectSliced, positionalSliced, nullOffsetLimit, undefinedOffsetLimit });",
 			].join("\n"),
 			{
 				sessionId,
@@ -494,7 +492,7 @@ describe("executeJs", () => {
 			[
 				"const wide = await read('artifact://15:raw', 1, 1400);",
 				"const limited = await read('artifact://15:raw', null, 2);",
-				"return { wide, limited };",
+				"return JSON.stringify({ wide, limited });",
 			].join("\n"),
 			{
 				sessionId,
@@ -537,7 +535,7 @@ describe("executeJs", () => {
 		};
 
 		const result = await executeJs(
-			"return { toolResult: await tool.read({ path: 'package.json' }), agentOutput: await output('agent-42') };",
+			"return JSON.stringify({ toolResult: await tool.read({ path: 'package.json' }), agentOutput: await output('agent-42') });",
 			{
 				sessionId,
 				session: toolSession,
@@ -551,7 +549,6 @@ describe("executeJs", () => {
 			toolResult: {
 				text: "annotated",
 				details: { path: "package.json", kind: "tool-result" },
-				images: undefined,
 			},
 			agentOutput: "from-agent",
 		});
@@ -595,30 +592,6 @@ describe("executeJs", () => {
 		expect(result.output.trim()).toBe("note.txt");
 	});
 
-	it("auto-displays the final awaited expression result", async () => {
-		const execute = vi.fn(async (): Promise<AgentToolResult> => ({
-			content: [{ type: "text", text: "tool output" }],
-			details: { kind: "tool-result" },
-		}));
-		const toolSession: ToolSession = {
-			...session,
-			getToolByName: name => (name === "read" ? createTool("read", execute) : undefined),
-		};
-
-		const result = await executeJs("await tool.read({ path: 'package.json' });", {
-			sessionId,
-			session: toolSession,
-			sessionFile,
-		});
-
-		expect(result.exitCode).toBe(0);
-		expect(getJsonData(result)).toEqual({
-			text: "tool output",
-			details: { kind: "tool-result" },
-			images: undefined,
-		});
-	});
-
 	it("awaits promise-valued final expressions before displaying", async () => {
 		const result = await executeJs("read('config.json');", {
 			sessionId,
@@ -639,18 +612,6 @@ describe("executeJs", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.output.trim()).toBe('{\n  "name": "demo",\n  "enabled": true\n}');
-	});
-
-	it("auto-displays returned objects as structured output", async () => {
-		const result = await executeJs("return { answer: 42, nested: { ok: true } };", {
-			sessionId,
-			session,
-			sessionFile,
-		});
-
-		expect(result.exitCode).toBe(0);
-		expect(result.output).toBe("");
-		expect(result.displayOutputs).toEqual([{ type: "json", data: { answer: 42, nested: { ok: true } } }]);
 	});
 
 	it('rewrites static `import { x } from "pkg"` to dynamic import', async () => {
@@ -675,13 +636,6 @@ describe("executeJs", () => {
 		);
 		expect(result.exitCode).toBe(0);
 		expect(result.output.trim()).toBe("7");
-	});
-	it("falls back to text display when the final expression value is not structured-cloneable", async () => {
-		const result = await executeJs("({ fn: () => 1 });", { sessionId, session, sessionFile });
-		expect(result.exitCode).toBe(0);
-		expect(result.output).toContain("[object Object]");
-		// No JSON display because structuredClone fails on the embedded function.
-		expect(result.displayOutputs.filter(o => o.type === "json")).toHaveLength(0);
 	});
 
 	it("cancels execution when the timeout expires", async () => {

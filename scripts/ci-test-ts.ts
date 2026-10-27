@@ -107,6 +107,13 @@ const nativeAndIntegrationPackages = [
 	"packages/typescript-edit-benchmark",
 ];
 
+const projectToolTestCommand: TestCommand = {
+	label: ".oms/tests (project-local TUI debug tool)",
+	cwd: ".",
+	command: ["bun", "test", ...onlyFailuresArgs, "./.oms/tests/tui.test.ts"],
+	parallel: 1,
+};
+
 // Packages the CI buckets deliberately skip but a local full run should still
 // cover. roboms-web lives under python/roboms and is outside every CI TS bucket.
 const localOnlyWorkspacePackages = ["python/roboms/web"];
@@ -356,13 +363,16 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 				],
 			});
 		case "native":
-			return (
-				await Promise.all(
-					nativeAndIntegrationPackages.map(pkg =>
-						workspaceTestCommands(pkg, process.platform === "win32" && pkg === "packages/tui" ? 1 : 4),
-					),
-				)
-			).flat();
+			return [
+				...(
+					await Promise.all(
+						nativeAndIntegrationPackages.map(pkg =>
+							workspaceTestCommands(pkg, process.platform === "win32" && pkg === "packages/tui" ? 1 : 4),
+						),
+					)
+				).flat(),
+				projectToolTestCommand,
+			];
 		case "coding-agent-singleton":
 			return await codingAgentTestCommands("singleton");
 		case "coding-agent-ui":
@@ -404,6 +414,7 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 						),
 					])
 				).flat(),
+				projectToolTestCommand,
 				...(await commandsForMode("coding-agent-heavy")),
 			];
 		// `local` is what root `bun run test` drives: the full TS suite plus the

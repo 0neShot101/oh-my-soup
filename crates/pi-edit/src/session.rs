@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use crate::{
 	diff_string::{CompactDiffOptions, build_compact_diff_preview},
 	engine::{EditMode, FileOp, FileOpIntent, HeaderKind, ModeEngine, PreviewFile, StagedFile},
-	error::{EditError, EditResult},
+	error::{EditError, EditResult, STAGING_REFUSAL_NOTICE},
 	files::{FileCache, FileSource},
 	modes::apply_patch::ATOMICITY_NOTICE,
 	notebook,
@@ -29,6 +29,10 @@ pub struct SessionConfig {
 	pub allow_fuzzy:        bool,
 	pub fuzzy_threshold:    f64,
 	pub enforce_seen_lines: bool,
+	/// Narrowest per-line display cap any tool applies, in UTF-8 bytes (0: no
+	/// tool cuts lines). Without recorded read provenance, hashline anchors on
+	/// longer lines are rejected because their display may have been cut.
+	pub max_columns:        usize,
 	/// The payload is not JSON (custom-format tool): the buffer is `input`.
 	pub raw_input:          bool,
 }
@@ -142,6 +146,7 @@ impl Session {
 			config.allow_fuzzy,
 			config.fuzzy_threshold,
 			config.enforce_seen_lines,
+			config.max_columns,
 		);
 		let files = FileCache::new(config.policy.clone());
 		Self {
@@ -170,7 +175,6 @@ impl Session {
 	/// models otherwise retry believing part of the edit landed (SWE-agent,
 	/// `NeurIPS` 2024, Fig. 11). An unresolved URL stays typed for the host.
 	fn staging_refusal(mode: EditMode, error: EditError) -> EditError {
-		const NOTICE: &str = "No changes were applied.";
 		if !matches!(mode, EditMode::Replace | EditMode::Patch | EditMode::ApplyPatch) {
 			return error;
 		}
@@ -188,17 +192,23 @@ impl Session {
 			} else {
 				"\n"
 			};
-			message + separator + NOTICE
+			message + separator + STAGING_REFUSAL_NOTICE
 		};
 		match error {
 			EditError::Apply(message) => EditError::Apply(notice(message)),
 			EditError::Match(message) => EditError::Match(notice(message)),
 			EditError::Plan(message) => EditError::Plan(notice(message)),
 			EditError::Parse { message, line } => EditError::Parse { message: notice(message), line },
-			error @ (EditError::InvalidUtf8 { .. } | EditError::Io { .. }) => {
-				EditError::Apply(notice(error.to_string()))
+			EditError::Rejected { reason, message } => {
+				EditError::Rejected { reason, message: notice(message) }
 			},
-			other @ (EditError::UnresolvedUrl(_) | EditError::Writer(_)) => other,
+			error @ (EditError::InvalidUtf8 { .. } | EditError::Io { .. }) => {
+				EditError::Staging { source: Box::new(error) }
+			},
+			other @ (EditError::UnresolvedUrl(_)
+			| EditError::Writer(_)
+			| EditError::InFile { .. }
+			| EditError::Staging { .. }) => other,
 		}
 	}
 

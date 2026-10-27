@@ -8,6 +8,7 @@ import type {
 } from "@oh-my-soup/pi-ai";
 import { createMockModel } from "@oh-my-soup/pi-ai/providers/mock";
 import * as envApiKey from "@oh-my-soup/pi-ai/env-api-key";
+import { closeModelCache } from "@oh-my-soup/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-soup/pi-catalog/models";
 import { runUsageCommand } from "@oh-my-soup/pi-coding-agent/cli/usage-cli";
 import { ModelRegistry } from "@oh-my-soup/pi-coding-agent/config/model-registry";
@@ -765,6 +766,8 @@ describe("Claude saved-reset trigger integration", () => {
 				else process.env[key] = value;
 			}
 			__resetDirsFromEnvForTests();
+			// The CLI's ModelRegistry opened `<agentDir>/models.db`; Windows cannot delete it while open.
+			closeModelCache();
 		}
 	});
 

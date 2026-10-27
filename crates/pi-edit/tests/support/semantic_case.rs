@@ -972,6 +972,7 @@ fn apply_patch(
 		allow_fuzzy:        false,
 		fuzzy_threshold:    0.95,
 		enforce_seen_lines: false,
+		max_columns:        512,
 		raw_input:          true,
 	};
 	let mut session = Session::new(config, store);

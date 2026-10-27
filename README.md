@@ -308,6 +308,8 @@ Full reference: [tool guides](docs/tools).
 
 Sixty-plus providers, one `/model` picker. Ten chat roles route work by intent: `default` for normal turns, `smol` for cheap fan-out, `slow` for deep reasoning, `plan`, `commit`, `vision`, `task`, `advisor`, `tiny`, and `memory`; the kind roles `image`, `web`, `speech`, `dictation`, and `judge` pick non-chat models. Override at launch with `--smol`, `--slow`, or `--plan`; cycle the configured models for the active role with `Ctrl+P`.
 
+Direct APIs and gateways include Anthropic `oauth` · OpenAI · OpenAI Codex `oauth` · Google Gemini · Google Vertex · Google Antigravity `oauth` · xAI · SuperGrok `oauth` · DeepSeek · Mistral · Groq · Cerebras · SambaNova · Fireworks · Together · Baseten · DeepInfra · Hugging Face · NVIDIA · Meta · Inception · Amazon Bedrock · Azure OpenAI · SiliconFlow · GMI Cloud · CoreWeave · Sakana AI · Command Hyper · StepFun · Helmcode · OpenRouter · Synthetic · Vercel AI Gateway · Cloudflare AI Gateway · Wafer Serverless.
+
 Auth tags: `oauth` signs in with your provider account, `plan` routes through a coding-plan subscription, `local` runs against a local server with the key optional, `cookie` reuses a browser session.
 
 <details>

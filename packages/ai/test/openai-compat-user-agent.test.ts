@@ -95,7 +95,7 @@ describe("resolveOpenAIRequestSetup User-Agent", () => {
 	test("sets oms User-Agent on xAI when none is provided", () => {
 		for (const provider of ["xai", "xai-oauth"] as const) {
 			const setup = resolveOpenAIRequestSetup(
-				{ provider, id: "grok-4.6", baseUrl: "https://api.x.ai/v1" },
+				{ provider, id: "grok-4.6", api: "openai-completions", reasoning: false, baseUrl: "https://api.x.ai/v1" },
 				{ apiKey: "sk-test", messages: [] },
 			);
 			expect(setup.headers["User-Agent"]).toBe(USER_AGENT);
@@ -106,7 +106,7 @@ describe("resolveOpenAIRequestSetup User-Agent", () => {
 	test("does not set User-Agent on other OpenAI-wire providers", () => {
 		for (const provider of ["openai", "deepseek"] as const) {
 			const setup = resolveOpenAIRequestSetup(
-				{ provider, id: "m", baseUrl: "https://api.example/v1" },
+				{ provider, id: "m", api: "openai-completions", reasoning: false, baseUrl: "https://api.example/v1" },
 				{ apiKey: "sk-test", messages: [] },
 			);
 			expect(setup.headers["User-Agent"]).toBeUndefined();
@@ -118,6 +118,8 @@ describe("resolveOpenAIRequestSetup User-Agent", () => {
 			{
 				provider: "xai",
 				id: "grok-4.6",
+				api: "openai-responses",
+				reasoning: true,
 				baseUrl: "https://api.x.ai/v1",
 				headers: { "User-Agent": "custom-xai-client/1.0" },
 			},
@@ -131,6 +133,8 @@ describe("resolveOpenAIRequestSetup User-Agent", () => {
 			{
 				provider: "xai",
 				id: "grok-4.6",
+				api: "openai-responses",
+				reasoning: true,
 				baseUrl: "https://api.x.ai/v1",
 				headers: { "user-agent": "custom-xai-client/1.0" },
 			},

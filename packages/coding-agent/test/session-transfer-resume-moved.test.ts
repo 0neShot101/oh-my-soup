@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { parseArgs } from "@oh-my-soup/pi-coding-agent/cli/args";
 import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
 import { createSessionManager } from "@oh-my-soup/pi-coding-agent/main";
-import { resetSessionIndexForTests } from "@oh-my-soup/pi-coding-agent/session/session-index";
+import { closeSessionIndex } from "@oh-my-soup/pi-coding-agent/session/session-index";
 import { loadEntriesFromFile } from "@oh-my-soup/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
 import {
@@ -30,7 +30,7 @@ describe("resuming a session that moved away", () => {
 	});
 
 	afterEach(async () => {
-		resetSessionIndexForTests();
+		closeSessionIndex();
 		if (originalAgentDir) {
 			setAgentDir(originalAgentDir);
 		} else {

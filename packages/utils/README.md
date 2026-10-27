@@ -6,7 +6,7 @@ Shared utilities for [oh-my-soup](https://github.com/pickpocket/oh-my-soup) pack
 
 | Module                                                                                                             | Purpose                                                                                      |
 | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `logger`                                                                                                           | Centralized logger writing to `~/.oms/logs/` with rotation (TUI-safe — never stdout)         |
+| `logger`                                                                                                           | Centralized logger writing to `~/.oms/logs/` (`bun test`: temp dir), rotating, never stdout  |
 | `prompt`                                                                                                           | Handlebars-based prompt templating and formatting helpers                                    |
 | `dirs`                                                                                                             | Path helpers for oms config directories (`~/.oms`, XDG-aware on Linux)                       |
 | `stream`                                                                                                           | `readStream` / `readLines` helpers over `ReadableStream`                                     |

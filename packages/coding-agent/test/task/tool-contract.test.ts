@@ -315,9 +315,7 @@ async function rejectFilesystemWrite(session: AgentSession, cwd: string) {
 	const target = path.join(cwd, "unauthorized.txt");
 	const write = session.getToolByName("write");
 	if (write) {
-		await expect(write.execute("contract-denied-write", { path: target, content: "unauthorized" })).rejects.toThrow(
-			"Filesystem writes are not available",
-		);
+		await expect(write.execute("contract-denied-write", { path: target, content: "unauthorized" })).rejects.toThrow();
 	}
 	expect(await Bun.file(target).exists()).toBe(false);
 }

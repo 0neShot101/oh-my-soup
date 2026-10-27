@@ -84,6 +84,7 @@ import {
 	getImplicitOllamaBaseUrl,
 	getOllamaContextLengthOverride,
 	isDiscoveryAuthRejection,
+	LLAMA_CPP_DEFAULT_BASE_URLS,
 	normalizeBareDiscoveryBaseUrl,
 	normalizeLiteLLMDiscoveryBaseUrl,
 	normalizeLlamaCppBaseUrl,
@@ -1612,6 +1613,9 @@ export class ModelRegistry {
 				? withRemoteCompaction.map(applyLlamaCppQwenThinking)
 				: withRemoteCompaction;
 
+		// User config plumbing, not catalog policy: an ollama provider configured
+		// for Responses moves its completions-discovered rows onto that API.
+		// KDL `api-routes` key on model ids and cannot see the provider config.
 		if (providerConfig.provider !== "ollama" || providerConfig.api !== "openai-responses") {
 			return withQwenThinking;
 		}
@@ -1665,9 +1669,10 @@ export class ModelRegistry {
 			this.#discoverableProviders.push({
 				provider: "llama.cpp",
 				api: "openai-responses",
-				baseUrl: Bun.env.LLAMA_CPP_BASE_URL || "http://127.0.0.1:8080",
+				baseUrl: Bun.env.LLAMA_CPP_BASE_URL || LLAMA_CPP_DEFAULT_BASE_URLS[0],
 				discovery: { type: "llama.cpp" },
 				optional: !Bun.env.LLAMA_CPP_BASE_URL,
+				fallbackBaseUrls: Bun.env.LLAMA_CPP_BASE_URL ? undefined : LLAMA_CPP_DEFAULT_BASE_URLS.slice(1),
 			});
 			// Only mark as keyless if no API key is configured
 			if (this.authStorage.keys.source("llama.cpp") === undefined) {
@@ -2020,10 +2025,11 @@ export class ModelRegistry {
 				: `${providerConfig.provider}:openai-models-list-context-v4`;
 		}
 		if (providerConfig.discovery.type === "litellm") {
-			// rich-v5 invalidates rows written before discovery filtered known
+			// rich-v6 invalidates rows written before `mode: decisions` groups moved
+			// to the Decisions runner; rich-v5 before discovery filtered known
 			// non-conversational modes. Keep this in lockstep with the catalog
 			// package's `litellm:rich-vN` namespace whenever mapping behavior changes.
-			return `${providerConfig.provider}:litellm-rich-v5`;
+			return `${providerConfig.provider}:litellm-rich-v6`;
 		}
 		return providerConfig.provider;
 	}
@@ -2334,6 +2340,7 @@ export class ModelRegistry {
 								accounts?.map(account => ({
 									accessToken: account.accessToken,
 									accountKey: oauthAccountKey(account),
+									projectId: account.projectId,
 								})) ?? null
 							);
 						},
@@ -2876,9 +2883,6 @@ export class ModelRegistry {
 			if (!model.contextWindowAuthoritative) {
 				({ model, tiers } = this.#applyContextWindowPolicies(model, extendedContext, compactionPoints));
 			}
-			if (model.provider === "ollama-cloud" && model.omitMaxOutputTokens !== true) {
-				model = applyModelOverride(model, { omitMaxOutputTokens: true });
-			}
 			if (tiers) this.#policyWindowTiers.set(model, tiers);
 			return model;
 		});
@@ -2933,29 +2937,18 @@ export class ModelRegistry {
 		// Extended context off: cap models with a premium long-context price
 		// tier (e.g. GPT-5.6 bills 2x input above 272K) at the standard-pricing
 		// threshold so compaction fires before a request crosses into the tier.
-		// xai-oauth carries public xAI prices only for API-equivalent stats;
-		// SuperGrok requests remain subscription-backed, so its estimated tier
-		// must not constrain the runtime context window. Explicit per-model
+		// Rows flagged `longContextWindowUncapped` (catalog
+		// `long-context-window-uncapped`, e.g. subscription-backed hosts whose
+		// tier prices are estimates) keep their full window. Explicit per-model
 		// `contextWindow` overrides reapply later in composition and win over
 		// this cap.
-		if (!extendedContext && model.provider !== "xai-oauth") {
+		if (!extendedContext && model.longContextWindowUncapped !== true) {
 			const threshold = model.cost.longContext?.inputThreshold;
 			if (threshold !== undefined && model.contextWindow !== null && model.contextWindow > threshold) {
 				model = applyModelOverride(model, { contextWindow: threshold });
 			}
 		}
-		if (model.id !== "gpt-5.4" || model.provider === "github-copilot") {
-			return model;
-		}
-		const overrides = this.#modelOverrides.get(model.provider)?.get(model.id);
-		if (!overrides) {
-			return applyModelOverride(model, { contextWindow: 1_000_000 });
-		}
-		this.#warnUnservedOverrideKind(model, overrides);
-		return applyModelOverride(model, {
-			contextWindow: overrides.contextWindow ?? 1_000_000,
-			...overrides,
-		});
+		return model;
 	}
 
 	#parseModels(config: ModelsConfig): CustomModelOverlay[] {

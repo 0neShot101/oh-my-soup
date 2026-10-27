@@ -18,7 +18,7 @@ import { updateEvalState } from "../state";
 import type { EvalShadowCellSession } from "../speculation/cell-session";
 import { getActiveEvalShadowCell } from "../speculation/runtime-context";
 import type { ShadowPlan } from "../speculation/types";
-import type { EvalToolDescriptor, EvalToolInvokeResult } from "../types";
+import type { EvalDisplayOutput, EvalToolDescriptor, EvalToolInvokeResult } from "../types";
 import { type ShadowSnapshot, shadowSnapshotDigest } from "./shared/runtime";
 import { projectJavaScriptShadowPlan } from "./speculation";
 import { callSessionTool, type JsStatusEvent } from "./tool-bridge";
@@ -26,7 +26,6 @@ import { callSessionTool, type JsStatusEvent } from "./tool-bridge";
 // hidden argv mode, so compiled/npm builds only need one JavaScript entry.
 import type {
 	EvalPreludeSource,
-	JsDisplayOutput,
 	JsToolRequest,
 	RunErrorPayload,
 	SessionSnapshot,
@@ -35,12 +34,11 @@ import type {
 } from "./worker-protocol";
 
 export { rewriteImports, wrapCode } from "./shared/rewrite-imports";
-export type { JsDisplayOutput } from "./worker-protocol";
 
 export interface VmRunState {
 	signal?: AbortSignal;
 	onText?: (chunk: string) => void;
-	onDisplay?: (output: JsDisplayOutput) => void;
+	onDisplay?: (output: EvalDisplayOutput) => void;
 }
 
 /** Isolated runtime transport used by the context manager and startup regression fixtures. */
@@ -234,12 +232,7 @@ export async function invokeJsTool(
 	let envelope: unknown;
 	const pending: PendingRun = {
 		runId,
-		runState: {
-			signal: options.signal,
-			onDisplay: output => {
-				if (output.type === "json") envelope = output.data;
-			},
-		},
+		runState: { signal: options.signal },
 		toolSession: options.session,
 		resolve,
 		reject,
@@ -263,7 +256,7 @@ export async function invokeJsTool(
 
 	try {
 		if (!pending.settled) safeSend(session, { type: "tool", runId, ...request });
-		await promise;
+		envelope = (await promise).value;
 	} catch (error) {
 		return { ok: false, error: error instanceof Error ? error.message : String(error) };
 	} finally {
@@ -354,17 +347,11 @@ export async function probeLiveVmGlobals(
 	if (!target) return undefined;
 	const session = target;
 	const runId = `probe-${Snowflake.next()}`;
-	let names: string[] | null = null;
 	const { promise, resolve, reject } = Promise.withResolvers<{ value: unknown }>();
+	const chunks: string[] = [];
 	const pending: PendingRun = {
 		runId,
-		runState: {
-			onDisplay: output => {
-				if (output.type !== "json") return;
-				const data: unknown = output.data;
-				if (Array.isArray(data) && data.every(item => typeof item === "string")) names = data;
-			},
-		},
+		runState: { onText: chunk => chunks.push(chunk) },
 		toolSession: undefined,
 		resolve,
 		reject,
@@ -378,12 +365,13 @@ export async function probeLiveVmGlobals(
 		session.worker.send({
 			type: "run",
 			runId,
-			code: `__oms_list_new_globals__(${limit})`,
+			code: `JSON.stringify(__oms_list_new_globals__(${limit}))`,
 			filename: `${runId}.js`,
 			snapshot: { cwd: session.cwd, sessionId: session.sessionId },
 		});
 		await raceWithTimeout(promise, timeoutMs, "kernel state probe timed out");
-		return names;
+		const names: unknown = JSON.parse(chunks.join(""));
+		return Array.isArray(names) && names.every(item => typeof item === "string") ? names : null;
 	} catch {
 		return null;
 	} finally {
@@ -913,7 +901,7 @@ function finishPending(pending: PendingRun, msg: Extract<WorkerOutbound, { type:
 	pending.settled = true;
 	pending.heldResult = undefined;
 	if (msg.ok) {
-		pending.resolve({ value: undefined });
+		pending.resolve({ value: msg.value });
 		return;
 	}
 	pending.reject(errorFromPayload(msg.error));

@@ -87,6 +87,8 @@ type ThinkingContent struct {
 	Thinking          string  `json:"thinking"`
 	ThinkingSignature *string `json:"thinkingSignature,omitempty"`
 	ItemID            *string `json:"itemId,omitempty"`
+	// Prose the model addressed to the user, returned by the provider as thinking; present it as answer text.
+	Narration *bool `json:"narration,omitempty"`
 	// Extra holds undeclared keys and declared keys whose value did not decode (that field stays zero).
 	// Encoding writes them back, over a declared field with the same key.
 	Extra map[string]json.RawMessage `json:"-"`
@@ -103,6 +105,7 @@ func (v *ThinkingContent) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("thinking", &out.Thinking)
 	d.optional("thinkingSignature", &out.ThinkingSignature)
 	d.optional("itemId", &out.ItemID)
+	d.optional("narration", &out.Narration)
 	out.Extra = d.rest()
 	if d.err != nil {
 		return d.err
@@ -2963,7 +2966,9 @@ type SessionStats struct {
 	SessionFile       *string            `json:"sessionFile,omitempty"`
 	Credits           *SessionCredits    `json:"credits,omitempty"`
 	RoutedModels      map[string]float64 `json:"routedModels,omitempty"`
-	ContextUsage      *ContextUsage      `json:"contextUsage,omitempty"`
+	// Failed edits by the engine's `errorKind`.
+	EditRejections map[string]float64 `json:"editRejections,omitempty"`
+	ContextUsage   *ContextUsage      `json:"contextUsage,omitempty"`
 }
 
 func (v *SessionStats) UnmarshalJSON(data []byte) error {
@@ -2985,6 +2990,7 @@ func (v *SessionStats) decodeFrom(raw map[string]json.RawMessage) error {
 	d.optional("sessionFile", &out.SessionFile)
 	d.optional("credits", &out.Credits)
 	d.optional("routedModels", &out.RoutedModels)
+	d.optional("editRejections", &out.EditRejections)
 	d.optional("contextUsage", &out.ContextUsage)
 	if d.err != nil {
 		return d.err
@@ -3237,7 +3243,9 @@ type BtwHistoryTurn struct {
 	Status    BtwStatus `json:"status"`
 	CreatedAt int64     `json:"createdAt"`
 	UpdatedAt int64     `json:"updatedAt"`
-	Error     *string   `json:"error,omitempty"`
+	// Images attached to the question.
+	Images []ImageContent `json:"images,omitempty"`
+	Error  *string        `json:"error,omitempty"`
 }
 
 func (v *BtwHistoryTurn) UnmarshalJSON(data []byte) error {
@@ -3252,6 +3260,7 @@ func (v *BtwHistoryTurn) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("status", &out.Status)
 	d.required("createdAt", &out.CreatedAt)
 	d.required("updatedAt", &out.UpdatedAt)
+	d.optional("images", &out.Images)
 	d.optional("error", &out.Error)
 	if d.err != nil {
 		return d.err
@@ -3262,13 +3271,15 @@ func (v *BtwHistoryTurn) decodeFrom(raw map[string]json.RawMessage) error {
 
 // A side-question topic: its first turn's fields plus follow-ups; the latest turn is the last follow-up, else the record.
 type BtwHistoryRecord struct {
-	Question  string           `json:"question"`
-	Answer    string           `json:"answer"`
-	Status    BtwStatus        `json:"status"`
-	CreatedAt int64            `json:"createdAt"`
-	UpdatedAt int64            `json:"updatedAt"`
-	ID        string           `json:"id"`
-	LeafID    *string          `json:"leafId"`
+	Question  string    `json:"question"`
+	Answer    string    `json:"answer"`
+	Status    BtwStatus `json:"status"`
+	CreatedAt int64     `json:"createdAt"`
+	UpdatedAt int64     `json:"updatedAt"`
+	ID        string    `json:"id"`
+	LeafID    *string   `json:"leafId"`
+	// Images attached to the question.
+	Images    []ImageContent   `json:"images,omitempty"`
 	Error     *string          `json:"error,omitempty"`
 	FollowUps []BtwHistoryTurn `json:"followUps,omitempty"`
 }
@@ -3287,6 +3298,7 @@ func (v *BtwHistoryRecord) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("updatedAt", &out.UpdatedAt)
 	d.required("id", &out.ID)
 	d.nullable("leafId", &out.LeafID)
+	d.optional("images", &out.Images)
 	d.optional("error", &out.Error)
 	d.optional("followUps", &out.FollowUps)
 	if d.err != nil {
@@ -4782,6 +4794,8 @@ type PromptError struct {
 	Provider   *string `json:"provider,omitempty"`
 	Model      *string `json:"model,omitempty"`
 	HTTPStatus *int64  `json:"httpStatus,omitempty"`
+	// `cost_cap`: the session reached `session.maxCost` (`--max-cost`) and oms did not send the next request.
+	Code *PromptErrorCode `json:"code,omitempty"`
 }
 
 func (v *PromptError) UnmarshalJSON(data []byte) error {
@@ -4796,11 +4810,31 @@ func (v *PromptError) decodeFrom(raw map[string]json.RawMessage) error {
 	d.optional("provider", &out.Provider)
 	d.optional("model", &out.Model)
 	d.optional("httpStatus", &out.HTTPStatus)
+	d.optional("code", &out.Code)
 	if d.err != nil {
 		return d.err
 	}
 	*v = out
 	return nil
+}
+
+type PromptErrorCode string
+
+const (
+	PromptErrorCodeCostCap PromptErrorCode = "cost_cap"
+)
+
+func (v *PromptErrorCode) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "PromptErrorCode")
+	if err != nil {
+		return err
+	}
+	switch value := PromptErrorCode(s); value {
+	case PromptErrorCodeCostCap:
+		*v = value
+		return nil
+	}
+	return unknownValue("PromptErrorCode", s)
 }
 
 // Terminal outcome of one accepted `prompt` / `abort_and_prompt`, keyed by request `id`.

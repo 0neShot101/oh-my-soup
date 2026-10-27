@@ -268,13 +268,6 @@ mod tests {
 		assert_eq!(decoder.finish(), "");
 	}
 
-	#[test]
-	fn incomplete_utf8_at_eof_becomes_replacement() {
-		let mut decoder = OutputDecoder::new();
-		assert_eq!(decoder.push(&[0xe4]), "");
-		assert_eq!(decoder.finish(), "\u{FFFD}");
-	}
-
 	#[cfg(windows)]
 	#[test]
 	fn gbk_decodes_to_chinese() {
@@ -368,6 +361,13 @@ mod utf8_tests {
 		return OutputDecoder::with_fallback_codepage(CP_UTF8);
 		#[cfg(not(windows))]
 		return OutputDecoder::new();
+	}
+
+	#[test]
+	fn incomplete_utf8_at_eof_becomes_replacement() {
+		let mut decoder = utf8_decoder();
+		assert_eq!(decoder.push(&[0xe4]), "");
+		assert_eq!(decoder.finish(), "\u{FFFD}");
 	}
 
 	#[test]

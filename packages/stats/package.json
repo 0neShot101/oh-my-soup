@@ -4,7 +4,10 @@
   "version": "18.11.6",
   "description": "Local observability dashboard for Oh My Soup AI usage statistics",
   "homepage": "https://github.com/pickpocket/oh-my-soup",
-  "author": "Stencil Labs, Inc.",
+  "author": {
+    "name": "Stencil Labs, Inc.",
+    "url": "https://stencil.so"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",

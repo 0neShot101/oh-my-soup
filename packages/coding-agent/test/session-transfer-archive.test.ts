@@ -6,7 +6,7 @@ import * as path from "node:path";
 import type { ImageContent } from "@oh-my-soup/pi-ai";
 import { BlobStore, isBlobRef } from "@oh-my-soup/pi-coding-agent/session/blob-store";
 import type { FileEntry, SessionHeader } from "@oh-my-soup/pi-coding-agent/session/session-entries";
-import { resetSessionIndexForTests } from "@oh-my-soup/pi-coding-agent/session/session-index";
+import { closeSessionIndex } from "@oh-my-soup/pi-coding-agent/session/session-index";
 import { findSessionFiles } from "@oh-my-soup/pi-coding-agent/session/session-listing";
 import { loadEntriesFromFile, resolveBlobRefsInEntries } from "@oh-my-soup/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
@@ -60,7 +60,7 @@ describe("oms session pack/unpack archive", () => {
 	});
 
 	afterEach(async () => {
-		resetSessionIndexForTests();
+		closeSessionIndex();
 		if (originalAgentDir) {
 			setAgentDir(originalAgentDir);
 		} else {

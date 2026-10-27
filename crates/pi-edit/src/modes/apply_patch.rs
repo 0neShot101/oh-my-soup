@@ -256,7 +256,7 @@ fn distinct_paths(entries: &[ApplyPatchEntry]) -> usize {
 /// stays typed so the host can resolve it and retry.
 fn wrap_file_error(path: &str, error: EditError, multiple_files: bool) -> EditError {
 	if multiple_files && !matches!(error, EditError::UnresolvedUrl(_)) {
-		EditError::apply(format!("[{path}]: {error}\n{ATOMICITY_NOTICE}"))
+		EditError::InFile { path: path.to_owned(), source: Box::new(error) }
 	} else {
 		error
 	}

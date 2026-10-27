@@ -4,7 +4,7 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { FileEntry, SessionHeader } from "@oh-my-soup/pi-coding-agent/session/session-entries";
-import { resetSessionIndexForTests } from "@oh-my-soup/pi-coding-agent/session/session-index";
+import { closeSessionIndex } from "@oh-my-soup/pi-coding-agent/session/session-index";
 import { findSessionFiles } from "@oh-my-soup/pi-coding-agent/session/session-listing";
 import { loadEntriesFromFile } from "@oh-my-soup/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-soup/pi-coding-agent/session/session-manager";
@@ -61,7 +61,7 @@ describe("oms session unpack against a local copy", () => {
 	});
 
 	afterEach(async () => {
-		resetSessionIndexForTests();
+		closeSessionIndex();
 		if (originalAgentDir) {
 			setAgentDir(originalAgentDir);
 		} else {
