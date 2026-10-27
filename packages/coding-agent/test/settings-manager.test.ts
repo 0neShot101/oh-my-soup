@@ -1823,20 +1823,6 @@ describe("Settings", () => {
 
 		const MODEL_PRIO = roleDefaultModels();
 		const webExaCandidates = ["web/exa", ...MODEL_PRIO.web.filter(selector => selector !== "web/exa")];
-		const webOrderedHead = [
-			"google-gemini-cli/gemini-2.5-flash",
-			"google-antigravity/gemini-2.5-flash",
-			"google/gemini-2.5-flash",
-			"anthropic/claude-haiku-4-5",
-			"openai-codex/gpt-5.6-luna",
-			"xai/grok-4.5",
-			"web/exa",
-			"web/tavily",
-		];
-		const webOrderedCandidates = [
-			...webOrderedHead,
-			...MODEL_PRIO.web.filter(selector => !webOrderedHead.includes(selector)),
-		];
 		const webExcludedCandidates = MODEL_PRIO.web.filter(selector => selector !== "web/public");
 		const imageOrderedHead = [
 			"openai/gpt-image-2",
@@ -1856,13 +1842,6 @@ describe("Settings", () => {
 			...MODEL_PRIO.image.filter(selector => selector !== "xai/grok-imagine-image"),
 		];
 		const cases: LegacyMigrationCase[] = [
-			[
-				"web search order",
-				"providers.webSearchOrder",
-				["gemini", "anthropic", "codex", "xai", "exa", "tavily"],
-				{ web: webOrderedCandidates[0] },
-				{ web: webOrderedCandidates.slice(1) },
-			],
 			[
 				"web search exclusions",
 				"providers.webSearchExclude",
@@ -1953,6 +1932,39 @@ describe("Settings", () => {
 				}
 			},
 		);
+
+		it("preserves legacy web provider order without pinning each provider's current model", async () => {
+			const order = ["gemini", "anthropic", "codex", "xai", "exa", "tavily"];
+			for (const input of [{ providers: { webSearchOrder: order } }, { "providers.webSearchOrder": order }]) {
+				await writeSettings(input);
+				const settings = await Settings.init({ cwd: projectDir, agentDir });
+				const roles = cfgModelRoles.get(settings);
+				const chains = cfgRetryFallbackChains.get(settings);
+				const selected = [roles.web, ...chains.web];
+				expect(
+					selected.slice(0, 8).map(selector => (selector.startsWith("web/") ? selector : selector.split("/")[0])),
+				).toEqual([
+					"google-gemini-cli",
+					"google-antigravity",
+					"google",
+					"anthropic",
+					"openai-codex",
+					"xai",
+					"web/exa",
+					"web/tavily",
+				]);
+				expect(selected[4]).toMatch(/^openai-codex\/[^/]+$/);
+				cfgDisplayShowTokenUsage.set(settings, true);
+				await settings.flush();
+				const saved = await readSettings();
+				expect(saved.modelRoles).toEqual(roles);
+				expect((saved.retry as Record<string, unknown>).fallbackChains).toEqual(chains);
+				expect(Object.hasOwn(saved, "providers.webSearchOrder")).toBe(false);
+				expect(
+					Object.hasOwn((saved.providers as Record<string, unknown> | undefined) ?? {}, "webSearchOrder"),
+				).toBe(false);
+			}
+		});
 
 		it("keeps a legacy Gemini wire tier ahead of non-Gemini fallbacks", async () => {
 			await writeSettings({

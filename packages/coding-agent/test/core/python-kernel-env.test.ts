@@ -101,7 +101,7 @@ describe("enumeratePythonRuntimes", () => {
 	it("discovers a versioned system interpreter when python aliases are absent", () => {
 		const versionedPy = path.join(path.sep, "usr", "bin", "python3.12");
 		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
-		vi.spyOn(piUtils, "$which").mockImplementation(bin => (bin === "python3.12" ? versionedPy : null));
+		vi.spyOn(piUtils, "$whichAll").mockImplementation(bin => (bin === "python3.12" ? [versionedPy] : []));
 		vi.spyOn(fs, "existsSync").mockReturnValue(false);
 
 		expect(enumeratePythonRuntimes(path.join(path.sep, "work"), {}).map(runtime => runtime.pythonPath)).toEqual([

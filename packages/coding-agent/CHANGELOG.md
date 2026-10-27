@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed native HUD job metrics and hover-card discovery.
+
 ## [18.13.1] - 2026-10-27
 
 ### Added

@@ -1465,7 +1465,7 @@ describe("RelayBridge multiple extension instances", () => {
 		const cdp = new FakeCdpSocket();
 		const connId = bridge.cdpConnected(cdp);
 		const sessionId = await attachPage(bridge, edge, cdp, connId, 1, "edge");
-		bridge.cdpMessage(connId, JSON.stringify({ id: ++msgSeq, sessionId, method: "OMP.claimTarget" }));
+		bridge.cdpMessage(connId, JSON.stringify({ id: ++msgSeq, sessionId, method: "OMS.claimTarget" }));
 		await flush();
 		bridge.cdpMessage(connId, JSON.stringify({ id: ++msgSeq, method: "Target.createTarget", params: {} }));
 		expect(edge.rpcs("createTab")).toHaveLength(1);

@@ -14,6 +14,7 @@ import { closeModelCache } from "@oh-my-soup/pi-catalog/model-cache";
 import { ModelRegistry } from "@oh-my-soup/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
 import type { ExtensionFactory } from "@oh-my-soup/pi-coding-agent/extensibility/extensions";
+import { extensionToolSourceInfo } from "@oh-my-soup/pi-coding-agent/extensibility/extensions/loader";
 import { AgentLifecycleManager } from "@oh-my-soup/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-soup/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-soup/pi-coding-agent/session/agent-session";
@@ -71,36 +72,43 @@ let discoveryGate: (() => Promise<void>) | undefined;
 const turnStartReasons: string[] = [];
 
 /**
- * Registers the way the HexRays ida-mcp extension does: discovery starts at `session_start`, and
- * the tool is registered at the next `input` or `before_agent_start`. Its calls work only while the
- * binding that registered it has a live session.
+ * The schema is available when the parent grants this capability; its backend
+ * becomes usable at the first input/before_agent_start hook. A rebuilt binding
+ * must finish that discovery again before a revived request can call it.
  */
 const registersAtFirstTurn: ExtensionFactory = pi => {
 	let startup: Promise<void> | undefined;
 	let pending: (() => void) | undefined;
 	let running = false;
+	let ready = false;
+	const register = () =>
+		pi.registerTool({
+			name: "late_tool",
+			loadMode: "essential",
+			label: "late_tool",
+			description: "Tool initialized at the first turn",
+			parameters: type({}),
+			async execute() {
+				if (!running) throw new Error("late_tool: session has ended");
+				if (!ready) throw new Error("late_tool: discovery has not finished");
+				return { content: [{ type: "text", text: "late_tool ok" }] };
+			},
+		});
+	register();
 	const discover = async (): Promise<void> => {
 		await discoveryGate?.();
 		if (!running) return;
-		pending = () =>
-			pi.registerTool({
-				name: "late_tool",
-				loadMode: "essential",
-				label: "late_tool",
-				description: "Tool registered at the first turn",
-				parameters: type({}),
-				async execute() {
-					if (!running) throw new Error("late_tool: session has ended");
-					return { content: [{ type: "text", text: "late_tool ok" }] };
-				},
-			});
+		pending = () => {
+			ready = true;
+			register();
+		};
 	};
 	const ensure = async (): Promise<void> => {
 		if (running) startup ??= discover();
 		await startup;
-		const register = pending;
+		const registerPending = pending;
 		pending = undefined;
-		register?.();
+		registerPending?.();
 	};
 	pi.on("session_start", () => {
 		if (startup) return;
@@ -114,6 +122,7 @@ const registersAtFirstTurn: ExtensionFactory = pi => {
 	});
 	pi.on("session_shutdown", () => {
 		running = false;
+		ready = false;
 		startup = undefined;
 		pending = undefined;
 	});
@@ -182,11 +191,13 @@ async function spawnAndPark() {
 			modelRegistry,
 			preloadedPreparedExtensions: preparedExtensions,
 			settings,
+			// The extension's dynamic tool is an explicitly inherited capability.
+			toolNames: ["late_tool"],
 			enableLsp: false,
 			enableMCP: false,
 			enableIrc: false,
 		});
-		expect(result.exitCode).toBe(0);
+		expect(result.exitCode, result.error ?? result.stderr).toBe(0);
 		await AgentLifecycleManager.global().park(AGENT_ID);
 	} catch (error) {
 		authStorage.close();
@@ -200,6 +211,13 @@ async function spawnAndPark() {
 				sessionManager: { getCwd: () => cwd, getArtifactManager: () => undefined },
 				effectiveExtensionRoots: { explicit: [], mode: "merge", configured: [], configuredLevel: "user" },
 				preparedExtensions,
+				getEnabledToolNames: () => ["late_tool"],
+				getAllToolInfos: () => [
+					{
+						name: "late_tool",
+						sourceInfo: extensionToolSourceInfo({ name: "late_tool" }, "<inline-0>"),
+					},
+				],
 			} as unknown as AgentSession;
 			const ref = AgentRegistry.global().get(AGENT_ID);
 			if (!ref) throw new Error(`${AGENT_ID} is not registered`);

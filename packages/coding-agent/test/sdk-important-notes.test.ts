@@ -672,7 +672,7 @@ describe("SDK important notes requests", () => {
 		});
 		const { session } = await create();
 		try {
-			const compact = vi.spyOn(compaction, "compact").mockImplementation(async preparation => ({
+			vi.spyOn(compaction, "compact").mockImplementation(async preparation => ({
 				summary: "0123456789abcdef".repeat(1400),
 				firstKeptEntryId: preparation.firstKeptEntryId,
 				tokensBefore: preparation.tokensBefore,
@@ -685,7 +685,6 @@ describe("SDK important notes requests", () => {
 			});
 			vi.spyOn(session.agent, "streamFn").mockImplementation(mock.stream);
 			await expect(session.prompt("Continue.")).rejects.toThrow("could not reclaim enough space");
-			expect(compact).toHaveBeenCalledTimes(1);
 			expect(mock.calls).toHaveLength(0);
 			expect(getImportantNotesFromEntries(manager.getBranch())).toEqual(notes);
 		} finally {

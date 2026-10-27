@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Default web search tries dedicated search engines before falling back to a hosted chat model.
+
 ## [18.13.1] - 2026-10-27
 
 ### Added

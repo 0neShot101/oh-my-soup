@@ -315,7 +315,7 @@ describe("generated model policies", () => {
 		expect(models[2]?.cost.longContext).toBeUndefined();
 	});
 
-	it("prices GPT-6 Sol and Luna API requests above 272K without charging Codex subscriptions", () => {
+	it("prices GPT-6 API-equivalent requests above 272K while subscription worker lanes stay exempt", () => {
 		for (const [id, shortInput, longInput, longOutput, longRead] of [
 			["gpt-6-sol", 2, 4, 15, 0.4],
 			["gpt-6-luna", 0.1, 0.2, 0.75, 0.02],
@@ -334,6 +334,9 @@ describe("generated model policies", () => {
 				}),
 			);
 			const codex = buildGenerated(createSpec({ id, api: "openai-codex-responses", provider: "openai-codex" }));
+			const worker = buildGenerated(
+				createSpec({ id: `${id}-wm`, api: "openai-codex-responses", provider: "openai-codex" }),
+			);
 			const at = pricedUsage(api, 72_000, 200_000);
 			const over = pricedUsage(api, 72_001, 200_000);
 			expect(at.input).toBeCloseTo((shortInput * 72_000) / 1e6);
@@ -341,7 +344,8 @@ describe("generated model policies", () => {
 			expect(over.output).toBeCloseTo((longOutput * 10_000) / 1e6);
 			expect(over.cacheRead).toBeCloseTo((longRead * 200_000) / 1e6);
 			expect(api.cost.longContext?.cacheWrite).toBe(shortInput * 2.5);
-			expect(pricedUsage(codex, 72_001, 200_000).input).toBeCloseTo((shortInput * 72_001) / 1e6);
+			expect(pricedUsage(codex, 72_001, 200_000)).toEqual(over);
+			expect(worker.cost.longContext).toBeUndefined();
 		}
 	});
 

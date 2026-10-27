@@ -476,8 +476,8 @@ behavior {
 	}
 	role-defaults "web" {
 		model "web/parallel"
-		model "web/hosted"
 		model "web/exa"
+		model "web/public"
 		model "web/firecrawl"
 		model "web/searxng"
 		model "web/startpage"
@@ -485,7 +485,7 @@ behavior {
 		model "web/ecosia"
 		model "web/google"
 		model "web/mojeek"
-		model "web/public"
+		model "web/hosted"
 	}
 	role-defaults "speech" {
 		model "local/kokoro"

@@ -823,7 +823,7 @@ function describeJobsSegment(running: number, entries: readonly JobWidgetEntry[]
 	return node(
 		"row",
 		{
-			role: "oms.hud.seg",
+			role: "omp.hud.seg",
 			gap: "xs",
 			align: "center",
 			title,
@@ -838,7 +838,7 @@ function describeJobsSegment(running: number, entries: readonly JobWidgetEntry[]
 				node(
 					"text",
 					{
-						role: "oms.hud.glance",
+						role: "omp.hud.glance",
 						spans: jobWidgetGlanceSpans({ text: glance.text, ...(glance.trend ? { trend: glance.trend } : {}) }),
 						wrap: "none",
 					},

@@ -1,8 +1,7 @@
 /**
- * `/tan` copies the parent's system prompt, which already carries the parent's
- * first-turn memory recall. The clone must send that prompt as-is: recalling
- * again would append the same memories as an extra block, duplicating them and
- * breaking the prompt-cache prefix the clone shares with its parent.
+ * `/tan` must preserve the parent's request prefix and recalled memory exactly.
+ * Providers may project recalled system blocks into a user message; compare the
+ * actual request text so a clone cannot lose or duplicate the recall on that path.
  */
 import { afterEach, expect, it, vi } from "bun:test";
 import { createMockModel } from "@oh-my-soup/pi-ai/providers/mock";
@@ -30,12 +29,13 @@ afterEach(() => {
 	AgentRegistry.resetGlobalForTests();
 });
 
-it("sends the parent's recalled system prompt unchanged from a /tan clone", async () => {
+it("preserves the parent's request prefix and recalled memory in a /tan clone", async () => {
 	using dir = TempDir.createSync("@oms-tan-memory-recall-");
 	const auth = await AuthStorage.create(dir.join("auth.db"));
 	auth.keys.setRuntime("muse-code", "test-key");
 	const sessions: AgentSession[] = [];
 	const systemPrompts: string[][] = [];
+	const memoryBlocks: string[][] = [];
 	const mock = createMockModel({ handler: { content: [{ type: "text", text: "alpha-7" }] } });
 	const realStreamFactory = settingsStream.createSettingsAwareStreamFn;
 	vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network is disabled in this test"));
@@ -44,6 +44,15 @@ it("sends the parent's recalled system prompt unchanged from a /tan clone", asyn
 			settings,
 			(streamModel, context, options) => {
 				systemPrompts.push([...(context.systemPrompt ?? [])]);
+				memoryBlocks.push(
+					context.messages
+						.flatMap(message =>
+							typeof message.content === "string"
+								? [message.content]
+								: message.content.flatMap(part => (part.type === "text" ? [part.text] : [])),
+						)
+						.filter(text => text.includes(MEMORY)),
+				);
 				return mock.stream(streamModel, context, options);
 			},
 			slow,
@@ -90,9 +99,10 @@ it("sends the parent's recalled system prompt unchanged from a /tan clone", asyn
 		await mnemopiStarts[0]!.promise;
 		getMnemopiSessionState(parent)!.rememberScoped(MEMORY);
 		await parent.prompt("Where is the deploy host?");
-		await parent.prompt("And which host serves staging?");
 		const parentPrompt = systemPrompts.at(-1)!;
-		expect(parentPrompt.join("\n").split(MEMORY)).toHaveLength(2);
+		const parentMemory = memoryBlocks.at(-1)!;
+		expect(parentMemory).toHaveLength(1);
+		expect(parentMemory[0].split(MEMORY)).toHaveLength(2);
 
 		const realCreate = sdk.createAgentSession;
 		vi.spyOn(sdk, "createAgentSession").mockImplementation(async options => {
@@ -130,9 +140,9 @@ it("sends the parent's recalled system prompt unchanged from a /tan clone", asyn
 		if (!runJob) throw new Error("Tan did not register its job");
 		const requestsBeforeClone = systemPrompts.length;
 		await runJob();
-
-		const clonePrompt = systemPrompts[requestsBeforeClone];
+		const clonePrompt = systemPrompts[requestsBeforeClone]!;
 		expect(clonePrompt).toEqual(parentPrompt);
+		expect(memoryBlocks[requestsBeforeClone]).toEqual(parentMemory);
 	} finally {
 		await Promise.all(sessions.map(session => session.dispose()));
 		auth.close();

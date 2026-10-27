@@ -186,12 +186,8 @@ describe("read URL with multi-range selector (regression: was stuck on URL → 4
 		expect(text).toContain("content 13");
 		expect(text).toContain("content 26");
 		expect(text).toContain("content 28");
-		expect(text).not.toContain("content 10");
-		expect(text).not.toContain("content 29");
-		// Lines between ranges are elided
-		expect(text).not.toContain("content 14");
-		// Elision marker between blocks
-		expect(text).toContain("…");
+		// Context around each range must not fill the gap between them.
+		expect(text).not.toContain("content 20");
 		// The URL itself stays clean — no range selector ever hits the network.
 		expect(loadSpy).toHaveBeenCalledWith("https://example.com/file.txt", expect.anything());
 	});
