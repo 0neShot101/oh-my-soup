@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [18.13.1] - 2026-10-27
+
+### Changed
+
+- Managed runtime installations now keep Bun caches under the active OMS config root while respecting explicit cache overrides.
+
 ## [18.13.0] - 2026-10-26
 
 ### Added
@@ -52,10 +58,6 @@
 ### Added
 
 - Added `sanitizeTextDeep()`, which applies `sanitizeText()` to every string in a JSON-shaped value without mutating it ([#15963](https://github.com/can1357/oh-my-pi/issues/15963))
-
-### Changed
-
-- Managed runtime installations now keep Bun caches under the active OMS config root while respecting explicit cache overrides.
 
 ### Fixed
 

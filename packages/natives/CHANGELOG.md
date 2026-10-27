@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [18.13.1] - 2026-10-27
+
+### Added
+
+- Added Celestial search parsing, URL normalization, and result fusion APIs for Brave and DuckDuckGo.
+
 ### Fixed
 
 - Failed atomic edits retain `invalid_utf8` and `file_not_found` error kinds without modifying other files in the request.
@@ -165,10 +171,6 @@
 
 - `encodeSixel` and `encodeSixelAsync` now require a fourth terminal-background RGB argument packed as `0xRRGGBB` ([#15891](https://github.com/can1357/oh-my-pi/pull/15891) by [@Bouska](https://github.com/Bouska)).
 
-### Added
-
-- Added Celestial search parsing, URL normalization, and result fusion APIs for Brave and DuckDuckGo.
-
 ### Fixed
 
 - Fixed Windows file-lock contention returning permission errors when an existing lease allows synchronization but not full mutex access ([#15930](https://github.com/can1357/oh-my-pi/pull/15930) by [@jchanghong023](https://github.com/jchanghong023)).
@@ -179,8 +181,6 @@
 ### Fixed
 
 - Restored `wreq` browser emulation and cross-target `btls-sys` (BoringSSL) builds for Celestial search ([#12](https://github.com/pickpocket/oh-my-soup/pull/12) by [@Neulus](https://github.com/Neulus)).
-
-## [18.11.4] - 2026-10-17
 
 ## [18.11.3] - 2026-10-16
 

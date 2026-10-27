@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.13.1] - 2026-10-27
+
 ### Added
 
 - Added `ThinkingContent.narration`, set on Anthropic and Bedrock thinking blocks whose signature marks them as between-tool narration, and `presentNarrationAsAnswer(message)` to show those blocks as reply text while replay keeps them as signed thinking

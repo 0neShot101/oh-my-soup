@@ -2,9 +2,19 @@
 
 ## [Unreleased]
 
+## [18.13.1] - 2026-10-27
+
+### Added
+
+- Added `web/celestial`: credential-free Brave and DuckDuckGo search with native deduplication and rank fusion, without changing the default search chain.
+
 ### Changed
 
 - Updated the agent, model catalog, and native tools with upstream changes through `13abc1a2`, retaining Soup branding, configuration paths, and GitHub-based updates.
+- Managed dependency installs now keep Bun, pip, and uv caches under `.oms/dependencies`; automatically installed trafilatura uses a private environment instead of user-wide Python directories.
+- Updated `/usage`, `oms usage`, and the status line to display authoritative OpenCode Go quota usage directly from the official endpoint, replacing estimated costs with actual usage across three time windows (5h, 7d, and monthly).
+- Documented the source-available local protocol relay and clarified that production collaboration relay binaries are not currently published.
+- Enabled bounded Anthropic prompt-cache refreshes for the main agent loop while isolating advisor and side-channel requests from the shared refresh timer.
 
 ### Fixed
 
@@ -17,7 +27,10 @@
 - Fixed the shell's `dd if=DIR` on Windows failing with `failed to open ...: Permission denied`; like POSIX it now opens the directory and reports `error reading ...: Is a directory` with the transfer statistics
 - Fixed the LSP mux returning from shutdown before its language-server children exited, and spawning a duplicate language server when a session reconnected while the previous one was still closing its documents
 - Fixed `auth-gateway` strict probes sending a raw token instead of the structured credential blob for Alibaba Coding Plan and Snowflake logins ([#16092](https://github.com/can1357/oh-my-pi/pull/16092) by [@H4vC](https://github.com/H4vC))
-- Fixed the incomplete-todo stop reminder firing (and resuming work) when the agent's final message asks for permission or a decision before a closing status line, through "If you confirm, I'll…"/"Separately, tell me…"-style requests, or with a non-English question followed by another sentence ([#15986](https://github.com/can1357/oh-my-pi/issues/15986))
+- Cyber-refused turns in main and subagent sessions now strip the refusal from context and attempt to continue the turn; subagents suppress refusal details and report `"failure"` if still refused.
+- Fixed `/sprompt set` resolving home-relative and double-quoted prompt paths incorrectly, including Linux filenames with spaces.
+- Preserved per-task model overrides alongside upstream historical-session consultation and cold-revival authorization.
+- Fixed Ctrl+C printing `9;5u` in the shell after force-quitting oms with a third Ctrl+C while it was still closing the session
 
 ## [18.13.0] - 2026-10-26
 
@@ -440,23 +453,15 @@
 
 - Added `statusLine.segmentOptions.pi.showProfile`: set it to `false` to hide the profile name next to the `π` brand, for example when each profile already has its own theme ([#16063](https://github.com/can1357/oh-my-pi/pull/16063) by [@shgew](https://github.com/shgew))
 - Added `sharpshooter.minPromptLength` (default 16, minimum 2) to control the shortest prompt Sharpshooter extracts decisions from ([#16043](https://github.com/can1357/oh-my-pi/pull/16043) by [@bigHippoZz](https://github.com/bigHippoZz))
-- Added `web/celestial`: credential-free Brave and DuckDuckGo search with native deduplication and rank fusion, without changing the default search chain.
 
 ### Changed
 
-- Managed dependency installs now keep Bun, pip, and uv caches under `.oms/dependencies`; automatically installed trafilatura uses a private environment instead of user-wide Python directories.
 - With a first-party Anthropic model on the official API selected, the interactive UI opens the API connection at startup, on model switch, and when you start typing, so the next turn skips connection setup; third-party gateways and custom endpoints are never probed ([#16044](https://github.com/can1357/oh-my-pi/pull/16044) by [@H4vC](https://github.com/H4vC))
 - The API connection warm-up now covers every built-in provider (Copilot, OpenAI, Gemini, OpenRouter, …), not only Anthropic: between turns it keeps the connection your last request used open, through the configured proxy and CA settings, so the next turn skips connection setup; custom `models.yml` providers, built-in providers pointed at a gateway, and local servers are never probed ([#16086](https://github.com/can1357/oh-my-pi/pull/16086) by [@H4vC](https://github.com/H4vC))
 - Snapcompact now shows an imaged `read` result's indentation as count brackets (`[»2]` two tabs, `[·4]` four spaces) and keeps its `[path#TAG]` header as text, so edits from imaged reads keep the right indentation and tag ([#15899](https://github.com/can1357/oh-my-pi/pull/15899) by [@apoc](https://github.com/apoc))
-- Updated `/usage`, `oms usage`, and the status line to display authoritative OpenCode Go quota usage directly from the official endpoint, replacing estimated costs with actual usage across three time windows (5h, 7d, and monthly).
-- Documented the source-available local protocol relay and clarified that production collaboration relay binaries are not currently published.
-- Enabled bounded Anthropic prompt-cache refreshes for the main agent loop while isolating advisor and side-channel requests from the shared refresh timer.
 
 ### Fixed
 
-- Cyber-refused turns in main and subagent sessions now strip the refusal from context and attempt to continue the turn; subagents suppress refusal details and report `"failure"` if still refused.
-- Fixed `/sprompt set` resolving home-relative and double-quoted prompt paths incorrectly, including Linux filenames with spaces.
-- Preserved per-task model overrides alongside upstream historical-session consultation and cold-revival authorization.
 - Fixed the startup connection warm-up silently doing nothing on Windows, where Bun's `fetch.preconnect` throws ([#16086](https://github.com/can1357/oh-my-pi/pull/16086) by [@H4vC](https://github.com/H4vC))
 - Fixed the RPC frame codec (`modes/rpc/rpc-frame`) failing to bundle for Node because it pulled in Bun-only modules and the native addon ([#16072](https://github.com/can1357/oh-my-pi/pull/16072) by [@oyty](https://github.com/oyty))
 - Fixed a prompt sent while Esc was still interrupting the previous turn never settling, so a message steered in as it ended stayed queued instead of running ([#16038](https://github.com/can1357/oh-my-pi/pull/16038) by [@will-bogusz](https://github.com/will-bogusz))
@@ -486,7 +491,6 @@
 - Fixed resumed sessions with `eval` history (`--continue`, `--resume`) missing the prompt cache after the previous process's first request ([#15736](https://github.com/can1357/oh-my-pi/issues/15736))
 - Fixed a failed streamed edit preview ending the whole run without retry: the harness now re-drives the turn with the preview diagnostic so the model can read the file again and correct the patch, and gives up with a notice only after two recoveries
 - Fixed MCP OAuth login requesting every scope in an authorization server's catalogue when the protected resource advertises no scopes; `/mcp reauth` now falls back to configured scopes or authorization-server defaults ([#15996](https://github.com/can1357/oh-my-pi/pull/15996) by [@unclesamwk](https://github.com/unclesamwk)).
-- Fixed Ctrl+C printing `9;5u` in the shell after force-quitting oms with a third Ctrl+C while it was still closing the session
 - Fixed the incomplete-todo stop reminder firing (and resuming work) when the agent's final message asks for permission or a decision before a closing status line, through "If you confirm, I'll…"/"Separately, tell me…"-style requests, or with a non-English question followed by another sentence ([#15986](https://github.com/can1357/oh-my-pi/issues/15986))
 - Fixed Windows ARM64 installations selecting an x64 executable, including when running PowerShell under emulation.
 - Fixed `oms update` to upgrade Soup's Homebrew formula instead of targeting the upstream tap.

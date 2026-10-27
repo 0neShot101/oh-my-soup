@@ -2,9 +2,17 @@
 
 ## [Unreleased]
 
+## [18.13.1] - 2026-10-27
+
+### Added
+
+- Added `web/celestial` as a selectable native-backed Brave/DuckDuckGo search engine.
+- Added catalog-delivered model intelligence scores and estimated output throughput to help compare model capabilities and performance.
+
 ### Changed
 
 - Bundled GPT-5.4 rows on OpenAI, Azure, OpenCode Zen, and Command Code report a 1M context window, the window the coding agent already applied at runtime; GitHub Copilot and Factory Droid keep their own windows ([#16094](https://github.com/can1357/oh-my-pi/pull/16094) by [@H4vC](https://github.com/H4vC))
+- The bundled model catalog loads lazily per provider: `gen:models` now also emits per-provider chunks (`src/models/*.json.txt` + a generated static import map) and a light `models-index.json`, and the runtime parses a provider's chunk on first access instead of materializing all ~4800 models at module evaluation. Catalog data eval at boot drops ~87% (38ms → 5ms measured on the bundled form); full-catalog walkers pay a one-time memoized parse. Public API unchanged; new additive `getBundledModelIds(provider)` serves id-only consumers (shell completion) from the index without loading bodies.
 
 ### Fixed
 
@@ -114,19 +122,6 @@
 
 - Anthropic's `request-encoding-rejection` now also matches the API's "request body is not valid JSON" 400, which a gzip body gets when a proxy drops its `Content-Encoding` header ([#16108](https://github.com/can1357/oh-my-pi/pull/16108) by [@alphastorm](https://github.com/alphastorm))
 
-## [18.12.0] - 2026-10-17
-
-### Added
-
-- Added `web/celestial` as a selectable native-backed Brave/DuckDuckGo search engine.
-- Added catalog-delivered model intelligence scores and estimated output throughput to help compare model capabilities and performance.
-
-### Changed
-
-- The bundled model catalog loads lazily per provider: `gen:models` now also emits per-provider chunks (`src/models/*.json.txt` + a generated static import map) and a light `models-index.json`, and the runtime parses a provider's chunk on first access instead of materializing all ~4800 models at module evaluation. Catalog data eval at boot drops ~87% (38ms → 5ms measured on the bundled form); full-catalog walkers pay a one-time memoized parse. Public API unchanged; new additive `getBundledModelIds(provider)` serves id-only consumers (shell completion) from the index without loading bodies.
-
-## [18.11.4] - 2026-10-17
-
 ## [18.11.3] - 2026-10-16
 
 ### Changed
@@ -146,13 +141,6 @@
 - Fixed OpenCode Zen Gemini 4 Argon failing with an unsupported protocol; it now uses the native Gemini endpoint ([#15977](https://github.com/can1357/oh-my-pi/issues/15977)).
 
 ## [18.11.1] - 2026-10-16
-
-### Fixed
-
-- Fixed OpenCode Zen bringing back its retired bundled models after a failed refresh: the retry-backoff write no longer drops the cached snapshot's retention, so the pruned catalog survives the retry window and offline launches. ([#16054](https://github.com/can1357/oh-my-pi/pull/16054) by [@adi-IL](https://github.com/adi-IL))
-- Fixed `providers.cacheWarming` never arming for Claude on Google Antigravity: Claude models there now declare Vertex Anthropic's five-minute prompt-cache lifetime; Gemini models stay unwarmed because Google's implicit cache has no fixed lifetime ([#15764](https://github.com/can1357/oh-my-pi/issues/15764), [#16025](https://github.com/can1357/oh-my-pi/pull/16025) by [@harshaygadekar](https://github.com/harshaygadekar))
-- Scoped Jev image bounds to the selected models instead of applying them to unrelated native judges ([#16002](https://github.com/can1357/oh-my-pi/pull/16002) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy))
-- Fixed Bedrock sessions rejecting replayed tool names over 64 characters after a model switch ([#15839](https://github.com/can1357/oh-my-pi/issues/15839))
 
 ### Added
 

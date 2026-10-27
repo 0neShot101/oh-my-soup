@@ -9,8 +9,6 @@
 - Fixed TypeBox numeric bounds written in exponent notation throwing during schema construction, while preserving validation and nested JSON Schema constraints ([#15925](https://github.com/can1357/oh-my-pi/pull/15925) by [@jchanghong023](https://github.com/jchanghong023)).
 - Fixed importing local JSON Schema definition references containing URI percent encoding or JSON Pointer escapes ([#15926](https://github.com/can1357/oh-my-pi/pull/15926) by [@jchanghong023](https://github.com/jchanghong023)).
 
-## [18.11.4] - 2026-10-17
-
 ## [18.2.1] - 2026-09-15
 
 ### Added
