@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Collaboration's Relay Server setting now switches active hosting connections to the chosen server without changing view/control access or starting sharing when it is off.
+
 ### Fixed
 
 - Fixed native HUD job metrics and hover-card discovery.

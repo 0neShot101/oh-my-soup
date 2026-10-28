@@ -1,7 +1,7 @@
 /**
  * Owns collaboration hosting for one interactive process: manual `/collab`,
  * the opt-in `collab.autoStart` policy, and room rotation when the active
- * session changes or a room ends on its own.
+ * session or relay server changes, or a room ends on its own.
  *
  * Every room the relay opens for this process shares one random `instanceId`
  * and gets the next `generation`, which is what the local registry keys
@@ -52,6 +52,7 @@ export class CollabController {
 	/** Installed when the first room starts; a process that never hosts never subscribes. */
 	#unsubscribeSessionChange: (() => void) | undefined;
 	#unsubscribeSessionMove: (() => void) | undefined;
+	#unsubscribeSettingsChange: (() => void) | undefined;
 	/** Guests may drive the session only once interactive startup has finished. */
 	#startupComplete = false;
 	#shutdown = false;
@@ -132,6 +133,16 @@ export class CollabController {
 	}
 
 	#observeSessionChanges(): void {
+		if (this.#shutdown) return;
+		this.#unsubscribeSettingsChange ??= cfgCollabRelayUrl.listen(this.#ctx.settings, () => {
+			const previous = this.host;
+			// Changing the default server must not start sharing or publish a guest replica.
+			if (!previous || this.#ctx.collabGuest) return;
+			clearTimeout(this.#relaunchTimer);
+			this.#relaunchTimer = undefined;
+			const stopping = this.stop("relay server changed; rejoin using the new link");
+			this.#queueLaunch(stopping, this.#stopEpoch, previous);
+		});
 		this.#unsubscribeSessionChange ??= this.#ctx.session.registerSessionChangeCallback(() =>
 			this.#onSessionChanged(),
 		);
@@ -211,6 +222,8 @@ export class CollabController {
 		this.#unsubscribeSessionChange = undefined;
 		this.#unsubscribeSessionMove?.();
 		this.#unsubscribeSessionMove = undefined;
+		this.#unsubscribeSettingsChange?.();
+		this.#unsubscribeSettingsChange = undefined;
 		// Stop before draining the chain: a room still connecting is aborted at
 		// once instead of holding shutdown for the relay connect timeout.
 		await this.stop(reason);
@@ -233,7 +246,12 @@ export class CollabController {
 	 * can be retained. During a session transition, wait for its final identity
 	 * and state first. Connect only after the previous room is fully gone.
 	 */
-	async #launch(access: CollabAccess, stopEpoch: number, relay?: string): Promise<CollabHost> {
+	async #launch(
+		access: CollabAccess,
+		stopEpoch: number,
+		relay?: string,
+		expectedSessionId?: string,
+	): Promise<CollabHost> {
 		if (this.#shutdown) throw new CollabHostStoppedError("collab controller shut down");
 		if (stopEpoch !== this.#stopEpoch) throw new CollabHostStoppedError("collab controller stopped");
 		// Identity cleanup callbacks can precede awaited hooks and message replacement.
@@ -247,6 +265,9 @@ export class CollabController {
 		if (this.#shutdown) throw new CollabHostStoppedError("collab controller shut down");
 		if (stopEpoch !== this.#stopEpoch) throw new CollabHostStoppedError("collab controller stopped");
 		if (this.#ctx.collabGuest) throw new CollabHostStoppedError("collab guest owns the session");
+		if (expectedSessionId !== undefined && expectedSessionId !== this.#ctx.sessionManager.getSessionId()) {
+			throw new CollabHostStoppedError("session changed during relay server switch");
+		}
 		const relayUrl = this.#resolveRelayUrl(relay);
 		const webUrl = cfgCollabWebUrl.get(this.#ctx.settings) || "";
 		this.#observeSessionChanges();
@@ -285,9 +306,9 @@ export class CollabController {
 	 * relaunch backoff; any other failure waits for the next session change or
 	 * `/collab`.
 	 */
-	async #launchReporting(access: CollabAccess, stopEpoch: number): Promise<void> {
+	async #launchReporting(access: CollabAccess, stopEpoch: number, expectedSessionId?: string): Promise<void> {
 		try {
-			await this.#launch(access, stopEpoch);
+			await this.#launch(access, stopEpoch, undefined, expectedSessionId);
 		} catch (err) {
 			this.#reportFailure(err);
 			if (!this.#shutdown && err instanceof CollabRelayUnavailableError) this.#scheduleRelaunch(stopEpoch);
@@ -314,7 +335,7 @@ export class CollabController {
 		if (this.host) return;
 		// Stop synchronously so a room still connecting is aborted now rather than
 		// after the queued start settles; the chain then waits for that stop.
-		this.#reapplyAutoStart(previous && this.#stopHost(previous, SESSION_SWITCH_REASON));
+		this.#queueLaunch(previous && this.#stopHost(previous, SESSION_SWITCH_REASON));
 	}
 
 	/**
@@ -341,29 +362,29 @@ export class CollabController {
 		this.#relaunchStreak = repeated ? this.#relaunchStreak + 1 : 0;
 		this.#lastRelaunchCauseAt = now;
 		if (this.#relaunchStreak === 0) {
-			this.#reapplyAutoStart(undefined, stopEpoch);
+			this.#queueLaunch(undefined, stopEpoch);
 			return;
 		}
 		const delay = Math.min(RELAUNCH_BACKOFF_BASE_MS * 2 ** (this.#relaunchStreak - 1), RELAUNCH_BACKOFF_MAX_MS);
 		clearTimeout(this.#relaunchTimer);
 		this.#relaunchTimer = setTimeout(() => {
 			this.#relaunchTimer = undefined;
-			this.#reapplyAutoStart(undefined, stopEpoch);
+			this.#queueLaunch(undefined, stopEpoch);
 		}, delay);
 	}
 
 	/**
-	 * Queue a policy launch for the current session once `stopping` settles,
-	 * unless shutdown, a stop after `stopEpoch` was taken, a live room, or a
-	 * guest intervened.
+	 * Queue a launch for the current session once `stopping` settles, unless
+	 * shutdown, a stop after `stopEpoch` was taken, a live room, or a guest
+	 * intervened. Server switches preserve the replaced room's access and session.
 	 */
-	#reapplyAutoStart(stopping: Promise<void> | undefined, stopEpoch = this.#stopEpoch): void {
+	#queueLaunch(stopping: Promise<void> | undefined, stopEpoch = this.#stopEpoch, previous?: CollabHost): void {
 		this.#ops = this.#ops
 			.then(async () => {
 				await stopping;
 				if (this.#shutdown || stopEpoch !== this.#stopEpoch || this.host || this.#ctx.collabGuest) return;
-				const access = this.autoStartMode;
-				if (access !== "off") await this.#launchReporting(access, stopEpoch);
+				const access = previous?.access ?? this.autoStartMode;
+				if (access !== "off") await this.#launchReporting(access, stopEpoch, previous?.sessionId);
 			})
 			.catch(err => this.#reportFailure(err));
 	}

@@ -44,6 +44,23 @@ The guest's previous session is restored on `/leave` (or when the host stops).
 `/collab start [relay]` is also accepted. Passing a relay while a reusable room is active does not move that room to another relay; stop it first to change the relay.
 
 
+### Choosing the relay server
+
+Use `/settings` → **Interaction** → **Collab** → **Relay Server** to choose the server OMS hosts through. This edits `collab.relayUrl`; the default remains `wss://my.omp.sh`. Remote servers use `wss://`; plain `ws://` is supported only for localhost/loopback development.
+
+You can also switch from a terminal:
+
+```sh
+oms config set collab.relayUrl ws://localhost:7466  # repository's local development relay
+oms config set collab.relayUrl wss://my.omp.sh      # hosted default
+```
+
+Start the repository's local relay with `bun run collab:relay` from the repo root; see [Self-hosting the relay](#self-hosting-the-relay) for its limitations.
+
+Changing the setting while hosting closes the old room and reconnects the current session to the chosen server, preserving its view/control access. Old links stop working and guests must rejoin with the new link from `/collab` or `oms collab link`. Changing the server while not hosting does not start sharing. `collab.autoStart` is unchanged.
+
+Guests connect to the server encoded in their invitation. Changing this setting does not move an existing guest connection or share its remote replica; it applies when hosting the local session again. An explicitly configured `collab.webUrl` remains the browser UI, while an empty one follows the selected relay server.
+
 ### Sharing every session automatically
 
 Explicit `/collab stop` and `/leave` also cancel any replacement already queued by a session transition. A later, distinct session change still follows the saved auto-start policy. Guests can answer startup dialogs, but cannot prompt, interrupt, or control agents until the outer startup—including setup UI and transcript replay—has completed successfully.
@@ -157,7 +174,7 @@ Set `collab.webUrl` when the browser UI is hosted separately from the websocket 
 
 | Setting               | Default               | Meaning                                                                                                        |
 | --------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `collab.relayUrl`     | `wss://my.omp.sh`     | Relay used by `/collab` when no relay is passed inline                                                         |
+| `collab.relayUrl`     | `wss://my.omp.sh`     | Relay Server: default hosting endpoint; changing it reconnects an active room without changing access          |
 | `collab.webUrl`       | empty                 | Browser UI URL for `/collab` links; empty derives from relay; explicit `http://` is allowed only for localhost |
 | `collab.displayName`  | OS username           | Name shown to other participants                                                                               |
 | `collab.autoStart`    | `off`                 | `view` / `control`: host every interactive session as it starts and publish it to the local registry            |

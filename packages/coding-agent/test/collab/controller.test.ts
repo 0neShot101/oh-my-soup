@@ -43,7 +43,7 @@ import { VirtualTerminal } from "../../../tui/test/virtual-terminal";
 import { createTestSession, type TestSessionContext } from "../utilities";
 import { FakeWebSocket, installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
 
-import { cfgCollabAutoStart } from "@oh-my-soup/pi-coding-agent/collab/settings";
+import { cfgCollabAutoStart, cfgCollabRelayUrl } from "@oh-my-soup/pi-coding-agent/collab/settings";
 import { cfgAdvisorEnabled } from "@oh-my-soup/pi-coding-agent/advisor/settings";
 import { CfgProtocolHandler } from "@oh-my-soup/pi-coding-agent/internal-urls/cfg-protocol";
 import { parseInternalUrl } from "@oh-my-soup/pi-coding-agent/internal-urls/parse";
@@ -571,6 +571,46 @@ describe("interactive collaboration startup", () => {
 		expect(cfgCollabAutoStart.get(local.settings)).toBe("view");
 	});
 
+	it("uses a newly configured relay after guest restoration without publishing the replica", async () => {
+		const { local, remote, localFile } = await prepareGuestMode();
+		const guest = new CollabGuestLink(local);
+		await guest.join(remote.link);
+		const rendering = Promise.withResolvers<void>();
+		const gate = Promise.withResolvers<void>();
+		const render = spyOn(local, "renderInitialMessages").mockImplementationOnce(async () => {
+			rendering.resolve();
+			await gate.promise;
+		});
+		const leaving = guest.leave("left");
+		await rendering.promise;
+		try {
+			cfgCollabRelayUrl.override(local.settings, "ws://localhost:9797");
+			await Promise.resolve();
+			expect(local.collabHost).toBeUndefined();
+			expect(
+				(await registry.listCollabHosts({ dir: tmp })).filter(
+					row => row.instanceId === local.collabController.instanceId,
+				),
+			).toEqual([]);
+		} finally {
+			gate.resolve();
+			await leaving;
+			render.mockRestore();
+		}
+		await local.collabController.idle();
+		expect(local.sessionManager.getSessionFile()).toBe(localFile);
+		expect(
+			(await registry.listCollabHosts({ dir: tmp })).filter(
+				row => row.instanceId === local.collabController.instanceId,
+			),
+		).toMatchObject([{ sessionId: local.sessionManager.getSessionId(), access: "view" }]);
+		const restored = local.collabHost;
+		if (!restored) throw new Error("local room missing after restoration");
+		const parsed = parseCollabLink(restored.webLink);
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(new URL(parsed.wsUrl).origin).toBe("ws://localhost:9797");
+	});
+
 	it.each(["stop", "shutdown"] as const)(
 		"%s during restored-session rendering invalidates automatic hosting without blocking restoration",
 		async operation => {
@@ -951,12 +991,129 @@ describe("CollabController", () => {
 
 		// The user flips the setting in /settings, then starts a new session.
 		cfgCollabAutoStart.override(state.settings, "control");
+		await Promise.resolve();
+		await controller.idle();
+		expect(ctx.collabHost).toBeUndefined();
 		switchSession(state, `sess-next-${crypto.randomUUID()}`);
 		await settled(publishSpy, 1);
 
 		const [snapshot] = await registry.listCollabHosts({ dir: tmp });
 		expect(snapshot).toMatchObject({ instanceId: controller.instanceId, generation: 1, sessionId: state.sessionId });
 	});
+
+	it.each(["manual", "automatic"] as const)(
+		"moves an active %s room to the configured relay server without changing its access",
+		async hosting => {
+			const access = hosting === "manual" ? "view" : "control";
+			const { ctx, state } = makeControllerContext({ autoStart: hosting === "manual" ? "off" : access });
+			controller = new CollabController(ctx);
+			if (hosting === "manual") await controller.start({ access });
+			else controller.autoStart();
+			await controller.idle();
+			const first = ctx.collabHost;
+			if (!first) throw new Error("first room missing");
+			const goodbye = Promise.withResolvers<void>();
+			await joinAsWriter(first, frame => {
+				if (frame.t === "bye") goodbye.resolve();
+			});
+			const publish = publishSpy.getMockImplementation();
+			if (!publish) throw new Error("publish spy missing");
+			let oldRoomStoppedAtPublication = false;
+			publishSpy.mockImplementation((source, options) => {
+				oldRoomStoppedAtPublication = first.stopped;
+				return publish(source, options);
+			});
+
+			cfgCollabRelayUrl.override(state.settings, "ws://localhost:9797");
+			await Promise.resolve();
+			await controller.idle();
+
+			expect(oldRoomStoppedAtPublication).toBe(true);
+			expect(first.stopped).toBe(true);
+			await goodbye.promise;
+			expect(await registry.listCollabHosts({ dir: tmp })).toMatchObject([
+				{ instanceId: controller.instanceId, generation: 2, sessionId: state.sessionId, access },
+			]);
+			const link = await registry.resolveCollabHostLink(controller.instanceId, access, { dir: tmp });
+			const parsed = parseCollabLink(link.url);
+			if ("error" in parsed) throw new Error(parsed.error);
+			expect(new URL(parsed.wsUrl).origin).toBe("ws://localhost:9797");
+			const replacement = ctx.collabHost;
+			if (!replacement) throw new Error("replacement room missing");
+			await joinAsWriter(replacement);
+			expect(replacement.participants.some(participant => participant.name === "writer")).toBe(true);
+			if (access === "view") {
+				await expect(
+					registry.resolveCollabHostLink(controller.instanceId, "control", { dir: tmp }),
+				).rejects.toMatchObject({ code: "access_unavailable" });
+			}
+		},
+	);
+
+	it.each(["off", "stopped"] as const)("does not start sharing when the relay changes while %s", async policy => {
+		const { ctx, state } = makeControllerContext({ autoStart: policy === "off" ? "off" : "control" });
+		controller = new CollabController(ctx);
+		controller.autoStart();
+		await controller.idle();
+		if (policy === "stopped") await controller.stop("explicit user stop");
+
+		cfgCollabRelayUrl.override(state.settings, "ws://localhost:9797");
+		await Promise.resolve();
+		await controller.idle();
+
+		expect(ctx.collabHost).toBeUndefined();
+		expect(await registry.listCollabHosts({ dir: tmp })).toEqual([]);
+		expect(publishSpy).toHaveBeenCalledTimes(policy === "off" ? 0 : 1);
+	});
+
+	it.each(["stop", "shutdown"] as const)("%s cancels a queued relay server switch", async operation => {
+		const { ctx, state } = makeControllerContext({ autoStart: "control" });
+		controller = new CollabController(ctx);
+		controller.autoStart();
+		await controller.idle();
+
+		cfgCollabRelayUrl.override(state.settings, "ws://localhost:9797");
+		await Promise.resolve();
+		await controller[operation]("explicit user stop");
+		await controller.idle();
+
+		expect(ctx.collabHost).toBeUndefined();
+		expect(await registry.listCollabHosts({ dir: tmp })).toEqual([]);
+		expect(publishSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it.each(["off", "control"] as const)(
+		"follows the %s startup policy if the session changes during a relay server switch",
+		async autoStart => {
+			const { ctx, state } = makeControllerContext({ autoStart });
+			controller = new CollabController(ctx);
+			await controller.start({ access: "view" });
+			const gate = Promise.withResolvers<void>();
+			const waiting = Promise.withResolvers<void>();
+			state.transition = gate.promise;
+			state.transitionWaited = waiting.resolve;
+
+			cfgCollabRelayUrl.override(state.settings, "ws://localhost:9797");
+			await waiting.promise;
+			switchSession(state, `sess-next-${crypto.randomUUID()}`);
+			state.transition = undefined;
+			gate.resolve();
+			await controller.idle();
+
+			const hosts = await registry.listCollabHosts({ dir: tmp });
+			if (autoStart === "off") {
+				expect(ctx.collabHost).toBeUndefined();
+				expect(hosts).toEqual([]);
+			} else {
+				expect(hosts).toMatchObject([{ sessionId: state.sessionId, access: "control" }]);
+				const replacement = ctx.collabHost;
+				if (!replacement) throw new Error("replacement room missing");
+				const parsed = parseCollabLink(replacement.webLink);
+				if ("error" in parsed) throw new Error(parsed.error);
+				expect(new URL(parsed.wsUrl).origin).toBe("ws://localhost:9797");
+			}
+		},
+	);
 
 	it("reports an auto-start failure without throwing into startup", async () => {
 		const { ctx, state } = makeControllerContext({ autoStart: "control", relayUrl: "" });
@@ -1663,6 +1820,9 @@ describe("CollabController", () => {
 		expect(ctx.collabHost).toBeUndefined();
 
 		switchSession(state, `sess-after-shutdown-${crypto.randomUUID()}`);
+		cfgCollabRelayUrl.override(state.settings, "ws://localhost:9797");
+		await Promise.resolve();
+		controller.autoStart();
 		await controller.shutdown("again");
 		expect(publishSpy).toHaveBeenCalledTimes(1);
 		expect(ctx.collabHost).toBeUndefined();
@@ -1680,6 +1840,28 @@ describe("CollabController", () => {
 
 		beforeEach(() => {
 			globalThis.WebSocket = NeverOpens as unknown as typeof WebSocket;
+		});
+
+		it("replaces a connecting room when the configured relay server changes", async () => {
+			const { ctx, state } = makeControllerContext({ autoStart: "control" });
+			controller = new CollabController(ctx);
+			controller.autoStart();
+			const pending = ctx.collabHost;
+			if (!pending) throw new Error("auto-start did not install a host");
+
+			globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+			cfgCollabRelayUrl.override(state.settings, "ws://localhost:9797");
+			await Promise.resolve();
+			await controller.idle();
+
+			expect(pending.stopped).toBe(true);
+			const replacement = ctx.collabHost;
+			if (!replacement) throw new Error("replacement room missing");
+			const parsed = parseCollabLink(replacement.webLink);
+			if ("error" in parsed) throw new Error(parsed.error);
+			expect(new URL(parsed.wsUrl).origin).toBe("ws://localhost:9797");
+			expect(replacement.relayConnected).toBe(true);
+			expect(state.showStatus).toEqual([]);
 		});
 
 		it("shutdown aborts the pending start instead of waiting for the connect timeout", async () => {

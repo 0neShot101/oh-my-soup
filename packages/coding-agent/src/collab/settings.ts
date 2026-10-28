@@ -13,8 +13,8 @@ export const cfgCollabRelayUrl = register({
 	ui: {
 		tab: "interaction",
 		group: "Collab",
-		label: "Relay URL",
-		description: "Relay used by /collab (wss://host[:port])",
+		label: "Relay Server",
+		description: "Collaboration server (wss://host[:port]); changing it reconnects the active room with new links",
 	},
 });
 
