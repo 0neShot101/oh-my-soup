@@ -18,7 +18,17 @@ if (!outPath) {
 	process.exit(2);
 }
 
-const loaderJs = await Bun.file(new URL("../src/export/html/share-loader.js", import.meta.url).pathname).text();
+const loaderBuild = await Bun.build({
+	entrypoints: [path.join(import.meta.dir, "../src/export/html/share-loader.js")],
+	target: "browser",
+	format: "iife",
+});
+if (!loaderBuild.success) {
+	throw new Error(`Share loader bundle failed:\n${loaderBuild.logs.map(log => log.message).join("\n")}`);
+}
+const loaderEntry = loaderBuild.outputs.find(output => output.kind === "entry-point");
+if (!loaderEntry) throw new Error("Share loader bundle produced no entry point");
+const loaderJs = await loaderEntry.text();
 // Public artifacts use the bundled oms web themes rather than TUI themes.
 const themeStyles = await generateThemeStyles("web");
 

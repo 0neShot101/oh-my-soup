@@ -23,6 +23,7 @@ import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-soup/pi-agent-core";
 import type { AssistantMessage, AssistantMessageEvent, ImageContent } from "@oh-my-soup/pi-ai";
 import { getConfigRootDir, logger } from "@oh-my-soup/pi-utils";
+import { applyCollabStream } from "@oh-my-soup/pi-wire/collab-stream";
 import type { AgentHubRemote, AgentHubRemoteTranscript } from "@oh-my-soup/pi-tui/overlays/agent-hub";
 import type { InteractiveModeContext } from "../modes/types";
 import { AgentRegistry } from "../registry/agent-registry";
@@ -174,11 +175,11 @@ function streamedText(block: AssistantMessage["content"][number] | undefined): s
 
 /**
  * Text and thinking deltas that grew `message` past `previous` without arriving
- * in `own`, the update's own delta. Non-empty only when the host superseded the
- * updates in between (#16956); one delta per grown block, in block order.
+ * in `own`, the update's own delta. Coalesced wire updates have no own delta,
+ * so replay each appended block once for speech and extension observers.
  */
 function omittedStreamDeltas(
-	previous: AssistantMessage,
+	previous: AssistantMessage | undefined,
 	message: AssistantMessage,
 	own: AssistantMessageEvent,
 ): AssistantMessageEvent[] {
@@ -186,8 +187,11 @@ function omittedStreamDeltas(
 	for (const [contentIndex, block] of message.content.entries()) {
 		const text = streamedText(block);
 		if (text === undefined) continue;
-		const prior = previous.content[contentIndex];
-		const start = prior?.type === block.type ? (streamedText(prior)?.length ?? 0) : 0;
+		const prior = previous?.content[contentIndex];
+		const before = prior?.type === block.type ? streamedText(prior) : undefined;
+		// Corrections replace already-observed text; they are not appended speech.
+		if (before !== undefined && !text.startsWith(before)) continue;
+		const start = before?.length ?? 0;
 		const ownsTail =
 			(own.type === "text_delta" || own.type === "thinking_delta") &&
 			own.contentIndex === contentIndex &&
@@ -257,6 +261,8 @@ export class CollabGuestLink {
 	#assistantStreamSynced = false;
 	/** Last snapshot received for the streaming assistant message; diffed against the next update. */
 	#streamedSnapshot: AssistantMessage | undefined;
+	/** Last validated wire baseline; every delta must extend its exact revision. */
+	#stream: { id: number; revision: number; message: AssistantMessage } | undefined;
 	/** Mirrors host lifecycle events into the local extension runner while joined. */
 	#lifecycleEmitter = new GuestLifecycleEmitter();
 	state: CollabSessionState | null = null;
@@ -361,6 +367,7 @@ export class CollabGuestLink {
 			// chunk train.
 			this.#welcomed = false;
 			this.#pendingSnapshot = null;
+			this.#resetStream();
 			this.#clearSnapshotProgressTimer();
 			this.#armWelcomeTimer();
 			socket.send({
@@ -416,6 +423,9 @@ export class CollabGuestLink {
 			this.#clearWelcomeTimer();
 			this.#clearSnapshotProgressTimer();
 			this.#flushPendingTranscripts();
+			// Already accepted frames may still be decrypting/applying, including
+			// the host's final goodbye. Reset the decoder on the next open (or
+			// restoration), not ahead of this connection's ordered tail.
 			if (this.#left) return;
 			if (!joined) {
 				firstWelcome.reject(new Error(reason));
@@ -472,6 +482,8 @@ export class CollabGuestLink {
 	 */
 	#beginWelcome(frame: WelcomeFrame, isResync: boolean): void {
 		if (this.#left) return;
+		this.#welcomed = false;
+		this.#resetStream();
 		this.#pendingSnapshot = {
 			header: frame.header,
 			state: frame.state,
@@ -560,8 +572,6 @@ export class CollabGuestLink {
 		this.#ctx.resetObserverRegistry();
 		this.#applyAgentSnapshots(pending.agents);
 		this.#ctx.syncRunningSubagentBadge();
-		this.#assistantStreamSynced = false;
-		this.#streamedSnapshot = undefined;
 		setSessionTerminalTitle(pending.state.sessionName ?? pending.header.title, pending.state.cwd);
 		// No eager teardown here: renderInitialMessages() stages the replacement
 		// transcript and disposes the visible children only when the staged tree
@@ -655,6 +665,10 @@ export class CollabGuestLink {
 				}
 				break;
 			}
+			case "stream":
+			case "stream-delta":
+				this.#applyStream(frame);
+				break;
 			case "event":
 				this.#applyEvent(frame.event);
 				break;
@@ -701,41 +715,90 @@ export class CollabGuestLink {
 			case "error":
 				this.#ctx.showError(`Collab host: ${frame.message}`);
 				break;
+			case "history":
+				// Native guests keep the full replica and never request history pages.
+				break;
 			default:
 				logger.debug("collab guest ignoring unexpected frame", { type: frame.t });
 		}
 	}
 
+	#resetStream(): void {
+		this.#stream = undefined;
+		this.#assistantStreamSynced = false;
+		this.#streamedSnapshot = undefined;
+	}
+
+	#failStream(reason: string): void {
+		this.#ctx.showError(`Collab stream out of sync (${reason}); rejoin the session.`);
+		this.#restoreAfterDisconnect();
+	}
+
+	#applyStream(frame: Extract<CollabFrame, { t: "stream" | "stream-delta" }>): void {
+		if (
+			!Number.isSafeInteger(frame.id) ||
+			frame.id < 0 ||
+			!Number.isSafeInteger(frame.revision) ||
+			frame.revision < 0
+		) {
+			this.#failStream("invalid stream ID or revision");
+			return;
+		}
+		const previous = this.#stream;
+		let message: AssistantMessage;
+		if (frame.t === "stream") {
+			if (previous && (frame.id !== previous.id || frame.revision <= previous.revision)) {
+				this.#failStream("unexpected baseline");
+				return;
+			}
+			message = frame.message;
+		} else {
+			if (
+				!previous ||
+				frame.id !== previous.id ||
+				frame.previousRevision !== previous.revision ||
+				frame.revision !== previous.revision + 1
+			) {
+				this.#failStream("missing baseline or revision");
+				return;
+			}
+			const patched = applyCollabStream(previous.message, frame.patch);
+			if (!patched) {
+				this.#failStream("invalid content patch");
+				return;
+			}
+			message = patched;
+		}
+		this.#stream = { id: frame.id, revision: frame.revision, message };
+		this.#applyEvent({
+			type: "message_update",
+			message,
+			assistantMessageEvent: { type: "start", partial: message },
+		});
+	}
+
 	#applyEvent(event: AgentSessionEvent): void {
-		// Orphan-delta guard: when joining mid-turn the message_start for the
-		// in-flight assistant message predates the snapshot. message_update
-		// carries the full accumulating message, so synthesize the missing start
-		// before the first orphaned update; every other handler is tolerant of
-		// unknown anchors (guarded by streamingComponent/pendingTools lookups).
+		// A mid-turn join has a stream baseline but missed message_start. Create
+		// its native anchor before replaying the baseline's text/thinking.
 		if (event.type === "message_start" && event.message.role === "assistant") {
+			this.#resetStream();
 			this.#assistantStreamSynced = true;
 			this.#streamedSnapshot = event.message;
 		} else if (event.type === "message_update" && event.message.role === "assistant") {
 			if (!this.#assistantStreamSynced) {
 				this.#assistantStreamSynced = true;
-				this.#streamedSnapshot = event.message;
-				this.#dispatchEvent({ type: "message_start", message: event.message });
+				this.#mirrorEvent({ type: "message_start", message: event.message });
 			}
-			// The host supersedes still-queued updates of a streaming message, so
-			// their per-update deltas (speech, extensions) never arrive. Replay the
-			// text they carried, recovered from the cumulative snapshots.
-			if (this.#streamedSnapshot) {
-				for (const omitted of omittedStreamDeltas(
-					this.#streamedSnapshot,
-					event.message,
-					event.assistantMessageEvent,
-				)) {
-					this.#mirrorEvent({ type: "message_update", message: event.message, assistantMessageEvent: omitted });
-				}
+			for (const omitted of omittedStreamDeltas(
+				this.#streamedSnapshot,
+				event.message,
+				event.assistantMessageEvent,
+			)) {
+				this.#mirrorEvent({ type: "message_update", message: event.message, assistantMessageEvent: omitted });
 			}
 			this.#streamedSnapshot = event.message;
-		} else if (event.type === "message_end") {
-			this.#streamedSnapshot = undefined;
+		} else if (event.type === "message_end" && event.message.role === "assistant") {
+			this.#resetStream();
 		}
 		this.#mirrorEvent(event);
 	}
@@ -956,6 +1019,7 @@ export class CollabGuestLink {
 		this.#clearWelcomeTimer();
 		this.#clearSnapshotProgressTimer();
 		this.#pendingSnapshot = null;
+		this.#resetStream();
 		this.#socket?.close();
 		this.#socket = null;
 		// The host's terminal `agent_end` may never arrive (leave mid-run,

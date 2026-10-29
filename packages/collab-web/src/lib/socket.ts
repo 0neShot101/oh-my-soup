@@ -7,7 +7,7 @@
  */
 
 import type { GuestFrame, HostFrame, RelayControlMessage } from "@oh-my-soup/pi-wire";
-import { open, seal } from "./codec";
+import { open, type RoomKey, seal } from "./codec";
 import { packEnvelope, unpackEnvelope } from "./link";
 
 const RELAY_CLOSE_REASONS: Record<number, string> = {
@@ -27,7 +27,7 @@ export interface CollabSocketOptions {
 	wsUrl: string;
 	role: "host" | "guest";
 	/** Room key; a pending import promise is awaited inside the seal/open chains. */
-	key: CryptoKey | PromiseLike<CryptoKey>;
+	key: RoomKey | PromiseLike<RoomKey>;
 }
 
 export class CollabSocket {

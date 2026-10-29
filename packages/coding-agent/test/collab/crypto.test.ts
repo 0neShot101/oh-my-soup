@@ -54,31 +54,74 @@ describe("collab link format", () => {
 		expect(parsed.key).toEqual(key);
 	});
 
-	it("drops the wss scheme for custom relays and infers it on parse", () => {
-		const link = formatCollabLink("wss://relay.example.com:8443", roomId, key);
-		expect(link.startsWith("relay.example.com:8443/r/")).toBe(true);
+	it("keeps default-host relay prefixes instead of routing rooms to the hosted root", () => {
+		const relay = `${DEFAULT_RELAY_URL}/proxy///`;
+		const link = formatCollabLink(relay, roomId, key);
+		expect(link).toBe(`my.omp.sh/proxy/r/${roomId}.${Buffer.from(key).toString("base64url")}`);
 		const parsed = parseCollabLink(link);
 		if ("error" in parsed) throw new Error(parsed.error);
-		expect(parsed.wsUrl).toBe(`wss://relay.example.com:8443/r/${roomId}`);
+		expect(parsed.wsUrl).toBe(`${DEFAULT_RELAY_URL}/proxy/r/${roomId}`);
+		expect(parsed.key).toEqual(key);
+		expect(formatCollabWebLink(relay, roomId, key, undefined, "   ")).toBeNull();
 	});
 
-	it("keeps full ws:// URLs for localhost relays", () => {
-		const link = formatCollabLink("ws://localhost:7475", roomId, key);
-		expect(link.startsWith("ws://localhost:7475/r/")).toBe(true);
+	it("preserves nested relay prefixes containing /r/ when inferring the omitted wss scheme", () => {
+		const link = formatCollabLink("wss://relay.example.com:8443/team/r/relay///", roomId, key);
+		expect(link).toBe(`relay.example.com:8443/team/r/relay/r/${roomId}.${Buffer.from(key).toString("base64url")}`);
 		const parsed = parseCollabLink(link);
 		if ("error" in parsed) throw new Error(parsed.error);
-		expect(parsed.wsUrl).toBe(`ws://localhost:7475/r/${roomId}`);
+		expect(parsed.wsUrl).toBe(`wss://relay.example.com:8443/team/r/relay/r/${roomId}`);
+		expect(parsed.roomId).toBe(roomId);
+		expect(parsed.key).toEqual(key);
+		expect(parsed.writeToken).toBeUndefined();
 	});
 
-	it("rewrites https relay URLs to wss", () => {
-		const parsed = parseCollabLink(`https://relay.example.com/r/${roomId}#${Buffer.from(key).toString("base64url")}`);
+	it("preserves VPN ws relay prefixes and view/control access without inventing a browser UI", () => {
+		const relay = "ws://10.66.66.8/team/r/relay///";
+		for (const writeToken of [undefined, generateWriteToken()]) {
+			const secret = writeToken ? Buffer.concat([key, writeToken]) : Buffer.from(key);
+			const link = formatCollabLink(relay, roomId, key, writeToken);
+			expect(link).toBe(`ws://10.66.66.8/team/r/relay/r/${roomId}.${secret.toString("base64url")}`);
+			expect(formatCollabWebLink(relay, roomId, key, writeToken)).toBeNull();
+			const parsed = parseCollabLink(link);
+			if ("error" in parsed) throw new Error(parsed.error);
+			expect(parsed.wsUrl).toBe(`ws://10.66.66.8/team/r/relay/r/${roomId}`);
+			expect(parsed.roomId).toBe(roomId);
+			expect(parsed.key).toEqual(key);
+			expect(parsed.writeToken).toEqual(writeToken);
+		}
+	});
+
+	it("rewrites https legacy relay URLs to wss without dropping the relay prefix", () => {
+		const parsed = parseCollabLink(
+			`https://relay.example.com/team/r/relay/r/${roomId}#${Buffer.from(key).toString("base64url")}`,
+		);
 		if ("error" in parsed) throw new Error(parsed.error);
-		expect(parsed.wsUrl).toBe(`wss://relay.example.com/r/${roomId}`);
+		expect(parsed.wsUrl).toBe(`wss://relay.example.com/team/r/relay/r/${roomId}`);
+		expect(parsed.key).toEqual(key);
+		expect(parsed.writeToken).toBeUndefined();
 	});
 
-	it("rejects plain ws:// for non-localhost hosts", () => {
-		const parsed = parseCollabLink(`ws://relay.example.com/r/${roomId}#${Buffer.from(key).toString("base64url")}`);
-		expect("error" in parsed && parsed.error.includes("wss://")).toBe(true);
+	it("normalizes prefixed http VPN relays to ws without losing the control token", () => {
+		const token = generateWriteToken();
+		const secret = Buffer.concat([key, token]).toString("base64url");
+		for (const link of [
+			formatCollabLink("http://10.66.66.8:8080/api/relay///", roomId, key, token),
+			`http://10.66.66.8:8080/api/relay/r/${roomId}#${secret}`,
+		]) {
+			const parsed = parseCollabLink(link);
+			if ("error" in parsed) throw new Error(parsed.error);
+			expect(parsed.wsUrl).toBe(`ws://10.66.66.8:8080/api/relay/r/${roomId}`);
+			expect(parsed.key).toEqual(key);
+			expect(parsed.writeToken).toEqual(token);
+		}
+	});
+
+	it("rejects unsupported relay schemes instead of treating them as ws", () => {
+		expect(() => formatCollabLink("ftp://10.66.66.8", roomId, key)).toThrow();
+		expect("error" in parseCollabLink(`ftp://10.66.66.8/r/${roomId}.${Buffer.from(key).toString("base64url")}`)).toBe(
+			true,
+		);
 	});
 
 	it("rejects keys that are not 32 base64url bytes", () => {
@@ -86,55 +129,76 @@ describe("collab link format", () => {
 		expect("error" in parseCollabLink(`${roomId}.not+base64url/`)).toBe(true);
 	});
 
-	it("accepts legacy #-separated links", () => {
+	it("accepts legacy #-separated links without dropping their relay prefixes", () => {
 		const keyText = Buffer.from(key).toString("base64url");
-		for (const legacy of [
-			`${roomId}#${keyText}`,
-			`relay.example.com:8443/r/${roomId}#${keyText}`,
-			`https://my.omp.sh/#${roomId}#${keyText}`,
-		]) {
+		for (const [legacy, expectedWsUrl] of [
+			[`${roomId}#${keyText}`, `${DEFAULT_RELAY_URL}/r/${roomId}`],
+			[
+				`relay.example.com:8443/team/r/relay/r/${roomId}#${keyText}`,
+				`wss://relay.example.com:8443/team/r/relay/r/${roomId}`,
+			],
+			[`https://my.omp.sh/#${roomId}#${keyText}`, `${DEFAULT_RELAY_URL}/r/${roomId}`],
+		] as const) {
 			const parsed = parseCollabLink(legacy);
 			if ("error" in parsed) throw new Error(`${legacy}: ${parsed.error}`);
+			expect(parsed.wsUrl).toBe(expectedWsUrl);
 			expect(parsed.roomId).toBe(roomId);
-			expect(Buffer.from(parsed.key)).toEqual(Buffer.from(key));
+			expect(parsed.key).toEqual(key);
+			expect(parsed.writeToken).toBeUndefined();
 		}
 	});
 
-	it("accepts %23-mangled legacy deep links (macOS Foundation re-encoding)", () => {
-		const keyText = Buffer.from(key).toString("base64url");
-		const parsed = parseCollabLink(`https://my.omp.sh/#${roomId}%23${keyText}`);
+	it("accepts %23-mangled legacy deep links with relay prefixes and control access", () => {
+		const token = generateWriteToken();
+		const secret = Buffer.concat([key, token]).toString("base64url");
+		const parsed = parseCollabLink(
+			`https://web.example/client/#ws://10.66.66.8/team/r/relay/r/${roomId}%23${secret}`,
+		);
 		if ("error" in parsed) throw new Error(parsed.error);
-		expect(parsed.wsUrl).toBe(`${DEFAULT_RELAY_URL}/r/${roomId}`);
-		expect(Buffer.from(parsed.key)).toEqual(Buffer.from(key));
+		expect(parsed.wsUrl).toBe(`ws://10.66.66.8/team/r/relay/r/${roomId}`);
+		expect(parsed.key).toEqual(key);
+		expect(parsed.writeToken).toEqual(token);
 	});
 
-	it("renders web deep links that parse back to the same room", () => {
-		for (const relay of [DEFAULT_RELAY_URL, "wss://relay.example.com:8443", "ws://localhost:7475"]) {
-			const webLink = formatCollabWebLink(relay, roomId, key);
-			const direct = parseCollabLink(formatCollabLink(relay, roomId, key));
-			const viaWeb = parseCollabLink(webLink);
-			if ("error" in direct) throw new Error(direct.error);
-			if ("error" in viaWeb) throw new Error(viaWeb.error);
-			expect(webLink.startsWith(relay === "ws://localhost:7475" ? "http://" : "https://")).toBe(true);
-			expect(webLink.includes("/#")).toBe(true);
-			expect(viaWeb.wsUrl).toBe(direct.wsUrl);
-			expect(viaWeb.roomId).toBe(roomId);
-			expect(Buffer.from(viaWeb.key)).toEqual(Buffer.from(key));
+	it("derives a hosted browser wrapper from the normalized default relay", () => {
+		for (const relay of [DEFAULT_RELAY_URL, "https://my.omp.sh///"]) {
+			const webLink = formatCollabWebLink(relay, roomId, key, undefined, "");
+			if (webLink === null) throw new Error("Expected the hosted browser UI");
+			expect(webLink).toBe(`https://my.omp.sh/#${roomId}.${Buffer.from(key).toString("base64url")}`);
+			const parsed = parseCollabLink(webLink);
+			if ("error" in parsed) throw new Error(parsed.error);
+			expect(parsed.wsUrl).toBe(`${DEFAULT_RELAY_URL}/r/${roomId}`);
+			expect(parsed.roomId).toBe(roomId);
+			expect(parsed.key).toEqual(key);
+			expect(parsed.writeToken).toBeUndefined();
 		}
 	});
 
-	it("wraps custom relay links in an explicit web UI origin", () => {
+	it.each([
+		["wss://relay.example.com", undefined],
+		["ws://10.66.66.8", ""],
+		["http://my.omp.sh", "   "],
+	] as const)("does not invent a browser UI for %s without an explicit webUrl", (relay, webUrl) => {
+		expect(formatCollabWebLink(relay, roomId, key, undefined, webUrl)).toBeNull();
+	});
+
+	it("wraps a prefixed wss relay invite in a separate web UI origin and path", () => {
 		const webLink = formatCollabWebLink(
-			"wss://relay.example.com:8443",
+			"wss://relay.example.com:8443/proxy/relay///",
 			roomId,
 			key,
 			undefined,
-			"https://web.example",
+			"https://web.example/client/collab///",
 		);
-		expect(webLink.startsWith("https://web.example/#relay.example.com:8443/r/")).toBe(true);
+		if (webLink === null) throw new Error("Expected the configured browser UI");
+		expect(webLink).toBe(
+			`https://web.example/client/collab/#relay.example.com:8443/proxy/relay/r/${roomId}.${Buffer.from(key).toString("base64url")}`,
+		);
 		const parsed = parseCollabLink(webLink);
 		if ("error" in parsed) throw new Error(parsed.error);
-		expect(parsed.wsUrl).toBe(`wss://relay.example.com:8443/r/${roomId}`);
+		expect(parsed.wsUrl).toBe(`wss://relay.example.com:8443/proxy/relay/r/${roomId}`);
+		expect(parsed.key).toEqual(key);
+		expect(parsed.writeToken).toBeUndefined();
 	});
 
 	it("parses non-local http web UI wrappers by their relay fragment", () => {
@@ -186,7 +250,9 @@ describe("collab link format", () => {
 
 	it("carries the write token through web deep links", () => {
 		const token = generateWriteToken();
-		const parsed = parseCollabLink(formatCollabWebLink(DEFAULT_RELAY_URL, roomId, key, token));
+		const webLink = formatCollabWebLink(DEFAULT_RELAY_URL, roomId, key, token);
+		if (webLink === null) throw new Error("Expected the hosted browser UI");
+		const parsed = parseCollabLink(webLink);
 		if ("error" in parsed) throw new Error(parsed.error);
 		expect(Buffer.from(parsed.key)).toEqual(Buffer.from(key));
 		expect(Buffer.from(parsed.writeToken ?? new Uint8Array())).toEqual(Buffer.from(token));
@@ -199,6 +265,7 @@ describe("collab link format", () => {
 
 	it("keeps the key out of web-link path and query", () => {
 		const webLink = formatCollabWebLink(DEFAULT_RELAY_URL, roomId, key);
+		if (webLink === null) throw new Error("Expected the hosted browser UI");
 		const url = new URL(webLink);
 		expect(url.origin).toBe("https://my.omp.sh");
 		expect(url.pathname).toBe("/");
@@ -207,8 +274,9 @@ describe("collab link format", () => {
 	});
 
 	it("normalizes explicit web UI roots, paths, trailing slashes, and ports", () => {
+		const invite = `${roomId}.${Buffer.from(key).toString("base64url")}`;
 		const rootLink = formatCollabWebLink(DEFAULT_RELAY_URL, roomId, key, undefined, " https://web.example/ ");
-		expect(rootLink.startsWith("https://web.example/#")).toBe(true);
+		expect(rootLink).toBe(`https://web.example/#${invite}`);
 
 		const pathLink = formatCollabWebLink(
 			DEFAULT_RELAY_URL,
@@ -217,7 +285,7 @@ describe("collab link format", () => {
 			undefined,
 			"https://web.example:8443/collab///",
 		);
-		expect(pathLink.startsWith("https://web.example:8443/collab/#")).toBe(true);
+		expect(pathLink).toBe(`https://web.example:8443/collab/#${invite}`);
 
 		const localHttpLink = formatCollabWebLink(
 			DEFAULT_RELAY_URL,
@@ -226,7 +294,7 @@ describe("collab link format", () => {
 			undefined,
 			"http://localhost:5173/app/",
 		);
-		expect(localHttpLink.startsWith("http://localhost:5173/app/#")).toBe(true);
+		expect(localHttpLink).toBe(`http://localhost:5173/app/#${invite}`);
 	});
 
 	it("rejects web UI URLs without an http or https protocol", () => {
@@ -235,15 +303,31 @@ describe("collab link format", () => {
 		);
 	});
 
-	it("rejects non-local plain-http web UI URLs", () => {
-		expect(() => formatCollabWebLink(DEFAULT_RELAY_URL, roomId, key, undefined, "http://web.example")).toThrow(
-			"collab.webUrl must use https:// unless it targets localhost",
-		);
+	it("preserves prefixed ws relay routes and view/control access inside a separate HTTP web UI", () => {
+		const relay = "ws://10.66.66.8/team/r/relay///";
+		for (const writeToken of [undefined, generateWriteToken()]) {
+			const webLink = formatCollabWebLink(relay, roomId, key, writeToken, "http://10.66.66.9:5173/apps/collab///");
+			if (webLink === null) throw new Error("Expected the configured browser UI");
+			const url = new URL(webLink);
+			expect(url.origin).toBe("http://10.66.66.9:5173");
+			expect(url.pathname).toBe("/apps/collab/");
+			expect(url.search).toBe("");
+			expect(url.hash).toBe(`#${formatCollabLink(relay, roomId, key, writeToken)}`);
+			for (const input of [webLink, webLink.slice("http://".length)]) {
+				const parsed = parseCollabLink(input);
+				if ("error" in parsed) throw new Error(parsed.error);
+				expect(parsed.wsUrl).toBe(`ws://10.66.66.8/team/r/relay/r/${roomId}`);
+				expect(parsed.roomId).toBe(roomId);
+				expect(parsed.key).toEqual(key);
+				expect(parsed.writeToken).toEqual(writeToken);
+			}
+		}
 	});
-	it("rejects web UI URLs with query strings or fragments", () => {
-		expect(() => formatCollabWebLink(DEFAULT_RELAY_URL, roomId, key, undefined, "https://web.example/?x=1")).toThrow(
-			"collab.webUrl must not include a query string or fragment",
-		);
+
+	it.each(["?x=1", "#room"])("rejects explicit HTTP web UI URLs containing %s", suffix => {
+		expect(() =>
+			formatCollabWebLink(DEFAULT_RELAY_URL, roomId, key, undefined, `http://10.66.66.8/${suffix}`),
+		).toThrow("collab.webUrl must not include a query string or fragment");
 	});
 });
 

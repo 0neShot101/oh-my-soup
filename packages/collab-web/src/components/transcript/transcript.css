@@ -234,6 +234,16 @@
 	border-color: var(--border-strong);
 }
 
+.tr-window-controls {
+	display: flex;
+	justify-content: center;
+	gap: 8px;
+}
+
+.tr-window-controls .tr-earlier {
+	margin: 12px 0;
+}
+
 .tr-shimmer {
 	color: var(--fg-muted);
 	font-size: 12.5px;
@@ -244,7 +254,8 @@
  * Cards themselves are rendered by src/tool-render (tv-* namespace);
  * only host-level layout lives here. */
 
-.tr-body > .tv-card {
+.tr-body > .tv-card,
+.tr-tool > .tv-card {
 	align-self: stretch;
 	background: var(--bg-raised);
 	border-radius: var(--radius);

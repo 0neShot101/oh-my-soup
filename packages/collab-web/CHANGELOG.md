@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Browser link parsing accepts explicit VPN `ws://`/`http://` relay URLs without upgrading them to WSS, including scheme-less display links; HTTPS mixed-content restrictions still apply.
+- Browser joins fetch bounded recent history pages; Older/Newer/Latest navigation and bounded live tails keep long sessions from retaining or rendering the entire transcript.
+- Collab protocol v4 uses coalesced assistant-stream content patches, with full baselines for mid-turn joins and explicit rejoin errors on synchronization loss.
+
+### Fixed
+
+- Preserved relay path prefixes when formatting and opening invitations, including relay URLs embedded in separately hosted browser UI links.
+- Browser sessions and encrypted share pages work on trusted VPN HTTP origins without WebCrypto, using compatible authenticated AES-GCM and secure randomness.
+- Preserved tool output across history-page boundaries by rendering unpaired results independently and identifying calls whose result is outside the current page.
+
 ## [18.8.0] - 2026-10-07
 
 ### Changed

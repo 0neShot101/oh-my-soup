@@ -83,6 +83,7 @@
       },
       "dependencies": {
         "@babel/parser": "catalog:",
+        "@noble/ciphers": "catalog:",
         "@oh-my-soup/oms-stats": "catalog:",
         "@oh-my-soup/omstype": "catalog:",
         "@oh-my-soup/pi-agent-core": "catalog:",
@@ -122,6 +123,7 @@
       "name": "@oh-my-soup/collab-web",
       "version": "16.3.6",
       "dependencies": {
+        "@noble/ciphers": "catalog:",
         "@oh-my-soup/pi-utils": "catalog:",
         "@oh-my-soup/pi-wire": "catalog:",
         "katex": "catalog:",
@@ -345,6 +347,7 @@
     "@babel/types": "^7.29.7",
     "@huggingface/transformers": "^4.2.0",
     "@napi-rs/cli": "3.7.2",
+    "@noble/ciphers": "2.4.0",
     "@oh-my-soup/oms-stats": "18.13.1",
     "@oh-my-soup/omstype": "18.13.1",
     "@oh-my-soup/pi-agent-core": "18.13.1",
@@ -680,6 +683,8 @@
     "@napi-rs/wasm-tools-win32-ia32-msvc": ["@napi-rs/wasm-tools-win32-ia32-msvc@1.1.0", "", { "os": "win32", "cpu": "ia32" }, "sha512-mdD96QDEp70SX67rXFTY6c725nVYeqEEjyDqzzbNh6u1APj7CI7IMNpMmvE75XbCRl4C2MHZVU4U6AWdAzvyQQ=="],
 
     "@napi-rs/wasm-tools-win32-x64-msvc": ["@napi-rs/wasm-tools-win32-x64-msvc@1.1.0", "", { "os": "win32", "cpu": "x64" }, "sha512-bVVjuvhlyVX++3eJXfDR63cXdw1ay5QYac6iq0MKQw8wZARInTM+bXCtByDT4fzVFI3+7ZthYb/ERWRdBNIqgQ=="],
+
+    "@noble/ciphers": ["@noble/ciphers@2.4.0", "", {}, "sha512-AnjFn0Jv92laAkvMrghlFZq4qQCIN/4DxFV/eooqtC2YTjB7kBeLMS2T9KJX4Dn+ZVXLOwK0lSgqDtx9gvxtiw=="],
 
     "@octokit/auth-token": ["@octokit/auth-token@6.0.0", "", {}, "sha512-P4YJBPdPSpWTQ1NU4XYdvHvXJJDxM6YwpS0FZHRgP7YFkdVxsWcpWGy/NVqlAA7PcPCnMacXlRm1y2PFZRWL/w=="],
 

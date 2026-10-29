@@ -14,7 +14,8 @@ export const cfgCollabRelayUrl = register({
 		tab: "interaction",
 		group: "Collab",
 		label: "Relay Server",
-		description: "Collaboration server (wss://host[:port]); changing it reconnects the active room with new links",
+		description:
+			"Relay base URL, including any path prefix (wss:// or explicit ws:// for a trusted VPN); changing it reconnects the active room",
 	},
 });
 
@@ -27,7 +28,7 @@ export const cfgCollabWebUrl = register({
 		group: "Collab",
 		label: "Web UI URL",
 		description:
-			"Browser UI used by /collab links; empty derives from collab.relayUrl; explicit http:// is localhost-only",
+			"Browser UI base URL, including any path prefix; required for custom relay browser links; trusted VPN HTTP is supported",
 	},
 });
 

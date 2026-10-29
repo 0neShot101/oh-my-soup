@@ -1,23 +1,20 @@
 /**
- * Contract: ordinary streaming never ends the room.
- *
- * A streaming `message_update` carries the whole accumulating assistant
- * message, so a guest only ever needs the newest one. When the host emits
- * updates faster than its uplink drains them, the still-queued older updates
- * for the same message must be superseded rather than piling up until the send
- * queue's admission cap ends sharing for every guest (#16956).
- *
- * Drives the production `CollabHost` over the in-memory relay.
+ * Ordinary streaming is coalesced before serialization, then replicated through
+ * ordered baselines/deltas rather than a queue of duplicated cumulative events.
+ * End barriers and mid-turn joins must preserve every delivered text append.
  */
-import { afterEach, expect, it } from "bun:test";
+import { afterEach, expect, it, spyOn, vi } from "bun:test";
+import type { AssistantMessage } from "@oh-my-soup/pi-ai";
 import { importRoomKey } from "@oh-my-soup/pi-coding-agent/collab/crypto";
 import { CollabHost } from "@oh-my-soup/pi-coding-agent/collab/host";
 import { COLLAB_PROTO, type CollabFrame, parseCollabLink } from "@oh-my-soup/pi-coding-agent/collab/protocol";
 import { CollabSocket } from "@oh-my-soup/pi-coding-agent/collab/relay-client";
+import { MAX_REPLICATED_PAYLOAD_BYTES } from "@oh-my-soup/pi-coding-agent/collab/replication-shrink";
 import type {
 	AgentSessionEvent,
 	AgentSessionEventListener,
 } from "@oh-my-soup/pi-coding-agent/session/agent-session-events";
+import { applyCollabStream } from "@oh-my-soup/pi-wire/collab-stream";
 import { installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
 import {
 	type HostObservations,
@@ -27,13 +24,14 @@ import {
 	waitFor,
 } from "./helpers/throttled-host";
 
-const cleanups: (() => void)[] = [];
-afterEach(() => {
-	for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+const cleanups: (() => void | Promise<void>)[] = [];
+afterEach(async () => {
+	vi.useRealTimers();
+	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 	uninstallInMemoryRelay();
 });
 
-function assistant(text: string) {
+function assistant(text: string): AssistantMessage {
 	return {
 		role: "assistant" as const,
 		content: [{ type: "text" as const, text }],
@@ -62,13 +60,89 @@ function streamedUpdate(text: string, delta: string): AgentSessionEvent {
 	};
 }
 
-function textOf(event: AgentSessionEvent): string {
-	if (event.type !== "message_update" || event.message.role !== "assistant") return "";
-	const block = event.message.content[0];
+function textOf(message: AssistantMessage): string {
+	const block = message.content[0];
 	return block?.type === "text" ? block.text : "";
 }
 
-it("supersedes queued updates of a streaming message instead of ending the room", async () => {
+function streamTrace(frames: CollabFrame[]): (number | string)[] {
+	let current: Extract<CollabFrame, { t: "stream" }> | null = null;
+	const trace: (number | string)[] = [];
+	for (const frame of frames) {
+		if (frame.t === "stream") {
+			current = frame;
+			trace.push(textOf(frame.message).length);
+		} else if (frame.t === "stream-delta") {
+			if (!current) throw new Error("delta without baseline");
+			expect(frame.id).toBe(current.id);
+			expect(frame.previousRevision).toBe(current.revision);
+			expect(frame.revision).toBeGreaterThan(frame.previousRevision);
+			const message: AssistantMessage | null = applyCollabStream(current.message, frame.patch);
+			if (!message) throw new Error("invalid delta");
+			current = { t: "stream", id: frame.id, revision: frame.revision, message };
+			trace.push(textOf(message).length);
+		} else if (frame.t === "event") {
+			expect(frame.event.type).not.toBe("message_update");
+			if (frame.event.type === "message_start" || frame.event.type === "message_end") {
+				trace.push(frame.event.type);
+				current = null;
+			}
+		}
+	}
+	return trace;
+}
+
+async function tracedHost(joined = true) {
+	installInMemoryRelay();
+	const snapshot: Snapshot = {
+		header: { type: "session", id: "stream-trace", timestamp: "2026-10-24T00:00:00Z", cwd: "/tmp" },
+		entries: [],
+	};
+	const seen: HostObservations = { notices: [], participantCounts: [] };
+	const ctx = makeHostContext(snapshot, seen);
+	const listeners: AgentSessionEventListener[] = [];
+	const subscribe = ctx.session.subscribe.bind(ctx.session);
+	ctx.session.subscribe = listener => {
+		listeners.push(listener);
+		return subscribe(listener);
+	};
+	const emit = (event: AgentSessionEvent) => {
+		for (const listener of listeners.slice()) listener(event);
+	};
+	let transport: CollabSocket | undefined;
+	const connect = CollabSocket.prototype.connect;
+	const capture = spyOn(CollabSocket.prototype, "connect").mockImplementation(function (this: CollabSocket) {
+		transport = this;
+		connect.call(this);
+	});
+	const host = new CollabHost(ctx);
+	cleanups.push(() => host.stop("test done"));
+	try {
+		await host.start("ws://localhost:8788");
+	} finally {
+		capture.mockRestore();
+	}
+	if (!transport) throw new Error("host transport missing");
+	const sent: { frame: CollabFrame; peer: number }[] = [];
+	const send = spyOn(transport, "send").mockImplementation((frame, peer = 0) => {
+		sent.push({ frame: typeof frame === "string" ? (JSON.parse(frame) as CollabFrame) : frame, peer });
+	});
+	const batch = spyOn(transport, "sendBatch").mockImplementation((frames, peer) => {
+		for (const frame of frames) transport!.send(frame, peer);
+	});
+	cleanups.push(() => {
+		send.mockRestore();
+		batch.mockRestore();
+	});
+	vi.useFakeTimers();
+	const join = (peer: number) =>
+		transport!.onFrame!({ t: "hello", proto: COLLAB_PROTO, name: `guest-${peer}`, history: "paged" }, peer);
+	if (joined) join(1);
+	sent.length = 0;
+	return { host, ctx, transport, sent, snapshot, emit, join };
+}
+
+it("coalesces a burst before a throttled uplink without ending the room or crossing message boundaries", async () => {
 	const relay = installInMemoryRelay();
 	// Throttled: nothing drains the host socket until the test says so, so every
 	// update past the high-water mark stays queued — a host out-streaming its uplink.
@@ -89,7 +163,7 @@ it("supersedes queued updates of a streaming message instead of ending the room"
 		for (const listener of listeners.slice()) listener(event);
 	};
 	const host = new CollabHost(ctx);
-	cleanups.push(() => void host.stop("test done"));
+	cleanups.push(() => host.stop("test done"));
 
 	await host.start("ws://localhost:8788");
 	const parsed = parseCollabLink(host.link);
@@ -99,20 +173,19 @@ it("supersedes queued updates of a streaming message instead of ending the room"
 
 	const guest = new CollabSocket({ wsUrl: parsed.wsUrl, role: "guest", key });
 	cleanups.push(() => guest.close());
-	const events: AgentSessionEvent[] = [];
+	const frames: CollabFrame[] = [];
 	const welcomed = Promise.withResolvers<void>();
 	guest.onFrame = (frame: CollabFrame) => {
 		if (frame.t === "welcome") welcomed.resolve();
-		if (frame.t === "event") events.push(frame.event as AgentSessionEvent);
+		frames.push(frame);
 	};
 	guest.onOpen = () => guest.send({ t: "hello", proto: COLLAB_PROTO, name: "watcher" });
 	guest.connect();
 	await welcomed.promise;
 	await waitFor(() => seen.participantCounts.some(count => count > 0), "host never registered the guest");
 
-	// One long answer: far more updates than the queue admits, each a cumulative
-	// snapshot of the message so far. Two messages, so supersession must not
-	// cross the message boundary.
+	// Two long messages, far more raw updates than queue admission permits.
+	// Coalescing must happen before serializing or admitting them.
 	const chunk = "geology of the Carpathian basin ".repeat(4);
 	let text = "";
 	emit({ type: "message_start", message: assistant("") });
@@ -136,22 +209,233 @@ it("supersedes queued updates of a streaming message instead of ending the room"
 	};
 	hostWs.bufferedAmount = 0;
 	await waitFor(
-		() => events.filter(event => event.type === "message_end").length === 2,
+		() => frames.filter(frame => frame.t === "event" && frame.event.type === "message_end").length === 2,
 		"guest never received both message_end events",
 	);
 
-	const trace = events.flatMap((event): (number | string)[] => {
-		if (event.type === "message_update") return [textOf(event).length];
-		return event.type === "message_start" || event.type === "message_end" ? [event.type] : [];
-	});
-	const firstEnd = trace.indexOf("message_end");
-	const delivered = trace.slice(1, firstEnd);
-	// Order survives: each message's newest update lands right before its end,
-	// and the second message's update never supersedes the first's.
-	expect(trace[0]).toBe("message_start");
-	expect(trace.slice(firstEnd - 1)).toEqual([first.length, "message_end", "message_start", 6, "message_end"]);
-	// Only updates already on their way were sent; the rest were superseded.
-	expect(delivered.length).toBeLessThan(20);
-	expect(delivered).toEqual(delivered.toSorted((a, b) => Number(a) - Number(b)));
+	const trace = streamTrace(frames);
+	expect(trace).toEqual(["message_start", first.length, "message_end", "message_start", 6, "message_end"]);
+	const baselines = frames.filter(frame => frame.t === "stream");
+	expect(baselines.map(frame => frame.revision)).toEqual([0, 0]);
+	expect(baselines[1]!.id).toBeGreaterThan(baselines[0]!.id);
 	expect(seen.notices.filter(notice => notice.includes("Collab ended"))).toEqual([]);
 }, 15_000);
+
+it("waits 50ms before serialization, patches only the suffix, and flushes before tool/end barriers", async () => {
+	const { emit, sent } = await tracedHost();
+	const stringify = spyOn(JSON, "stringify");
+	cleanups.push(() => stringify.mockRestore());
+	emit({ type: "message_start", message: assistant("") });
+	for (let index = 1; index <= 600; index++) emit(streamedUpdate("x".repeat(index), "x"));
+	expect(sent.filter(({ frame }) => frame.t === "stream" || frame.t === "stream-delta")).toEqual([]);
+	// No raw update or growing message reaches JSON.stringify during the burst.
+	expect(stringify.mock.calls.some(([value]) => (value as { role?: string } | null)?.role === "assistant")).toBe(
+		false,
+	);
+	vi.advanceTimersByTime(49);
+	expect(sent.filter(({ frame }) => frame.t === "stream")).toEqual([]);
+	vi.advanceTimersByTime(1);
+	const baseline = sent.find(({ frame }) => frame.t === "stream")?.frame;
+	if (baseline?.t !== "stream") throw new Error("missing baseline");
+	expect(baseline.revision).toBe(0);
+	expect(textOf(baseline.message)).toBe("x".repeat(600));
+
+	const update = streamedUpdate(`${"x".repeat(600)}suffix`, "suffix");
+	if (update.type !== "message_update") throw new Error("wrong fixture event");
+	stringify.mockClear();
+	emit(update);
+	emit({ type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: {} });
+	const delta = sent.find(({ frame }) => frame.t === "stream-delta")?.frame;
+	if (delta?.t !== "stream-delta") throw new Error("missing delta");
+	expect(delta.previousRevision).toBe(0);
+	expect(delta.revision).toBe(1);
+	expect(delta.patch.changes).toEqual([
+		{ index: 0, kind: "append", field: "text", offset: 600, text: "suffix", properties: { type: "text" } },
+	]);
+	expect(stringify.mock.calls.some(([value]) => value === update.message || value === update)).toBe(false);
+	emit(streamedUpdate(`${"x".repeat(600)}suffix!`, "!"));
+	emit({ type: "message_end", message: assistant(`${"x".repeat(600)}suffix!`) });
+	const frames = sent.map(({ frame }) => frame);
+	expect(streamTrace(frames)).toEqual(["message_start", 600, 606, 607, "message_end"]);
+	const toolIndex = frames.findIndex(frame => frame.t === "event" && frame.event.type === "tool_execution_start");
+	expect(frames[toolIndex - 1]?.t).toBe("stream-delta");
+	const delivered = frames.filter(frame => frame.t === "stream" || frame.t === "stream-delta").length;
+	vi.advanceTimersByTime(500);
+	expect(sent.filter(({ frame }) => frame.t === "stream" || frame.t === "stream-delta")).toHaveLength(delivered);
+});
+
+it("tracks an immutable partial with no peers and supplies a targeted baseline after a mid-turn snapshot", async () => {
+	const { emit, sent, join } = await tracedHost(false);
+	emit({ type: "message_start", message: assistant("") });
+	emit(streamedUpdate("alone", "alone"));
+	vi.advanceTimersByTime(500);
+	expect(sent).toEqual([]);
+	join(1);
+	const first = sent.find(({ frame }) => frame.t === "stream");
+	if (first?.frame.t !== "stream") throw new Error("missing first-peer baseline");
+	expect(first.peer).toBe(1);
+	expect(first.frame.revision).toBe(0);
+	expect(textOf(first.frame.message)).toBe("alone");
+	const initialFrames = sent.map(({ frame }) => frame);
+	expect(initialFrames.findIndex(frame => frame.t === "stream")).toBeGreaterThan(
+		initialFrames.findIndex(frame => frame.t === "snapshot-chunk" && frame.final),
+	);
+
+	emit(streamedUpdate("alone together", " together"));
+	sent.length = 0;
+	join(2);
+	const welcome = sent.findIndex(({ frame, peer }) => frame.t === "welcome" && peer === 2);
+	const snapshot = sent.findIndex(({ frame, peer }) => frame.t === "snapshot-chunk" && frame.final && peer === 2);
+	const baselineIndex = sent.findIndex(({ frame, peer }) => frame.t === "stream" && peer === 2);
+	expect(sent[0]?.frame.t).toBe("stream-delta");
+	expect(sent[0]?.peer).toBe(0);
+	expect(welcome).toBeGreaterThan(0);
+	expect(snapshot).toBeGreaterThan(welcome);
+	expect(baselineIndex).toBeGreaterThan(snapshot);
+	const baseline = sent[baselineIndex]!.frame;
+	if (baseline.t !== "stream") throw new Error("missing late-peer baseline");
+	expect(baseline.id).toBe(first.frame.id);
+	expect(baseline.revision).toBe(1);
+	expect(textOf(baseline.message)).toBe("alone together");
+	emit(streamedUpdate("alone together!", "!"));
+	emit({ type: "message_end", message: assistant("alone together!") });
+	const newPeerFrames = sent
+		.slice(welcome)
+		.filter(({ peer }) => peer === 0 || peer === 2)
+		.map(({ frame }) => frame);
+	expect(streamTrace(newPeerFrames)).toEqual([14, 15, "message_end"]);
+	sent.length = 0;
+	join(3);
+	expect(sent.some(({ frame }) => frame.t === "stream" || frame.t === "stream-delta")).toBe(false);
+});
+
+it("rebaselines after the room empties or reconnects and retains text accumulated offline", async () => {
+	const { emit, sent, join, transport } = await tracedHost();
+	emit({ type: "message_start", message: assistant("") });
+	emit(streamedUpdate("before", "before"));
+	vi.advanceTimersByTime(50);
+	const baseline = sent.find(({ frame }) => frame.t === "stream")!.frame;
+	if (baseline.t !== "stream") throw new Error("missing baseline");
+	transport.onControl!({ t: "peer-left", peer: 1 });
+	sent.length = 0;
+	emit(streamedUpdate("before and after", " and after"));
+	vi.advanceTimersByTime(500);
+	expect(sent.some(({ frame }) => frame.t === "stream" || frame.t === "stream-delta")).toBe(false);
+	join(2);
+	const returned = sent.find(({ frame }) => frame.t === "stream")!.frame;
+	if (returned.t !== "stream") throw new Error("missing returned baseline");
+	expect(returned.id).toBe(baseline.id);
+	expect(textOf(returned.message)).toBe("before and after");
+	expect(returned.revision).toBeGreaterThan(baseline.revision);
+
+	emit(streamedUpdate("before and after disconnect", " disconnect"));
+	transport.onClose!("network lost", true);
+	sent.length = 0;
+	emit(streamedUpdate("before and after disconnect offline", " offline"));
+	vi.advanceTimersByTime(100);
+	expect(sent.some(({ frame }) => frame.t === "stream" || frame.t === "stream-delta")).toBe(false);
+	transport.onRoomRecreated!();
+	transport.onOpen!();
+	join(3);
+	const reconnected = sent.find(({ frame }) => frame.t === "stream")!.frame;
+	if (reconnected.t !== "stream") throw new Error("missing reconnect baseline");
+	expect(reconnected.id).toBe(baseline.id);
+	expect(textOf(reconnected.message)).toBe("before and after disconnect offline");
+	expect(sent.some(({ frame }) => frame.t === "stream-delta")).toBe(false);
+});
+
+it("cancels pending stream timers on session transitions and stop", async () => {
+	const { emit, sent, join, ctx, host, snapshot } = await tracedHost();
+	emit({ type: "message_start", message: assistant("") });
+	emit(streamedUpdate("private old partial", "private old partial"));
+	Object.defineProperty(ctx.session, "isSessionTransitioning", { configurable: true, value: true });
+	snapshot.header.id = "other-session";
+	vi.advanceTimersByTime(50);
+	snapshot.header.id = "stream-trace";
+	Object.defineProperty(ctx.session, "isSessionTransitioning", { configurable: true, value: false });
+	sent.length = 0;
+	join(2);
+	expect(sent.some(({ frame }) => frame.t === "stream" || frame.t === "stream-delta")).toBe(false);
+	emit({ type: "message_start", message: assistant("") });
+	emit(streamedUpdate("pending at stop", "pending at stop"));
+	const stopping = host.stop("stop now");
+	vi.advanceTimersByTime(500);
+	await stopping;
+	expect(sent.some(({ frame }) => frame.t === "stream" || frame.t === "stream-delta")).toBe(false);
+});
+
+it("rebaselines oversized or corrected partials without oversized frames or poisoning later deltas", async () => {
+	const { emit, sent } = await tracedHost();
+	emit({ type: "message_start", message: assistant("") });
+	emit(streamedUpdate("prefix", "prefix"));
+	vi.advanceTimersByTime(50);
+	const large = assistant("界".repeat(MAX_REPLICATED_PAYLOAD_BYTES));
+	emit({ type: "message_update", message: large, assistantMessageEvent: { type: "start", partial: large } });
+	vi.advanceTimersByTime(50);
+	const baselines = sent.map(({ frame }) => frame).filter(frame => frame.t === "stream");
+	expect(baselines).toHaveLength(2);
+	expect(textOf(baselines[1]!.message)).toContain("elided for collab");
+	expect(textOf(large)).toHaveLength(MAX_REPLICATED_PAYLOAD_BYTES);
+	for (const { frame } of sent) {
+		if (frame.t === "stream") {
+			expect(Buffer.byteLength(JSON.stringify(frame.message), "utf8")).toBeLessThanOrEqual(
+				MAX_REPLICATED_PAYLOAD_BYTES,
+			);
+		} else if (frame.t === "stream-delta") {
+			expect(Buffer.byteLength(JSON.stringify(frame.patch), "utf8")).toBeLessThanOrEqual(
+				MAX_REPLICATED_PAYLOAD_BYTES,
+			);
+		}
+	}
+	emit(streamedUpdate("corrected", "corrected"));
+	vi.advanceTimersByTime(50);
+	emit(streamedUpdate("corrected!", "!"));
+	emit({ type: "message_end", message: assistant("corrected!") });
+	const trace = streamTrace(sent.map(({ frame }) => frame));
+	expect(trace.slice(-3)).toEqual([9, 10, "message_end"]);
+	const patches = sent.map(({ frame }) => frame).filter(frame => frame.t === "stream-delta");
+	expect(patches.at(-2)?.patch.changes[0]?.kind).toBe("replace");
+	expect(patches.at(-1)?.patch.changes[0]?.kind).toBe("append");
+});
+
+it("surfaces an unshrinkable partial to late joins and resumes from the last valid baseline", async () => {
+	const { emit, sent, join } = await tracedHost();
+	emit({ type: "message_start", message: assistant("") });
+	emit(streamedUpdate("visible", "visible"));
+	vi.advanceTimersByTime(50);
+	const unshrinkable = Object.assign(assistant("cannot transmit this partial"), {
+		["k".repeat(MAX_REPLICATED_PAYLOAD_BYTES + 1)]: true,
+	});
+	emit({
+		type: "message_update",
+		message: unshrinkable,
+		assistantMessageEvent: { type: "start", partial: unshrinkable },
+	});
+	vi.advanceTimersByTime(50);
+	expect(
+		sent.some(
+			({ frame }) => frame.t === "event" && frame.event.type === "notice" && frame.event.message.includes("omitted"),
+		),
+	).toBe(true);
+	sent.length = 0;
+	join(2);
+	const baseline = sent.find(({ frame, peer }) => frame.t === "stream" && peer === 2)?.frame;
+	if (baseline?.t !== "stream") throw new Error("missing retained baseline");
+	expect(textOf(baseline.message)).toBe("visible");
+	expect(
+		sent.some(
+			({ frame, peer }) =>
+				peer === 2 &&
+				frame.t === "event" &&
+				frame.event.type === "notice" &&
+				frame.event.message.includes("omitted"),
+		),
+	).toBe(true);
+	emit(streamedUpdate("visible recovered", " recovered"));
+	emit({ type: "message_end", message: assistant("visible recovered") });
+	const frames = sent.filter(({ peer }) => peer === 0 || peer === 2).map(({ frame }) => frame);
+	expect(streamTrace(frames)).toEqual([7, 17, "message_end"]);
+	for (const frame of frames) {
+		expect(Buffer.byteLength(JSON.stringify(frame), "utf8")).toBeLessThan(MAX_REPLICATED_PAYLOAD_BYTES);
+	}
+});

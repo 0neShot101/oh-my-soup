@@ -25,24 +25,33 @@ import type { SlashCommandSpec } from "./types";
 import { cfgBrowserEnabled, cfgBrowserHeadless } from "../tools/browser/settings";
 import { cfgShareRedactSecrets, cfgShareServerUrl, cfgShareStore } from "../commands/settings";
 
-/** Join hint printed by /collab: compact terminal link + clickable browser deep link. */
+/** Join hint printed by /collab: a native command and an optional browser deep link. */
 function collabLinkHint(host: CollabHost, heading: string, view = false): string {
 	const bullet = theme.fg("accent", theme.format.bullet);
 	const link = view ? host.viewLink : host.link;
 	const webLink = view ? host.webViewLink : host.webLink;
-	return [
-		// Keep the URL on the first row: under transcript pressure the status
-		// block is clipped to rendered[0], which used to drop the join link.
-		`${collabBrowserLink(webLink, "Join in browser")}  ${theme.fg("success", heading)}`,
-		` ${bullet} ${theme.fg("muted", view ? "Watch from another terminal:" : "Join from another terminal:")} ${APP_NAME} join "${link}"`,
-		` ${bullet} ${theme.fg("muted", "or any web browser:")} ${collabBrowserLink(webLink)}`,
+	const command = `${APP_NAME} join "${link}"`;
+	// Browser links retain their OSC-8 target when transcript pressure clips this
+	// block to its first row. Native-only invites stay complete in the underlying
+	// text and may wrap naturally; never invent a browser destination for them.
+	const lines = [
+		`${webLink ? collabBrowserLink(webLink, "Join in browser") : command}  ${theme.fg("success", heading)}`,
+	];
+	if (webLink) {
+		lines.push(
+			` ${bullet} ${theme.fg("muted", view ? "Watch from another terminal:" : "Join from another terminal:")} ${command}`,
+			` ${bullet} ${theme.fg("muted", "or any web browser:")} ${collabBrowserLink(webLink)}`,
+		);
+	}
+	lines.push(
 		theme.fg(
 			"dim",
 			view
 				? "Anyone with this link can watch the session but cannot prompt the agent."
 				: "Anyone with the link can read the session and prompt the agent. Read-only link: /collab view",
 		),
-	].join("\n");
+	);
+	return lines.join("\n");
 }
 
 function showCollabQrCode(ctx: InteractiveModeContext, webLink: string): void {
@@ -55,7 +64,8 @@ function showCollabQrCode(ctx: InteractiveModeContext, webLink: string): void {
 
 function showCollabLink(ctx: InteractiveModeContext, host: CollabHost, heading: string, view = false): void {
 	ctx.showStatus(collabLinkHint(host, heading, view), { dim: false });
-	showCollabQrCode(ctx, view ? host.webViewLink : host.webLink);
+	const webLink = view ? host.webViewLink : host.webLink;
+	if (webLink) showCollabQrCode(ctx, webLink);
 }
 
 export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
@@ -352,8 +362,12 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 					const names = host.participants.map(p =>
 						p.role === "host" ? `${p.name} (host)` : p.readOnly ? `${p.name} (view-only)` : p.name,
 					);
-					const link = host.access === "view" ? host.webViewLink : host.webLink;
-					ctx.showStatus(`Collab: ${names.join(", ")} — ${collabBrowserLink(link)}`);
+					const view = host.access === "view";
+					const link = view ? host.viewLink : host.link;
+					const webLink = view ? host.webViewLink : host.webLink;
+					ctx.showStatus(
+						`Collab: ${names.join(", ")} — ${webLink ? collabBrowserLink(webLink) : `${APP_NAME} join "${link}"`}`,
+					);
 				} else if (ctx.collabGuest) {
 					ctx.showStatus(
 						ctx.collabGuest.readOnly

@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import * as path from "node:path";
+import * as vm from "node:vm";
 import { TempDir } from "@oh-my-soup/pi-utils";
 import type { SessionData } from "../src/export/html";
 import {
@@ -55,6 +56,84 @@ function sessionData(entries: SessionEntry[], leafId: string): SessionData {
 function randomHex(words: number): string {
 	return Array.from(crypto.getRandomValues(new Uint32Array(words)), v => v.toString(16)).join("");
 }
+
+describe("share viewer decryption", () => {
+	const data = sessionData([messageEntry("e1", null, "encrypted share — HTTP VPN")], "e1");
+	let loaderJs: string;
+	let keyBytes: Uint8Array<ArrayBuffer>;
+	let sealed: Uint8Array<ArrayBuffer>;
+
+	beforeAll(async () => {
+		const bundle = await Bun.build({
+			entrypoints: [path.join(import.meta.dir, "../src/export/html/share-loader.js")],
+			target: "browser",
+			format: "iife",
+		});
+		expect(bundle.success, bundle.logs.map(log => log.message).join("\n")).toBe(true);
+		const entry = bundle.outputs.find(output => output.kind === "entry-point");
+		if (!entry) throw new Error("Share loader bundle produced no entry point");
+		loaderJs = await entry.text();
+		keyBytes = crypto.getRandomValues(new Uint8Array(32));
+		const key = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt"]);
+		({ sealed } = await sealToFit(key, data, SERVER_MAX_SEALED_BYTES));
+	});
+
+	function loadShare(
+		blob: Uint8Array<ArrayBuffer>,
+		rawKey: Uint8Array<ArrayBuffer>,
+		subtle?: Pick<SubtleCrypto, "importKey" | "decrypt">,
+	): Promise<SessionData> {
+		const window: { __OMP_SESSION_DATA__?: Promise<SessionData> } = {};
+		const context = vm.createContext({
+			window,
+			document: { title: "oms session" },
+			location: new URL(`http://10.66.66.8/s/share-viewer-test#${Buffer.from(rawKey).toString("base64url")}`),
+			crypto: { getRandomValues: crypto.getRandomValues.bind(crypto), subtle },
+			fetch: async (url: string) => {
+				if (url !== "/s/share-viewer-test/raw") throw new Error(`Unexpected viewer request: ${url}`);
+				return new Response(blob);
+			},
+			Blob,
+			DecompressionStream,
+			Response,
+			TextDecoder,
+			TextEncoder,
+			Uint8Array,
+			atob,
+		});
+		vm.runInContext(loaderJs, context);
+		if (!window.__OMP_SESSION_DATA__) throw new Error("Share loader did not publish its session promise");
+		return window.__OMP_SESSION_DATA__;
+	}
+
+	test("opens native encrypted gzip shares on HTTP without WebCrypto or external scripts", async () => {
+		expect(await loadShare(sealed, keyBytes)).toEqual(data);
+	});
+
+	test("still opens native encrypted gzip shares with WebCrypto available", async () => {
+		expect(await loadShare(sealed, keyBytes, crypto.subtle)).toEqual(data);
+	});
+
+	test("rejects wrong keys and tampered authentication tags without WebCrypto", async () => {
+		const wrongKey = keyBytes.slice();
+		wrongKey[0] = wrongKey[0]! ^ 1;
+		await expect(loadShare(sealed, wrongKey)).rejects.toThrow("Decryption failed");
+
+		const tampered = sealed.slice();
+		tampered[tampered.length - 1] = tampered[tampered.length - 1]! ^ 1;
+		await expect(loadShare(tampered, keyBytes)).rejects.toThrow("Decryption failed");
+	});
+
+	test("never retries a WebCrypto failure through the fallback even when it could open the payload", async () => {
+		const rejectingSubtle: Pick<SubtleCrypto, "importKey" | "decrypt"> = {
+			importKey: crypto.subtle.importKey.bind(crypto.subtle),
+			decrypt: async () => {
+				throw new DOMException("Authentication failed", "OperationError");
+			},
+		};
+		await expect(loadShare(sealed, keyBytes, rejectingSubtle)).rejects.toThrow("Decryption failed");
+	});
+});
 
 describe("sealToFit", () => {
 	test("round-trips losslessly when under budget", async () => {

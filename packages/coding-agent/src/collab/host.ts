@@ -11,16 +11,21 @@
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import * as fs from "node:fs/promises";
-import type { ImageContent, TextContent } from "@oh-my-soup/pi-ai";
+import type { AssistantMessage, ImageContent, TextContent } from "@oh-my-soup/pi-ai";
 import { logger } from "@oh-my-soup/pi-utils";
-import type {
-	BusChannel,
-	CollabUiRequest,
-	CollabUiRequestDraft,
-	CollabUiResponseValue,
-	AgentEvent as WireAgentEvent,
-	SessionEntry as WireSessionEntry,
+import {
+	type BusChannel,
+	COLLAB_HISTORY_BYTES,
+	COLLAB_HISTORY_ENTRIES,
+	type CollabUiRequest,
+	type CollabUiRequestDraft,
+	type CollabUiResponseValue,
+	type HistoryCursor,
+	type HistoryPage,
+	type AgentEvent as WireAgentEvent,
+	type SessionEntry as WireSessionEntry,
 } from "@oh-my-soup/pi-wire";
+import { diffCollabStream } from "@oh-my-soup/pi-wire/collab-stream";
 import type { InteractiveModeContext } from "../modes/types";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
@@ -40,7 +45,10 @@ import {
 	type CollabSessionState,
 	encodeEntryFrame,
 	encodeEventFrame,
+	encodeHistoryFrame,
 	encodeSnapshotChunk,
+	encodeStreamDeltaFrame,
+	encodeStreamFrame,
 	type EncodedFrame,
 	formatCollabLink,
 	formatCollabWebLink,
@@ -80,6 +88,7 @@ const STATE_TRIGGER_EVENTS: Record<string, true> = {
 const STATE_DEBOUNCE_MS = 100;
 const AGENTS_DEBOUNCE_MS = 100;
 const STREAMING_STATE_INTERVAL_MS = 2000;
+const STREAM_COALESCE_MS = 50;
 const WELCOME_IMAGE_STRIP_THRESHOLD = 24 * 1024 * 1024;
 const WIRE_AGENT_EVENT_TYPES: Record<WireAgentEvent["type"], true> = {
 	agent_start: true,
@@ -124,14 +133,8 @@ const CONNECT_TIMEOUT_MS = 15_000;
 /** Max bytes served per fetch-transcript reply (guest re-requests from `newSize`). */
 export const TRANSCRIPT_READ_CAP = 4 * 1024 * 1024;
 const TRANSCRIPT_ENTRY_TOO_LARGE_ERROR = `transcript entry exceeds transcript fetch cap (${TRANSCRIPT_READ_CAP} bytes)`;
-/**
- * Soft byte cap per `snapshot-chunk` frame. The first MB of a snapshot takes
- * ~3s through the default relay, so a 512 KB chunk lands well under the
- * guest's 30 s per-chunk progress timeout; oversized single entries still
- * ship in a chunk of their own. Measured in UTF-8 bytes — the unit the relay
- * and the seal step care about — not UTF-16 code units (#11433).
- */
-const SNAPSHOT_CHUNK_BYTES = 512 * 1024;
+/** Soft UTF-8 byte cap; an existing capped oversized entry travels alone. */
+const SNAPSHOT_CHUNK_BYTES = 64 * 1024;
 const MAX_PENDING_UI_REQUESTS = 64;
 /**
  * Outcome of {@link CollabHost.requestGuestUi}. `answered` carries the guest's
@@ -147,6 +150,24 @@ interface PendingCollabUiRequest {
 	settle(result: CollabGuestUiResult): void;
 	responsePending?: boolean;
 	retainOnReconnect?: boolean;
+}
+
+interface SerializedHistoryPage {
+	json: string[];
+	bytes: number[];
+	page: HistoryPage;
+	error?: string;
+}
+
+interface ActiveCollabStream {
+	id: number;
+	message: AssistantMessage;
+	baseline: AssistantMessage | null;
+	revision: number;
+	/** Conservative byte bound, increased by each patch instead of reserializing the full partial. */
+	bytes: number;
+	pending: boolean;
+	omitted: EncodedFrame | null;
 }
 
 /**
@@ -203,9 +224,9 @@ export class CollabHost {
 	#ctx: InteractiveModeContext;
 	#socket: CollabSocket | null = null;
 	#link = "";
-	#webLink = "";
+	#webLink: string | null = null;
 	#viewLink = "";
-	#webViewLink = "";
+	#webViewLink: string | null = null;
 	#writeToken: Uint8Array | null = null;
 	#sessionId: string;
 	#startedAt = 0;
@@ -250,8 +271,9 @@ export class CollabHost {
 	/** The in-flight or finished `stop()`; concurrent callers share it. */
 	#stopDone: Promise<void> | undefined;
 	#stopped = false;
-	/** Bumped on every `message_start`; keys a streaming message's superseding updates. */
 	#messageSeq = 0;
+	#activeStream: ActiveCollabStream | null = null;
+	#streamTimer: Timer | null = null;
 
 	constructor(ctx: InteractiveModeContext, options: CollabHostOptions = {}) {
 		this.#ctx = ctx;
@@ -314,8 +336,8 @@ export class CollabHost {
 		return this.#link;
 	}
 
-	/** Browser deep link for the configured collab web UI. */
-	get webLink(): string {
+	/** Browser deep link, or null when the relay's web UI is not known. */
+	get webLink(): string | null {
 		return this.#webLink;
 	}
 
@@ -325,7 +347,7 @@ export class CollabHost {
 	}
 
 	/** Read-only variant of {@link webLink}. */
-	get webViewLink(): string {
+	get webViewLink(): string | null {
 		return this.#webViewLink;
 	}
 
@@ -431,6 +453,7 @@ export class CollabHost {
 		};
 		socket.onClose = (reason, willReconnect) => {
 			this.#relayConnected = false;
+			this.#resetStreamBaseline();
 			if (this.#stopping || this.#stopped) return;
 			if (!opened) {
 				// A close the socket would retry (unreachable relay, dropped handshake)
@@ -494,6 +517,7 @@ export class CollabHost {
 		this.#registryUnsubscribe = AgentRegistry.global().onChange(() => this.#scheduleAgentsBroadcast());
 		this.#ctx.sessionManager.onEntryAppended = entry => {
 			if (isWireSessionEntry(entry) && this.#broadcastAllowed()) {
+				this.#flushStream();
 				const bounded = serializeReplicatedEntry(entry);
 				const shrunk = bounded.value;
 				if (shrunk.type === "custom_message" && shrunk.customType === COLLAB_ENTRY_OMITTED_CUSTOM_TYPE) {
@@ -558,6 +582,7 @@ export class CollabHost {
 
 	async #runStop(reason: string): Promise<void> {
 		this.#stopping = true;
+		this.#clearStream();
 		// Leave the public slot at once: `/collab` must not re-print, and `/join`
 		// must not see as hosting, a room that already refuses frames.
 		if (this.#ctx.collabHost === this) this.#ctx.collabHost = undefined;
@@ -582,6 +607,7 @@ export class CollabHost {
 	async #runTeardown(): Promise<void> {
 		if (this.#stopped) return;
 		this.#stopped = true;
+		this.#clearStream();
 		// A room that ended on its own (fatal relay close) reaches here without
 		// `#runStop`: leave the public slot before the first await as well.
 		if (this.#ctx.collabHost === this) this.#ctx.collabHost = undefined;
@@ -646,7 +672,7 @@ export class CollabHost {
 	#registrySource(): CollabHostRegistrySource {
 		return {
 			snapshot: () => this.#registrySnapshot(),
-			link: access => (access === "view" ? this.#webViewLink : this.#webLink),
+			link: access => (access === "view" ? (this.#webViewLink ?? this.#viewLink) : (this.#webLink ?? this.#link)),
 		};
 	}
 
@@ -711,16 +737,140 @@ export class CollabHost {
 		return this.#peers.size > 0 && this.#guestTrafficAllowed();
 	}
 
-	/** Broadcast one session event, bounded and serialized exactly once. */
+	/** Coalesce immutable assistant partials before any serialization or diff work. */
 	#broadcastEvent(event: AgentSessionEvent): void {
-		if (event.type === "message_start") this.#messageSeq++;
-		if (!this.#broadcastAllowed()) return;
-		const frame = encodeEventFrame(serializeReplicatedEvent(event).json);
-		// Each update carries the whole message so far, so a newer one supersedes
-		// any still queued for the same message (#16956). Keyed per message so the
-		// last update of one message is never superseded by the next one's.
-		if (event.type === "message_update") this.#socket?.sendLatest(`message_update:${this.#messageSeq}`, frame);
-		else this.#socket?.send(frame);
+		if (!this.#guestTrafficAllowed()) {
+			this.#clearStream();
+			return;
+		}
+		if (event.type === "message_update" && event.message.role === "assistant") {
+			if (this.#ctx.session.isSessionTransitioning) {
+				this.#clearStream();
+				return;
+			}
+			const stream = this.#activeStream ?? this.#startStream(event.message);
+			stream.message = event.message;
+			stream.pending = true;
+			if (!this.#streamTimer && this.#broadcastAllowed() && this.#relayConnected) {
+				this.#streamTimer = setTimeout(() => this.#flushStream(), STREAM_COALESCE_MS);
+			}
+			return;
+		}
+		this.#flushStream();
+		if (event.type === "message_start" && event.message.role === "assistant") {
+			this.#startStream(event.message);
+		} else if (event.type === "message_end" || event.type === "agent_end") {
+			this.#clearStream();
+		}
+		if (this.#broadcastAllowed()) this.#socket?.send(encodeEventFrame(serializeReplicatedEvent(event).json));
+	}
+
+	#startStream(message: AssistantMessage): ActiveCollabStream {
+		this.#clearStream();
+		const stream: ActiveCollabStream = {
+			id: ++this.#messageSeq,
+			message,
+			baseline: null,
+			revision: -1,
+			bytes: 0,
+			pending: true,
+			omitted: null,
+		};
+		this.#activeStream = stream;
+		return stream;
+	}
+
+	#clearStream(): void {
+		clearTimeout(this.#streamTimer ?? undefined);
+		this.#streamTimer = null;
+		this.#activeStream = null;
+	}
+
+	/** A reconnect/empty room keeps the active partial but owes its next peer a fresh baseline. */
+	#resetStreamBaseline(): void {
+		clearTimeout(this.#streamTimer ?? undefined);
+		this.#streamTimer = null;
+		const stream = this.#activeStream;
+		if (!stream) return;
+		stream.baseline = null;
+		stream.bytes = 0;
+		stream.pending = true;
+		stream.omitted = null;
+	}
+
+	#flushStream(): void {
+		clearTimeout(this.#streamTimer ?? undefined);
+		this.#streamTimer = null;
+		if (!this.#guestTrafficAllowed() || this.#ctx.session.isSessionTransitioning) {
+			this.#clearStream();
+			return;
+		}
+		if (this.#activeStream?.pending && this.#broadcastAllowed() && this.#relayConnected) this.#emitStream();
+	}
+
+	#emitStream(toPeer = 0, forceBaseline = false): void {
+		const stream = this.#activeStream;
+		const socket = this.#socket;
+		if (!stream || !socket) return;
+		if (forceBaseline && !stream.pending) {
+			if (stream.baseline) {
+				socket.send(encodeStreamFrame(stream.id, stream.revision, JSON.stringify(stream.baseline)), toPeer);
+			}
+			if (stream.omitted) socket.send(stream.omitted, toPeer);
+			return;
+		}
+		const revision = stream.revision + 1;
+		if (!forceBaseline && stream.baseline) {
+			let patchJson: string | undefined;
+			try {
+				patchJson = JSON.stringify(diffCollabStream(stream.baseline, stream.message));
+			} catch {
+				// The same bounded full-message fallback handles non-JSON and oversized patches.
+			}
+			if (patchJson !== undefined) {
+				const bytes = Buffer.byteLength(patchJson, "utf8");
+				// A patch contains every added/replaced byte, plus metadata and patch
+				// overhead. Summing it overestimates growth but never undercounts it.
+				// Periodic full baselines reset that bound without a full per-tick scan.
+				if (stream.bytes + bytes <= MAX_REPLICATED_PAYLOAD_BYTES) {
+					const frame = encodeStreamDeltaFrame(stream.id, stream.revision, revision, patchJson);
+					stream.baseline = stream.message;
+					stream.revision = revision;
+					stream.bytes += bytes;
+					stream.pending = false;
+					stream.omitted = null;
+					socket.send(frame, toPeer);
+					return;
+				}
+			}
+		}
+		let message = stream.message;
+		let json: string | undefined;
+		try {
+			json = JSON.stringify(message);
+		} catch {
+			// Existing shape-preserving shrink passes handle non-JSON leaves too.
+		}
+		if (json === undefined || Buffer.byteLength(json, "utf8") > MAX_REPLICATED_PAYLOAD_BYTES) {
+			const bounded = serializeReplicatedEvent({ type: "message_start", message });
+			if (bounded.value.type !== "message_start" || bounded.value.message.role !== "assistant") {
+				stream.pending = false;
+				stream.omitted = encodeEventFrame(bounded.json);
+				if (toPeer !== 0 && stream.baseline) {
+					socket.send(encodeStreamFrame(stream.id, stream.revision, JSON.stringify(stream.baseline)), toPeer);
+				}
+				socket.send(stream.omitted, toPeer);
+				return;
+			}
+			message = bounded.value.message;
+			json = JSON.stringify(message);
+		}
+		stream.baseline = message;
+		stream.revision = revision;
+		stream.bytes = Buffer.byteLength(json, "utf8");
+		stream.pending = false;
+		stream.omitted = null;
+		socket.send(encodeStreamFrame(stream.id, revision, json), toPeer);
 	}
 
 	#handleFrame(frame: CollabFrame, fromPeer: number): void {
@@ -738,13 +888,20 @@ export class CollabHost {
 			this.#handleUiResponse(frame.reqId, frame.value, fromPeer);
 			return;
 		}
+		if (frame.t === "fetch-history") {
+			// Unlike mutations, a read can fail explicitly during a provisional
+			// session switch without reading that session or stranding navigation
+			// if the switch rolls back.
+			if (!this.ending) this.#handleFetchHistory(frame.reqId, frame.cursor, fromPeer);
+			return;
+		}
 		// Inbound frames act on the mirrored session (join snapshots, prompts,
 		// aborts, agent control); none may reach a session this room never
 		// shared, or one whose room is already ending.
 		if (!this.#guestTrafficAllowed()) return;
 		switch (frame.t) {
 			case "hello":
-				this.#handleHello(frame.name, frame.proto, frame.writeToken, fromPeer);
+				this.#handleHello(frame.name, frame.proto, frame.writeToken, fromPeer, frame.history);
 				break;
 			case "prompt":
 				if (this.#rejectWhileStarting("prompting", fromPeer)) break;
@@ -793,7 +950,13 @@ export class CollabHost {
 		return true;
 	}
 
-	#handleHello(name: string, proto: number, writeToken: string | undefined, fromPeer: number): void {
+	#handleHello(
+		name: string,
+		proto: number,
+		writeToken: string | undefined,
+		fromPeer: number,
+		history: "paged" | undefined,
+	): void {
 		if (this.#ctx.session.isSessionTransitioning) {
 			this.#send({ t: "error", message: "Session transition in progress; join again when it completes" }, fromPeer);
 			return;
@@ -805,6 +968,11 @@ export class CollabHost {
 			);
 			return;
 		}
+		// Flush against the old roster before admitting a new peer. A queued
+		// pre-welcome delta is ignored there; its targeted baseline follows the
+		// entire snapshot train before any later broadcast can depend on it.
+		this.#flushStream();
+		if (!this.#guestTrafficAllowed()) return;
 		const cleanName = name.trim().slice(0, 64) || `guest-${fromPeer}`;
 		const canWrite = this.#verifyWriteToken(writeToken);
 		const firstPeer = this.#peers.size === 0;
@@ -818,7 +986,8 @@ export class CollabHost {
 		// copy. Chunk frames are assembled from these strings only as the
 		// transport drains.
 		const snapshot = this.#ctx.sessionManager.snapshotForReplication();
-		const snapshotEntries = this.#serializeSnapshotEntries(snapshot.entries.filter(isWireSessionEntry));
+		const page = history === "paged" ? this.#serializeHistoryPage(snapshot.entries, { kind: "latest" }) : null;
+		const snapshotEntries = page ?? this.#serializeSnapshotEntries(snapshot.entries.filter(isWireSessionEntry));
 		const state = this.#buildState();
 		// State broadcasts pause while no guest is joined, so the dedupe baseline
 		// may predate this welcome; with no other peer to keep current, the welcome
@@ -833,10 +1002,12 @@ export class CollabHost {
 				agents: this.#snapshotAgents(),
 				entryCount: snapshotEntries.json.length,
 				readOnly: canWrite ? undefined : true,
+				history: page?.page,
 			},
 			fromPeer,
 		);
 		socket.sendBatch(this.#snapshotChunks(snapshotEntries.json, snapshotEntries.bytes), fromPeer);
+		this.#emitStream(fromPeer, true);
 		if (canWrite) {
 			for (const pending of this.#pendingUi.values()) {
 				if (pending.responsePending) continue;
@@ -850,6 +1021,84 @@ export class CollabHost {
 		);
 		this.#updateStatusSegment();
 		this.#scheduleStateBroadcast();
+	}
+
+	#handleFetchHistory(reqId: number, cursor: HistoryCursor, fromPeer: number): void {
+		if (!this.#peers.has(fromPeer) || !this.#sessionStillCurrent() || this.#ctx.session.isSessionTransitioning) {
+			this.#socket?.send(
+				encodeHistoryFrame(
+					reqId,
+					[],
+					{ beforeId: null, afterId: null, total: 0 },
+					this.#peers.has(fromPeer) ? "Session transition in progress" : "Join before fetching history",
+				),
+				fromPeer,
+			);
+			return;
+		}
+		const snapshot = this.#ctx.sessionManager.snapshotForReplication();
+		const result = this.#serializeHistoryPage(snapshot.entries, cursor);
+		this.#socket?.send(encodeHistoryFrame(reqId, result.json, result.page, result.error), fromPeer);
+	}
+
+	/** Scan only references/IDs globally; serialize at most one candidate page. */
+	#serializeHistoryPage(entries: readonly StoredSessionEntry[], cursor: HistoryCursor): SerializedHistoryPage {
+		const result: SerializedHistoryPage = {
+			json: [],
+			bytes: [],
+			page: { beforeId: null, afterId: null, total: 0 },
+		};
+		if (
+			!cursor ||
+			(cursor.kind !== "latest" && cursor.kind !== "before" && cursor.kind !== "after") ||
+			(cursor.kind !== "latest" && typeof cursor.id !== "string")
+		) {
+			result.error = "Invalid history cursor";
+			return result;
+		}
+		let cursorIndex = -1;
+		let cursorOffset = -1;
+		for (let index = 0; index < entries.length; index++) {
+			const entry = entries[index];
+			if (!entry || !isWireSessionEntry(entry)) continue;
+			if (cursor.kind !== "latest" && entry.id === cursor.id) {
+				cursorIndex = index;
+				cursorOffset = result.page.total;
+			}
+			result.page.total++;
+		}
+		if (cursor.kind !== "latest" && cursorIndex === -1) {
+			result.error = "History cursor is no longer available; fetch latest history";
+			return result;
+		}
+		const forward = cursor.kind === "after";
+		const step = forward ? 1 : -1;
+		let index = cursor.kind === "latest" ? entries.length - 1 : cursorIndex + step;
+		let offset = cursor.kind === "latest" ? result.page.total - 1 : cursorOffset + step;
+		let payloadBytes = 2; // The entries array's brackets and separators count too.
+		while (index >= 0 && index < entries.length && result.json.length < COLLAB_HISTORY_ENTRIES) {
+			const entry = entries[index];
+			index += step;
+			if (!entry || !isWireSessionEntry(entry)) continue;
+			const json = serializeReplicatedEntry(entry).json;
+			const bytes = Buffer.byteLength(json, "utf8");
+			const nextBytes = payloadBytes + bytes + (result.json.length > 0 ? 1 : 0);
+			if (result.json.length > 0 && nextBytes > COLLAB_HISTORY_BYTES) break;
+			if (result.json.length === 0 || !forward) result.page.beforeId = offset > 0 ? entry.id : null;
+			if (result.json.length === 0 || forward) {
+				result.page.afterId = offset < result.page.total - 1 ? entry.id : null;
+			}
+			result.json.push(json);
+			result.bytes.push(bytes);
+			payloadBytes = nextBytes;
+			offset += step;
+			if (payloadBytes >= COLLAB_HISTORY_BYTES) break;
+		}
+		if (!forward) {
+			result.json.reverse();
+			result.bytes.reverse();
+		}
+		return result;
 	}
 
 	/**
@@ -931,12 +1180,13 @@ export class CollabHost {
 			yield encodeSnapshotChunk([], true);
 			return;
 		}
+		const overhead = Buffer.byteLength(encodeSnapshotChunk([], false), "utf8");
 		let i = 0;
 		while (i < entries.length) {
 			const start = i;
-			let batchBytes = 0;
+			let batchBytes = overhead;
 			while (i < entries.length) {
-				const entryBytes = bytes[i] ?? 0;
+				const entryBytes = (bytes[i] ?? 0) + (i > start ? 1 : 0);
 				if (i > start && batchBytes + entryBytes > SNAPSHOT_CHUNK_BYTES) break;
 				batchBytes += entryBytes;
 				i++;
@@ -1081,6 +1331,7 @@ export class CollabHost {
 	 */
 	#handleRoomRecreated(): void {
 		if (this.#stopped) return;
+		this.#resetStreamBaseline();
 		if (this.#peers.size === 0 && this.#pendingUi.size === 0) return;
 		// Identities first: settle() fans `ui-request-end` out over #peers, and those
 		// ids belong to the room that just went away.
@@ -1100,6 +1351,7 @@ export class CollabHost {
 	#handlePeerLeft(peer: number): void {
 		const name = this.#peers.get(peer)?.name;
 		this.#peers.delete(peer);
+		if (this.#peers.size === 0) this.#resetStreamBaseline();
 		// Relay controls arrive outside the normal frame handler.
 		if (!this.#guestTrafficAllowed()) return;
 		if (name) this.#ctx.session.emitNotice("info", `${name} left the collab session`, "collab");

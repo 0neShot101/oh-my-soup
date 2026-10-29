@@ -11,6 +11,8 @@
  * JSON boundary and every `switch` keeps a tolerant `default:` branch.
  */
 
+import type { CollabStreamPatch } from "./collab-stream";
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Content blocks
 // ═══════════════════════════════════════════════════════════════════════════
@@ -325,11 +327,25 @@ export type CollabUiRequestDraft =
 
 export type CollabUiRequest = CollabUiRequestDraft & { reqId: number };
 
+/** Browser pages are bounded by both entry count and serialized UTF-8 bytes. */
+export const COLLAB_HISTORY_ENTRIES = 100;
+export const COLLAB_HISTORY_BYTES = 128 * 1024;
+
+export type HistoryCursor = { kind: "latest" } | { kind: "before" | "after"; id: string };
+
+export interface HistoryPage {
+	beforeId: string | null;
+	afterId: string | null;
+	total: number;
+}
+
 export type GuestFrame =
 	| {
 			t: "hello";
 			proto: number;
 			name: string;
+			/** Browser history is fetched on demand; native replicas request the full snapshot. */
+			history?: "paged";
 			/**
 			 * base64url write token proving full-link possession; absent for
 			 * read-only (view) links. The host marks peers without a valid token
@@ -341,7 +357,8 @@ export type GuestFrame =
 	| { t: "ui-response"; reqId: number; value?: CollabUiResponseValue }
 	| { t: "abort" }
 	| { t: "agent-cmd"; cmd: "chat" | "kill" | "revive"; agentId: string; text?: string }
-	| { t: "fetch-transcript"; reqId: number; agentId: string; fromByte: number };
+	| { t: "fetch-transcript"; reqId: number; agentId: string; fromByte: number }
+	| { t: "fetch-history"; reqId: number; cursor: HistoryCursor };
 
 /** EventBus channels mirrored to guests (task subagent traffic only). */
 export type BusChannel = "task:subagent:progress" | "task:subagent:lifecycle";
@@ -362,6 +379,7 @@ export type HostFrame =
 			entryCount: number;
 			/** True when this peer joined through a read-only (view) link. */
 			readOnly?: boolean;
+			history?: HistoryPage;
 	  }
 	/**
 	 * Targeted snapshot fragment delivered after `welcome`. Hosts split the
@@ -372,6 +390,11 @@ export type HostFrame =
 	| { t: "snapshot-chunk"; entries: SessionEntry[]; final: boolean }
 	| { t: "entry"; entry: SessionEntry }
 	| { t: "event"; event: AgentEvent }
+	/** Full in-flight baseline for a new stream or a peer joining mid-turn. */
+	| { t: "stream"; id: number; revision: number; message: AssistantMessage }
+	/** Ordered patches are never superseded in the transport queue. */
+	| { t: "stream-delta"; id: number; previousRevision: number; revision: number; patch: CollabStreamPatch }
+	| { t: "history"; reqId: number; entries: SessionEntry[]; page: HistoryPage; error?: string }
 	| { t: "state"; state: SessionState }
 	/** Mirrored EventBus traffic (task subagent lifecycle/progress channels only). */
 	| { t: "bus"; channel: BusChannel; data: unknown }
@@ -397,8 +420,9 @@ export type WireFrame = GuestFrame | HostFrame;
  *   answered by the `ui-response` guest frame. Guests that predate the
  *   grammar would silently drop `ui-request` (asks hang forever on the
  *   host), so they must be rejected at hello.
+ * - `4`: bounded browser history pages and lossless coalesced assistant-stream patches.
  */
-export const COLLAB_PROTO = 3;
+export const COLLAB_PROTO = 4;
 
 /** Parameter key used for intent tracing (e.g. prompt explanation/reasoning) */
 export const INTENT_FIELD = "i";

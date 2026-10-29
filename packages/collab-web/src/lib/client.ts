@@ -7,8 +7,8 @@
  * object (and every replaced collection inside it) gets a new reference per
  * commit, so React change detection is reference equality all the way.
  *
- * High-rate frames (streaming `message_update`, `tool_execution_update`,
- * subagent progress) are applied immediately but published at most once per
+ * High-rate frames (stream baselines/deltas, tool updates and subagent
+ * progress) are applied immediately but published at most once per
  * animation frame; every other frame publishes synchronously, flushing any
  * pending state with it, so the published end state is unchanged.
  */
@@ -18,6 +18,8 @@ import type {
 	AssistantMessage,
 	CollabUiRequest,
 	CollabUiResponseValue,
+	HistoryCursor,
+	HistoryPage,
 	HostFrame,
 	SessionEntry,
 	SessionHeader,
@@ -25,6 +27,8 @@ import type {
 	SubagentLifecyclePayload,
 	SubagentProgressPayload,
 } from "@oh-my-soup/pi-wire";
+import { COLLAB_HISTORY_BYTES, COLLAB_HISTORY_ENTRIES } from "@oh-my-soup/pi-wire";
+import { applyCollabStream } from "@oh-my-soup/pi-wire/collab-stream";
 import { importRoomKey } from "./codec";
 import { COLLAB_PROTO, encodeBase64Url, parseCollabLink } from "./link";
 import { CollabSocket } from "./socket";
@@ -47,11 +51,20 @@ export interface Notice {
 	at: number;
 }
 
+export interface HistoryView extends HistoryPage {
+	atLatest: boolean;
+	loading: boolean;
+	error: string | null;
+	/** Changes only when navigation or a fresh snapshot replaces the view. */
+	version: number;
+}
+
 export interface GuestSnapshot {
 	phase: ConnectionPhase;
 	endedReason: string | null;
 	header: SessionHeader | null;
 	entries: readonly SessionEntry[];
+	history: HistoryView;
 	state: SessionState | null;
 	agents: readonly AgentSnapshot[];
 	/** Keyed by `payload.progress.id`. */
@@ -76,6 +89,7 @@ export interface GuestSnapshot {
 
 const MAX_NOTICES = 50;
 const TRANSCRIPT_TIMEOUT_MS = 10_000;
+const HISTORY_TIMEOUT_MS = 10_000;
 /** Mirrors the TUI guest's WELCOME_TIMEOUT_MS: a host that never answers hello ends the join. */
 const WELCOME_TIMEOUT_MS = 30_000;
 /** Mirrors the TUI guest's SNAPSHOT_PROGRESS_TIMEOUT_MS: every snapshot chunk must make progress. */
@@ -95,8 +109,8 @@ function scheduleFrame(callback: () => void): () => void {
 
 /** High-rate frames whose publish is deferred to the next animation frame. */
 function isCoalescable(frame: HostFrame): boolean {
-	if (frame.t === "event")
-		return frame.event.type === "message_update" || frame.event.type === "tool_execution_update";
+	if (frame.t === "stream" || frame.t === "stream-delta") return true;
+	if (frame.t === "event") return frame.event.type === "tool_execution_update";
 	return frame.t === "bus" && frame.channel === "task:subagent:progress";
 }
 
@@ -111,6 +125,49 @@ export type TranscriptResult = { kind: "rows"; text: string; newSize: number } |
 
 interface PendingTranscript {
 	resolve: (result: TranscriptResult | null) => void;
+	timer: Timer;
+}
+
+/** Each retained collection is a suffix bounded by count AND serialized UTF-8 bytes. */
+class EntryWindow {
+	readonly entries: SessionEntry[] = [];
+	readonly #sizes: number[] = [];
+	#bytes = 2; // JSON array brackets, plus one comma between entries.
+	evicted = false;
+
+	append(entry: SessionEntry): boolean {
+		if (this.entries.some(existing => existing.id === entry.id)) return false;
+		const bytes = entryBytes(entry);
+		this.#bytes += bytes + (this.entries.length > 0 ? 1 : 0);
+		this.entries.push(entry);
+		this.#sizes.push(bytes);
+		while (
+			this.entries.length > 1 &&
+			(this.entries.length > COLLAB_HISTORY_ENTRIES || this.#bytes > COLLAB_HISTORY_BYTES)
+		) {
+			this.#bytes -= this.#sizes.shift()! + 1;
+			this.entries.shift();
+			this.evicted = true;
+		}
+		return true;
+	}
+}
+
+const entrySizes = new WeakMap<SessionEntry, number>();
+const encoder = new TextEncoder();
+
+function entryBytes(entry: SessionEntry): number {
+	let bytes = entrySizes.get(entry);
+	if (bytes === undefined) {
+		bytes = encoder.encode(JSON.stringify(entry)).byteLength;
+		entrySizes.set(entry, bytes);
+	}
+	return bytes;
+}
+
+interface PendingHistory {
+	reqId: number;
+	live: EntryWindow;
 	timer: Timer;
 }
 
@@ -131,12 +188,15 @@ export class GuestClient {
 	#phase: ConnectionPhase = "connecting";
 	#endedReason: string | null = null;
 	#header: SessionHeader | null = null;
-	#entries: SessionEntry[] = [];
-	/**
-	 * Snapshot in flight since `welcome`: chunk entries, plus live `entry`
-	 * frames that arrived meanwhile (published after the snapshot, at the tail).
-	 */
-	#pendingSnapshot: { entries: SessionEntry[]; live: SessionEntry[]; total: number } | null = null;
+	#live = new EntryWindow();
+	#livePage: HistoryPage = { beforeId: null, afterId: null, total: 0 };
+	#historyPage: HistoryPage = this.#livePage;
+	#atLatest = true;
+	#historyError: string | null = null;
+	#historyVersion = 0;
+	#pendingHistory: PendingHistory | null = null;
+	/** Both chunk accumulation and concurrent live entries stay bounded. */
+	#pendingSnapshot: { entries: EntryWindow; received: number; total: number; page: HistoryPage } | null = null;
 	#state: SessionState | null = null;
 	#agents: readonly AgentSnapshot[] = [];
 	#progress: ReadonlyMap<string, SubagentProgressPayload> = new Map();
@@ -148,6 +208,7 @@ export class GuestClient {
 	 */
 	#unlistedBusIds = new Set<string>();
 	#stream: AssistantMessage | null = null;
+	#streamBaseline: { id: number; revision: number; message: AssistantMessage } | null = null;
 	#streamDone = false;
 	#activeTools: ReadonlyMap<string, ActiveTool> = new Map();
 	#working = false;
@@ -158,10 +219,8 @@ export class GuestClient {
 	#snapshot: GuestSnapshot;
 	/**
 	 * Published entries array, cached across commits: rebuilt only when
-	 * `#entries` is mutated (welcome/snapshot-chunk/entry frames). Every
-	 * other frame (streaming message_update, state, bus, agents) reuses the
-	 * same reference, so entry-identity consumers (Transcript memo,
-	 * useSyncExternalStore) skip their O(n) scans per token.
+	 * the displayed page changes. Streaming and historical browsing reuse
+	 * the same reference, so entry-identity consumers skip scans per token.
 	 */
 	#publishedEntries: readonly SessionEntry[] = [];
 	/** Cancels the scheduled deferred commit; null when none is pending. */
@@ -196,9 +255,7 @@ export class GuestClient {
 	}
 
 	close(): void {
-		this.#clearWelcomeTimer();
-		this.#clearSnapshotProgressTimer();
-		this.#socket.close();
+		this.#end("closed");
 	}
 
 	subscribe(listener: () => void): () => void {
@@ -250,6 +307,22 @@ export class GuestClient {
 		return promise;
 	}
 
+	/** Navigation replaces the page. Only one request may be in flight. */
+	fetchHistory(cursor: HistoryCursor): void {
+		if (this.#phase !== "live" || this.#pendingSnapshot !== null || this.#pendingHistory !== null) return;
+		const reqId = ++this.#reqSeq;
+		const timer = setTimeout(() => {
+			if (this.#pendingHistory?.reqId !== reqId) return;
+			this.#pendingHistory = null;
+			this.#historyError = "History request timed out. Try again.";
+			this.#commit();
+		}, HISTORY_TIMEOUT_MS);
+		this.#pendingHistory = { reqId, timer, live: new EntryWindow() };
+		this.#historyError = null;
+		this.#socket.send({ t: "fetch-history", reqId, cursor });
+		this.#commit();
+	}
+
 	/**
 	 * Test seam: apply a synthetic host frame through the real apply path. With
 	 * `flush` (default), a commit deferred to the next animation frame is
@@ -261,7 +334,13 @@ export class GuestClient {
 	}
 
 	#handleOpen(): void {
-		this.#socket.send({ t: "hello", proto: COLLAB_PROTO, name: this.#name, writeToken: this.#writeToken });
+		this.#socket.send({
+			t: "hello",
+			proto: COLLAB_PROTO,
+			name: this.#name,
+			writeToken: this.#writeToken,
+			history: "paged",
+		});
 		this.#phase = this.#everConnected ? "reconnecting" : "waiting";
 		this.#everConnected = true;
 		this.#commit();
@@ -270,6 +349,9 @@ export class GuestClient {
 	#handleClose(reason: string, willReconnect: boolean): void {
 		this.#clearSnapshotProgressTimer();
 		if (this.#phase === "ended") return;
+		this.#welcomed = false;
+		this.#clearHistoryRequest();
+		this.#resetStream();
 		if (willReconnect) {
 			this.#phase = "reconnecting";
 			// The next welcome restarts the snapshot; drop the partial one.
@@ -287,6 +369,9 @@ export class GuestClient {
 		this.#phase = "ended";
 		this.#endedReason = reason;
 		this.#pendingSnapshot = null;
+		this.#welcomed = false;
+		this.#clearHistoryRequest();
+		this.#resetStream();
 		for (const [, pending] of this.#pendingTranscripts) {
 			clearTimeout(pending.timer);
 			pending.resolve(null);
@@ -319,6 +404,46 @@ export class GuestClient {
 		}
 	}
 
+	#clearHistoryRequest(): void {
+		if (this.#pendingHistory !== null) clearTimeout(this.#pendingHistory.timer);
+		this.#pendingHistory = null;
+		this.#historyError = null;
+	}
+
+	#resetStream(): void {
+		this.#streamBaseline = null;
+		this.#stream = null;
+		this.#streamDone = false;
+	}
+
+	#publishLive(): void {
+		this.#publishedEntries = [...this.#live.entries];
+		this.#livePage = {
+			...this.#livePage,
+			beforeId: this.#live.evicted || this.#livePage.beforeId !== null ? (this.#live.entries[0]?.id ?? null) : null,
+			afterId: null,
+		};
+		this.#historyPage = this.#livePage;
+	}
+
+	/** A reply can race live entries; merge only the suffix newer than that page. */
+	#acceptLatest(entries: EntryWindow, page: HistoryPage, concurrent: EntryWindow): void {
+		const lastId = entries.entries.at(-1)?.id;
+		const anchor = lastId === undefined ? -1 : concurrent.entries.findIndex(entry => entry.id === lastId);
+		const newerCount = Math.max(0, this.#livePage.total - page.total);
+		const start = anchor >= 0 ? anchor + 1 : Math.max(0, concurrent.entries.length - newerCount);
+		for (let i = start; i < concurrent.entries.length; i++) entries.append(concurrent.entries[i]!);
+		if (concurrent.evicted && start === 0) entries.evicted = true;
+		this.#live = entries;
+		this.#livePage = {
+			...page,
+			total:
+				anchor >= 0 ? page.total + concurrent.entries.length - start : Math.max(page.total, this.#livePage.total),
+		};
+		this.#atLatest = true;
+		this.#publishLive();
+	}
+
 	/** Surfaces apply failures instead of letting the socket's recv chain swallow them. */
 	#applyFrameSafe(frame: HostFrame): void {
 		try {
@@ -329,29 +454,43 @@ export class GuestClient {
 				this.#end(`failed to apply session snapshot: ${err instanceof Error ? err.message : String(err)}`);
 				return;
 			}
+			if (frame.t === "stream" || frame.t === "stream-delta") {
+				this.#end("Assistant stream could not be decoded. Rejoin to restore the current response.");
+				return;
+			}
 			this.#pushNotice("error", `failed to apply ${frame.t} frame`);
 			this.#commit();
 		}
 	}
 
 	#applyFrame(frame: HostFrame): void {
+		if (this.#phase === "ended") return;
 		switch (frame.t) {
 			case "welcome":
 				// A fresh welcome (first join or reconnect) restarts the snapshot.
 				// Entries already on screen stay until the new snapshot replaces
 				// them once complete, so a resync never blanks the transcript.
 				this.#header = frame.header;
+				this.#clearHistoryRequest();
+				this.#live = new EntryWindow();
+				this.#livePage = frame.history ?? { beforeId: null, afterId: null, total: frame.entryCount };
+				this.#atLatest = true;
+				this.#historyVersion++;
 				if (frame.entryCount === 0) {
-					this.#entries = [];
-					this.#publishedEntries = [];
+					this.#publishLive();
 					this.#pendingSnapshot = null;
 				} else {
-					this.#pendingSnapshot = { entries: [], live: [], total: frame.entryCount };
+					this.#pendingSnapshot = {
+						entries: new EntryWindow(),
+						received: 0,
+						total: frame.entryCount,
+						page: this.#livePage,
+					};
+					this.#phase = this.#phase === "live" || this.#phase === "reconnecting" ? "reconnecting" : "connecting";
 				}
 				this.#state = frame.state;
 				this.#agents = [...frame.agents];
-				this.#stream = null;
-				this.#streamDone = false;
+				this.#resetStream();
 				this.#activeTools = new Map();
 				this.#progress = new Map();
 				this.#lifecycle = new Map();
@@ -370,22 +509,18 @@ export class GuestClient {
 				this.#endedReason = null;
 				break;
 			case "snapshot-chunk": {
-				// Buffer fragments and publish the transcript once, when the
-				// snapshot completes (as the TUI guest does). Intermediate chunks
-				// only advance `loading`: publishing entries per chunk re-renders
-				// the transcript per chunk, and a 50 MB session is ~100 chunks.
+				// Publish once at completion; progress counts received entries,
+				// not the bounded retained suffix.
 				const pending = this.#pendingSnapshot;
 				if (pending === null) return;
-				pending.entries.push(...frame.entries);
-				// Complete on `final` or once every promised entry arrived, so a
-				// lost final chunk doesn't strand a fully received transcript.
-				if (!frame.final && pending.entries.length < pending.total) {
+				for (const entry of frame.entries) pending.entries.append(entry);
+				pending.received += frame.entries.length;
+				// A lost empty final chunk must not strand a complete page.
+				if (!frame.final && pending.received < pending.total) {
 					this.#armSnapshotProgressTimer();
 					break;
 				}
-				this.#entries = pending.entries;
-				this.#entries.push(...pending.live);
-				this.#publishedEntries = [...this.#entries];
+				this.#acceptLatest(pending.entries, pending.page, this.#live);
 				this.#pendingSnapshot = null;
 				this.#clearSnapshotProgressTimer();
 				this.#phase = "live";
@@ -398,13 +533,71 @@ export class GuestClient {
 					this.#stream = null;
 					this.#streamDone = false;
 				}
-				if (this.#pendingSnapshot !== null) {
-					this.#pendingSnapshot.live.push(frame.entry);
+				if (!this.#welcomed) return;
+				if (
+					this.#pendingSnapshot?.entries.entries.some(entry => entry.id === frame.entry.id) ||
+					!this.#live.append(frame.entry)
+				)
+					break;
+				this.#livePage = { ...this.#livePage, total: this.#livePage.total + 1 };
+				this.#pendingHistory?.live.append(frame.entry);
+				if (this.#pendingSnapshot !== null) break;
+				if (this.#atLatest) this.#publishLive();
+				else this.#historyPage = { ...this.#historyPage, total: this.#livePage.total };
+				break;
+			case "history": {
+				const pending = this.#pendingHistory;
+				if (pending === null || pending.reqId !== frame.reqId || !this.#welcomed) return;
+				this.#clearHistoryRequest();
+				if (frame.error !== undefined) {
+					this.#historyError = frame.error;
 					break;
 				}
-				this.#entries.push(frame.entry);
-				this.#publishedEntries = [...this.#entries];
+				const entries = new EntryWindow();
+				for (const entry of frame.entries) entries.append(entry);
+				if (frame.page.afterId === null) {
+					this.#acceptLatest(entries, frame.page, pending.live);
+				} else {
+					this.#atLatest = false;
+					this.#livePage = { ...this.#livePage, total: Math.max(this.#livePage.total, frame.page.total) };
+					this.#historyPage = {
+						...frame.page,
+						beforeId: entries.evicted ? (entries.entries[0]?.id ?? null) : frame.page.beforeId,
+						total: this.#livePage.total,
+					};
+					this.#publishedEntries = entries.entries;
+				}
+				this.#historyVersion++;
 				break;
+			}
+			case "stream":
+				if (!this.#welcomed) return;
+				this.#streamBaseline = { id: frame.id, revision: frame.revision, message: frame.message };
+				this.#stream = frame.message;
+				this.#streamDone = false;
+				break;
+			case "stream-delta": {
+				if (!this.#welcomed) return;
+				const baseline = this.#streamBaseline;
+				if (
+					baseline === null ||
+					baseline.id !== frame.id ||
+					baseline.revision !== frame.previousRevision ||
+					frame.revision <= frame.previousRevision
+				) {
+					this.#end("Assistant stream lost synchronization. Rejoin to restore the current response.");
+					return;
+				}
+				const message = applyCollabStream(baseline.message, frame.patch);
+				if (message === null) {
+					this.#end("Assistant stream patch could not be decoded. Rejoin to restore the current response.");
+					return;
+				}
+				this.#streamBaseline = { id: frame.id, revision: frame.revision, message };
+				this.#stream = message;
+				this.#streamDone = false;
+				break;
+			}
 			case "event":
 				this.#applyEvent(frame.event);
 				break;
@@ -521,14 +714,15 @@ export class GuestClient {
 	#applyEvent(event: Extract<HostFrame, { t: "event" }>["event"]): void {
 		switch (event.type) {
 			case "message_start":
-			case "message_update":
 				if (event.message.role === "assistant") {
+					this.#streamBaseline = null;
 					this.#stream = event.message;
 					this.#streamDone = false;
 				}
 				break;
 			case "message_end":
 				if (event.message.role === "assistant") {
+					this.#streamBaseline = null;
 					this.#stream = event.message;
 					this.#streamDone = true;
 				}
@@ -628,6 +822,13 @@ export class GuestClient {
 			// (streaming updates, state, bus) don't invalidate entry-identity
 			// consumers per token.
 			entries: this.#publishedEntries,
+			history: {
+				...this.#historyPage,
+				atLatest: this.#atLatest,
+				loading: this.#pendingHistory !== null,
+				error: this.#historyError,
+				version: this.#historyVersion,
+			},
 			state: this.#state,
 			agents: this.#agents,
 			progress: this.#progress,
@@ -640,7 +841,7 @@ export class GuestClient {
 			uiRequest: this.#uiRequest,
 			notices: this.#notices,
 			loading: this.#pendingSnapshot && {
-				received: this.#pendingSnapshot.entries.length,
+				received: this.#pendingSnapshot.received,
 				total: this.#pendingSnapshot.total,
 			},
 		};

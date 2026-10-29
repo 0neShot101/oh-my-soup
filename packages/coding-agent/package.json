@@ -538,6 +538,7 @@
 	},
 	"dependencies": {
 		"@babel/parser": "catalog:",
+		"@noble/ciphers": "catalog:",
 		"@oh-my-soup/oms-stats": "catalog:",
 		"@oh-my-soup/omstype": "catalog:",
 		"@oh-my-soup/pi-agent-core": "catalog:",

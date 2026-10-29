@@ -5,8 +5,14 @@
 ### Changed
 
 - Collaboration's Relay Server setting now switches active hosting connections to the chosen server without changing view/control access or starting sharing when it is off.
+- Collaboration links support explicit nonlocal `ws://`/`http://` endpoints on trusted VPNs while preserving view/control access and secure defaults.
+- Collaboration protocol v4 serves bounded on-demand browser history and coalesces assistant updates into lossless content patches before serialization; native guests retain complete session replicas. Restart existing hosts and reconnect guests after updating.
 
 ### Fixed
+
+- Collaboration links retain custom relay path prefixes, and custom relays print native join invitations instead of guessing a browser page at the server root; configure `collab.webUrl` to advertise a browser UI.
+- Encrypted share viewers now work on trusted VPN HTTP origins without WebCrypto, retaining AES-GCM authentication and native-client compatibility.
+- Preserved native guest restoration when the host's goodbye is still queued as the connection closes.
 
 - Fixed native HUD job metrics and hover-card discovery.
 

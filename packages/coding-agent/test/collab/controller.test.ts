@@ -97,7 +97,9 @@ interface ControllerContextState {
  * session identity, the session-change subscription, and the observable
  * seams (status messages, status-line collab segment).
  */
-function makeControllerContext(over: { autoStart?: "off" | "view" | "control"; relayUrl?: string } = {}): {
+function makeControllerContext(
+	over: { autoStart?: "off" | "view" | "control"; relayUrl?: string; webUrl?: string } = {},
+): {
 	ctx: InteractiveModeContext;
 	state: ControllerContextState;
 } {
@@ -106,7 +108,7 @@ function makeControllerContext(over: { autoStart?: "off" | "view" | "control"; r
 		settings: Settings.isolated({
 			"collab.autoStart": over.autoStart ?? "off",
 			"collab.relayUrl": over.relayUrl ?? RELAY_URL,
-			"collab.webUrl": WEB_URL,
+			"collab.webUrl": over.webUrl ?? WEB_URL,
 		}),
 		showStatus: [],
 		firstStatus: Promise.withResolvers<string>(),
@@ -367,8 +369,10 @@ describe("interactive collaboration startup", () => {
 			if (command === "/join") {
 				const remote = new CollabHost(makeControllerContext().ctx);
 				remoteHosts.push(remote);
-				await remote.start(RELAY_URL);
-				await executeBuiltinSlashCommand("/join " + remote.link, { ctx: mode });
+				await remote.start("ws://10.66.66.8/team/relay");
+				const invite = await registry.resolveCollabHostLink(remote.instanceId, "control", { dir: tmp });
+				expect(remote.webLink).toBeNull();
+				await executeBuiltinSlashCommand("/join " + invite.url, { ctx: mode });
 				expect(remote.participants.map(peer => peer.role)).toEqual(["host", "guest"]);
 				expect(first.stopped).toBe(true);
 				expect((await registry.listCollabHosts({ dir: tmp })).map(room => room.instanceId)).toEqual([
@@ -384,7 +388,7 @@ describe("interactive collaboration startup", () => {
 				{ sessionId: testSession.sessionManager.getSessionId(), generation: 2 },
 			]);
 			if (!replacement) throw new Error("slash command did not replace the stale host");
-			expect(mode.ui.render(200).join("\n")).toContain(replacement.webLink);
+			expect(mode.ui.render(200).join("\n")).toContain(replacement.link);
 			await joinAsWriter(replacement);
 		},
 	);
@@ -468,7 +472,7 @@ describe("interactive collaboration startup", () => {
 		try {
 			const rawArgs = ["--no-session", "--no-extensions", "--no-skills", "--no-rules", "--no-tools", "--no-lsp"];
 			const parsed = parseArgs(rawArgs);
-			parsed.join = remote.link;
+			parsed.join = (await registry.resolveCollabHostLink(remote.instanceId, "control", { dir: tmp })).url;
 			await expect(
 				runRootCommand(parsed, rawArgs, {
 					settings: activeSettings,
@@ -606,7 +610,7 @@ describe("interactive collaboration startup", () => {
 		).toMatchObject([{ sessionId: local.sessionManager.getSessionId(), access: "view" }]);
 		const restored = local.collabHost;
 		if (!restored) throw new Error("local room missing after restoration");
-		const parsed = parseCollabLink(restored.webLink);
+		const parsed = parseCollabLink(restored.link);
 		if ("error" in parsed) throw new Error(parsed.error);
 		expect(new URL(parsed.wsUrl).origin).toBe("ws://localhost:9797");
 	});
@@ -1002,10 +1006,13 @@ describe("CollabController", () => {
 	});
 
 	it.each(["manual", "automatic"] as const)(
-		"moves an active %s room to the configured relay server without changing its access",
+		"moves an active %s room to a configured VPN ws relay without changing its access",
 		async hosting => {
 			const access = hosting === "manual" ? "view" : "control";
-			const { ctx, state } = makeControllerContext({ autoStart: hosting === "manual" ? "off" : access });
+			const { ctx, state } = makeControllerContext({
+				autoStart: hosting === "manual" ? "off" : access,
+				webUrl: hosting === "manual" ? "" : WEB_URL,
+			});
 			controller = new CollabController(ctx);
 			if (hosting === "manual") await controller.start({ access });
 			else controller.autoStart();
@@ -1024,7 +1031,7 @@ describe("CollabController", () => {
 				return publish(source, options);
 			});
 
-			cfgCollabRelayUrl.override(state.settings, "ws://localhost:9797");
+			cfgCollabRelayUrl.override(state.settings, "ws://10.66.66.8");
 			await Promise.resolve();
 			await controller.idle();
 
@@ -1037,9 +1044,10 @@ describe("CollabController", () => {
 			const link = await registry.resolveCollabHostLink(controller.instanceId, access, { dir: tmp });
 			const parsed = parseCollabLink(link.url);
 			if ("error" in parsed) throw new Error(parsed.error);
-			expect(new URL(parsed.wsUrl).origin).toBe("ws://localhost:9797");
+			expect(new URL(parsed.wsUrl).origin).toBe("ws://10.66.66.8");
 			const replacement = ctx.collabHost;
 			if (!replacement) throw new Error("replacement room missing");
+			expect(link.url).toBe(hosting === "manual" ? replacement.viewLink : (replacement.webLink ?? replacement.link));
 			await joinAsWriter(replacement);
 			expect(replacement.participants.some(participant => participant.name === "writer")).toBe(true);
 			if (access === "view") {
@@ -1108,7 +1116,7 @@ describe("CollabController", () => {
 				expect(hosts).toMatchObject([{ sessionId: state.sessionId, access: "control" }]);
 				const replacement = ctx.collabHost;
 				if (!replacement) throw new Error("replacement room missing");
-				const parsed = parseCollabLink(replacement.webLink);
+				const parsed = parseCollabLink(replacement.link);
 				if ("error" in parsed) throw new Error(parsed.error);
 				expect(new URL(parsed.wsUrl).origin).toBe("ws://localhost:9797");
 			}
@@ -1163,7 +1171,7 @@ describe("CollabController", () => {
 		await expect(
 			registry.resolveCollabHostLink(controller.instanceId, "control", { dir: tmp }).then(link => link.generation),
 		).resolves.toBe(2);
-		expect(second!.webLink).not.toBe(first.webLink);
+		expect(second!.link).not.toBe(first.link);
 	});
 
 	it("rotates the room when the session moves to a new file because another oms process has it open", async () => {
@@ -1218,7 +1226,7 @@ describe("CollabController", () => {
 			registry.resolveCollabHostLink(controller.instanceId, "control", { dir: tmp }),
 		).rejects.toMatchObject({ code: "access_unavailable" });
 		expect((await registry.resolveCollabHostLink(controller.instanceId, "view", { dir: tmp })).url).toBe(
-			viewRoom.webViewLink,
+			viewRoom.webViewLink ?? viewRoom.viewLink,
 		);
 
 		// `/collab view` reuses the room; `/collab` (control) replaces it.
@@ -1230,7 +1238,7 @@ describe("CollabController", () => {
 		expect(hosts).toHaveLength(1);
 		expect(hosts[0]).toMatchObject({ generation: 2, access: "control" });
 		expect((await registry.resolveCollabHostLink(controller.instanceId, "control", { dir: tmp })).url).toBe(
-			controlRoom.webLink,
+			controlRoom.webLink ?? controlRoom.link,
 		);
 	});
 
@@ -1472,7 +1480,7 @@ describe("CollabController", () => {
 			{ sessionId: "upgraded-session", access: "control" },
 		]);
 		expect((await registry.resolveCollabHostLink(controller.instanceId, "control", { dir: tmp })).url).toBe(
-			room.webLink,
+			room.webLink ?? room.link,
 		);
 	});
 
@@ -1857,7 +1865,7 @@ describe("CollabController", () => {
 			expect(pending.stopped).toBe(true);
 			const replacement = ctx.collabHost;
 			if (!replacement) throw new Error("replacement room missing");
-			const parsed = parseCollabLink(replacement.webLink);
+			const parsed = parseCollabLink(replacement.link);
 			if ("error" in parsed) throw new Error(parsed.error);
 			expect(new URL(parsed.wsUrl).origin).toBe("ws://localhost:9797");
 			expect(replacement.relayConnected).toBe(true);

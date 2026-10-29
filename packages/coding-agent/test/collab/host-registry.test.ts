@@ -20,9 +20,15 @@ import { setImmediate } from "node:timers/promises";
 import { Agent } from "@oh-my-soup/pi-agent-core";
 import { createMockModel } from "@oh-my-soup/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-soup/pi-catalog/models";
+import { runCollabLinkCommand } from "@oh-my-soup/pi-coding-agent/cli/collab-cli";
 import { importRoomKey } from "@oh-my-soup/pi-coding-agent/collab/crypto";
 import { type CollabGuestUiResult, CollabHost } from "@oh-my-soup/pi-coding-agent/collab/host";
-import { COLLAB_PROTO, type CollabFrame, parseCollabLink } from "@oh-my-soup/pi-coding-agent/collab/protocol";
+import {
+	COLLAB_PROTO,
+	type CollabFrame,
+	DEFAULT_RELAY_URL,
+	parseCollabLink,
+} from "@oh-my-soup/pi-coding-agent/collab/protocol";
 import * as registry from "@oh-my-soup/pi-coding-agent/collab/registry";
 import { CollabSocket } from "@oh-my-soup/pi-coding-agent/collab/relay-client";
 import { ModelRegistry } from "@oh-my-soup/pi-coding-agent/config/model-registry";
@@ -516,15 +522,86 @@ describe("collab host registry lifecycle (#6099)", () => {
 
 		// Links come only from an explicit, generation-bound request.
 		const control = await registry.resolveCollabHostLink("host-under-test", "control", { dir: tmp });
-		expect(control).toEqual({ instanceId: "host-under-test", generation: 3, access: "control", url: host.webLink });
+		expect(control).toEqual({ instanceId: "host-under-test", generation: 3, access: "control", url: host.webLink ?? host.link });
 		const view = await registry.resolveCollabHostLink("host-under-test", "view", { dir: tmp });
-		expect(view.url).toBe(host.webViewLink);
+		expect(view.url).toBe(host.webViewLink ?? host.viewLink);
 	});
 
-	it("refuses a control link for a room published with view access", async () => {
+	for (const { name, relayUrl, webUrl, browserBase } of [
+		{
+			name: "a custom relay without a web UI",
+			relayUrl: "ws://10.66.66.8/collab/relay",
+			webUrl: "",
+			browserBase: null,
+		},
+		{
+			name: "a custom relay with a separate explicit web UI",
+			relayUrl: "ws://10.66.66.8/collab/relay",
+			webUrl: "https://collab.example/client/",
+			browserBase: "https://collab.example/client/",
+		},
+		{
+			name: "the hosted default relay",
+			relayUrl: DEFAULT_RELAY_URL,
+			webUrl: "",
+			browserBase: "https://my.omp.sh/",
+		},
+	]) {
+		it(`publishes joinable control and view invites for ${name}`, async () => {
+			const { ctx } = makeHostContext();
+			host = new CollabHost(ctx, { instanceId: "joinable-host", access: "control" });
+			await host.start(relayUrl, webUrl);
+
+			for (const access of ["control", "view"] as const) {
+				const nativeLink = access === "view" ? host.viewLink : host.link;
+				const webLink = access === "view" ? host.webViewLink : host.webLink;
+				const output: string[] = [];
+				await runCollabLinkCommand(
+					{ selector: host.instanceId, view: access === "view", json: false, registry: { dir: tmp } },
+					line => output.push(line),
+				);
+				if (browserBase) {
+					if (!webLink) throw new Error("configured browser invite missing");
+					const url = new URL(webLink);
+					expect(`${url.origin}${url.pathname}`).toBe(browserBase);
+					expect(url.hash).toBe(`#${nativeLink}`);
+					expect(output).toEqual([webLink]);
+				} else {
+					expect(webLink).toBeNull();
+					expect(output).toEqual([nativeLink]);
+				}
+				const parsed = parseCollabLink(output[0]!);
+				if ("error" in parsed) throw new Error(parsed.error);
+				expect(parsed.wsUrl).toBe(`${relayUrl}/r/${parsed.roomId}`);
+				expect(parsed.writeToken !== undefined).toBe(access === "control");
+
+				const guest = new CollabSocket({
+					wsUrl: parsed.wsUrl,
+					role: "guest",
+					key: await importRoomKey(parsed.key),
+				});
+				guestCleanups.push(() => guest.close());
+				const welcomed = Promise.withResolvers<boolean>();
+				guest.onFrame = frame => {
+					if (frame.t === "welcome") welcomed.resolve(frame.readOnly ?? false);
+				};
+				guest.onOpen = () =>
+					guest.send({
+						t: "hello",
+						proto: COLLAB_PROTO,
+						name: access,
+						writeToken: parsed.writeToken ? Buffer.from(parsed.writeToken).toString("base64url") : undefined,
+					});
+				guest.connect();
+				expect(await welcomed.promise).toBe(access === "view");
+			}
+		});
+	}
+
+	it.each([WEB_URL, ""])("refuses control access for a view-only room with web UI %j", async webUrl => {
 		const { ctx } = makeHostContext();
 		host = new CollabHost(ctx, { instanceId: "view-only-host", access: "view" });
-		await host.start(RELAY_URL, WEB_URL);
+		await host.start(RELAY_URL, webUrl);
 
 		const [snapshot] = await registry.listCollabHosts({ dir: tmp });
 		expect(snapshot!.access).toBe("view");
@@ -532,7 +609,10 @@ describe("collab host registry lifecycle (#6099)", () => {
 			code: "access_unavailable",
 		});
 		const view = await registry.resolveCollabHostLink("view-only-host", "view", { dir: tmp });
-		expect(view.url).toBe(host.webViewLink);
+		expect(view.url).toBe(host.webViewLink ?? host.viewLink);
+		const parsed = parseCollabLink(view.url);
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(parsed.writeToken).toBeUndefined();
 	});
 
 	it("reports inputRequired while a guest UI request is retained", async () => {
@@ -969,7 +1049,7 @@ describe("collab host registry lifecycle (#6099)", () => {
 		await host.start(RELAY_URL, WEB_URL);
 
 		expect(host.link.length).toBeGreaterThan(0);
-		expect(host.webLink.length).toBeGreaterThan(0);
+		expect(host.webLink).toContain(`${WEB_URL}/#`);
 		expect(host.participants.length).toBeGreaterThanOrEqual(1);
 		// The failure is surfaced to the user via the fixture-observable seam.
 		expect(state.showStatus.some(m => /discovery unavailable/i.test(m))).toBe(true);

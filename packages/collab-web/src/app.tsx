@@ -8,12 +8,13 @@ import { ConnectScreen } from "./components/shell/ConnectScreen";
 import { HeaderBar } from "./components/shell/HeaderBar";
 import { Toasts } from "./components/shell/Toasts";
 import { Transcript } from "./components/transcript/Transcript";
-import { GuestClient } from "./lib/client";
+import { type ActiveTool, GuestClient } from "./lib/client";
 import { useGuestSnapshot } from "./lib/use-guest";
 import type { ToolRenderHost } from "./tool-render";
 import "./components/shell/shell.css";
 
 const NAME_KEY = "oms.collab.name";
+const NO_ACTIVE_TOOLS: ReadonlyMap<string, ActiveTool> = new Map();
 
 interface Creds {
 	link: string;
@@ -155,6 +156,9 @@ function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
 	const drawerAgent = selectedId != null ? snap.agents.find(a => a.id === selectedId) : undefined;
 	const toggleRail = useCallback(() => setRailOpen(open => !open), []);
 	const closeDrawer = useCallback(() => setSelectedId(null), []);
+	const history = snap.history;
+	const historyDisabled = snap.phase !== "live" || snap.loading !== null || history.loading;
+	const showLive = history.atLatest && snap.phase === "live" && snap.loading === null;
 
 	return (
 		<div className="sh-app">
@@ -171,13 +175,54 @@ function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
 			/>
 			<main className="sh-main">
 				<section className="sh-panel" data-rail={railOpen ? "true" : "false"}>
+					<nav className="sh-history" aria-label="Session history" aria-busy={history.loading}>
+						<div className="sh-history-controls">
+							<button
+								type="button"
+								disabled={historyDisabled || history.beforeId === null}
+								onClick={() => {
+									if (history.beforeId !== null) client.fetchHistory({ kind: "before", id: history.beforeId });
+								}}
+							>
+								Older
+							</button>
+							<button
+								type="button"
+								disabled={historyDisabled || history.afterId === null}
+								onClick={() => {
+									if (history.afterId !== null) client.fetchHistory({ kind: "after", id: history.afterId });
+								}}
+							>
+								Newer
+							</button>
+							<button
+								type="button"
+								disabled={historyDisabled || (history.atLatest && history.error === null)}
+								onClick={() => client.fetchHistory({ kind: "latest" })}
+							>
+								Latest
+							</button>
+						</div>
+						<span className="sh-history-status" role="status">
+							{history.loading ? "Loading history…" : history.atLatest ? "Latest" : "Reading history"}
+							{" · "}
+							{snap.entries.length.toLocaleString("en-US")} of {history.total.toLocaleString("en-US")} entries
+						</span>
+						{history.error !== null && (
+							<span className="sh-history-error" role="alert">
+								{history.error}
+							</span>
+						)}
+					</nav>
 					<div className="sh-transcript">
 						<Transcript
+							key={history.version}
 							entries={snap.entries}
-							stream={snap.stream}
+							stream={showLive ? snap.stream : null}
 							streamDone={snap.streamDone}
-							activeTools={snap.activeTools}
-							working={snap.working}
+							activeTools={showLive ? snap.activeTools : NO_ACTIVE_TOOLS}
+							working={showLive && snap.working}
+							atLatest={history.atLatest}
 							host={toolHost}
 							phase={snap.phase}
 						/>

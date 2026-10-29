@@ -3,7 +3,7 @@
  * link/envelope half of `@oh-my-soup/pi-coding-agent/src/collab/protocol.ts`;
  * base64url goes through atob/btoa instead of Buffer).
  *
- * Link format: `wss://<host[:port]>/r/<roomId>.<base64url-32-byte-key>`
+ * Link format: `ws(s)://<host[:port]>/<optional-prefix>/r/<roomId>.<base64url-32-byte-key>`
  * Wire envelope: `[4B uint32 BE peerId][sealed payload]` — the guest always
  * sends peerId 0; the relay rewrites it to the sender's id.
  */
@@ -21,10 +21,9 @@ export { COLLAB_PROTO } from "@oh-my-soup/pi-wire";
 export type { ParsedCollabLink };
 export { DEFAULT_RELAY_URL, ENVELOPE_HEADER_LENGTH, ROOM_ID_BYTES };
 
-const ROOM_PATH_RE = /^\/r\/([A-Za-z0-9_-]{10,64})(?:\.([A-Za-z0-9_-]+))?$/;
+const ROOM_PATH_RE = /^(.*)\/r\/([A-Za-z0-9_-]{10,64})(?:\.([A-Za-z0-9_-]+))?$/;
 const BARE_LINK_RE = /^([A-Za-z0-9_-]{10,64})[#.]([A-Za-z0-9_-]+)$/;
 const B64URL_RE = /^[A-Za-z0-9_-]+$/;
-const LOCAL_HOSTNAMES: Record<string, true> = { localhost: true, "127.0.0.1": true, "::1": true, "[::1]": true };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // base64url (no Buffer in the browser)
@@ -83,8 +82,8 @@ export function generateRoomId(): string {
 	return encodeBase64Url(bytes);
 }
 
-/** Normalize a relay base URL (ws/wss/http/https) into a ws/wss origin, or an error. */
-function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: string } {
+/** Normalize a relay base URL into a ws/wss URL while retaining its path prefix. */
+function normalizeRelayBaseUrl(relayUrl: string): { baseUrl: string } | { error: string } {
 	let url: URL;
 	try {
 		url = new URL(relayUrl);
@@ -104,17 +103,14 @@ function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: s
 		default:
 			return { error: `Unsupported relay URL scheme: ${url.protocol}` };
 	}
-	if (scheme === "ws:" && !LOCAL_HOSTNAMES[url.hostname]) {
-		return { error: "relay link must be wss:// (plain ws:// is only allowed for localhost)" };
-	}
 	const port = url.port ? `:${url.port}` : "";
-	return { origin: `${scheme}//${url.hostname}${port}` };
+	return { baseUrl: `${scheme}//${url.hostname}${port}${url.pathname.replace(/\/+$/, "")}` };
 }
 
 /**
  * Render the shareable link. Compact forms: the default relay collapses to
  * `<roomId>.<key>`; custom wss relays drop the scheme (`host[:port]/r/…`);
- * plain-ws localhost relays keep the full `ws://` URL.
+ * plain-ws relays keep the full `ws://` URL so parsing cannot mis-infer wss.
  *
  * The room secret is dot-joined (`<roomId>.<key>`) rather than `#`-joined:
  * RFC 3986 forbids a raw `#` inside a fragment, so strict URL stacks (macOS
@@ -126,7 +122,7 @@ function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: s
  * (`base64url(key ∥ writeToken)`); read-only (view) links carry the bare key.
  */
 export function formatCollabLink(relayUrl: string, roomId: string, key: Uint8Array, writeToken?: Uint8Array): string {
-	const normalized = normalizeRelayOrigin(relayUrl);
+	const normalized = normalizeRelayBaseUrl(relayUrl);
 	if ("error" in normalized) throw new Error(normalized.error);
 	let secret = key;
 	if (writeToken) {
@@ -135,10 +131,10 @@ export function formatCollabLink(relayUrl: string, roomId: string, key: Uint8Arr
 		secret.set(writeToken, key.byteLength);
 	}
 	const keyText = encodeBase64Url(secret);
-	if (normalized.origin === DEFAULT_RELAY_URL) return `${roomId}.${keyText}`;
-	const compact = normalized.origin.startsWith("wss://")
-		? normalized.origin.slice("wss://".length)
-		: normalized.origin;
+	if (normalized.baseUrl === DEFAULT_RELAY_URL) return `${roomId}.${keyText}`;
+	const compact = normalized.baseUrl.startsWith("wss://")
+		? normalized.baseUrl.slice("wss://".length)
+		: normalized.baseUrl;
 	return `${compact}/r/${roomId}.${keyText}`;
 }
 
@@ -149,8 +145,8 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 	// Bare `<roomId>.<key>` (legacy `<roomId>#<key>`) → default relay.
 	const bare = BARE_LINK_RE.exec(text);
 	if (bare) text = `${DEFAULT_RELAY_URL}/r/${bare[1]}.${bare[2]}`;
-	// Scheme-less `host[:port]/r/…` → wss.
-	else if (!text.includes("://")) text = `wss://${text}`;
+	// Infer wss only when the outer URL has no scheme (fragments may contain ws://).
+	else if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(text)) text = `wss://${text}`;
 	let url: URL;
 	try {
 		url = new URL(text);
@@ -162,21 +158,19 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 		const parsed = parseCollabLink(inner);
 		if (!("error" in parsed)) return parsed;
 	}
-	const normalized = normalizeRelayOrigin(url.origin);
-	if ("error" in normalized) return normalized;
 	const match = ROOM_PATH_RE.exec(url.pathname);
+	const normalized = normalizeRelayBaseUrl(`${url.origin}${match?.[1] ?? ""}`);
+	if ("error" in normalized) return normalized;
 	if (!match) {
-		// Non-http(s) deep links may also carry a complete collab link in the
-		// fragment. http(s) links are handled once above so invalid fragments
-		// fall through to direct relay validation instead of double-recursing.
+		// Non-http(s) wrappers may carry a complete collab link in the fragment.
 		const inner = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
 		if (inner && url.protocol !== "http:" && url.protocol !== "https:") return parseCollabLink(inner);
 		return { error: "Collab link must contain a /r/<roomId> path" };
 	}
-	const roomId = match[1] as string;
+	const roomId = match[2]!;
 	// Key rides dot-joined in the path (`/r/<roomId>.<key>`); legacy links
 	// carry it in the fragment (`/r/<roomId>#<key>`).
-	const fragment = match[2] ?? (url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
+	const fragment = match[3] ?? (url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
 	if (!fragment) {
 		return { error: "Collab link is missing the <key> part" };
 	}
@@ -186,5 +180,5 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 	}
 	const key = secret.subarray(0, ROOM_KEY_BYTES);
 	const writeToken = secret.byteLength > ROOM_KEY_BYTES ? secret.subarray(ROOM_KEY_BYTES) : undefined;
-	return { wsUrl: `${normalized.origin}/r/${roomId}`, roomId, key, writeToken };
+	return { wsUrl: `${normalized.baseUrl}/r/${roomId}`, roomId, key, writeToken };
 }

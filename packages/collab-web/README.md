@@ -20,12 +20,24 @@ Host a session from any oms instance (`/collab`, or `/collab ws://localhost:7466
 bun run build   # static site in dist/
 ```
 
-`dist/` is a fully static SPA — host it anywhere. JS/CSS bundles are content-hashed; favicons, `manifest.webmanifest`, `robots.txt`, `sitemap.xml`, and `og-image.png` come from `public/` and are emitted at the site root under stable names (canonical URL: `https://my.omp.sh/`). Two runtime requirements:
+`dist/` contains the static browser app and a self-contained encrypted `share.html` viewer. JS/CSS bundles are content-hashed; public assets are copied alongside them. Runtime requirements:
 
-- **Secure context**: room keys are unwrapped with WebCrypto (`crypto.subtle`), which browsers expose only on `https://` or `localhost`.
-- **Relay reachability**: the client connects straight to the relay over WebSocket (`wss://` for anything that isn't localhost). The default relay is `wss://my.omp.sh`; bare `<roomId>.<key>` links resolve against it (legacy `<roomId>#<key>` and `%23`-mangled links still parse).
+- **Authenticated encryption**: WebCrypto is preferred when available. On trusted VPN HTTP origins without `crypto.subtle`, a bundled AES-256-GCM implementation uses the same wire format and authentication tag. Secure `crypto.getRandomValues` is still required; encryption is never disabled, and authentication failures never trigger a different backend.
+- **Relay reachability**: HTTP browser pages can use an explicit `ws://` VPN relay. HTTPS pages normally block remote `ws://` as mixed content, so pair HTTPS with WSS. The default relay is `wss://my.omp.sh`; bare invitations resolve against it and scheme-less custom relay URLs default to WSS.
 
 The room key never leaves the URL fragment — it is not sent to the relay or any server.
+
+Native and browser clients can use `ws://10.66.66.8` over a trusted VPN; session payloads remain AES-256-GCM encrypted. Serve this app at `http://10.66.66.8` and set `collab.webUrl` to that URL to advertise browser invitations. HTTP relies on the VPN for transport integrity and trusted delivery of application JavaScript; prefer HTTPS/WSS outside that trust boundary. Relay base paths are preserved independently from the configured browser UI path. Custom relays do not imply a browser UI at their root. A separate HTTPS UI does not upgrade an invitation's WS transport to WSS.
+
+## Large sessions
+
+The browser requests a recent history page instead of downloading the complete session. Pages and retained transcript windows are bounded by 100 entries and 128 KiB of serialized UTF-8 data; the existing oversized-entry policy allows one capped entry to exceed that soft byte limit. Snapshot chunks normally fit within 64 KiB.
+
+**Older**, **Newer**, and **Latest** replace the displayed page. Older history stays on the host and remains accessible; browsing does not grow an unbounded transcript or DOM. Live arrivals are retained in a separate bounded tail while reading history. Tool results whose calls are outside the current page render independently.
+
+Assistant updates are coalesced for 50 ms before serialization. Text/thinking appends travel as ordered content patches rather than repeated complete partial messages; full baselines support mid-turn joins and corrections. Missing or out-of-order patches produce a visible rejoin error rather than silently losing text.
+
+This requires collab protocol v4 on both ends. Restart an already-running host with `/restart`, run `/collab` again, and reopen its new invitation after updating. Native TUI guests still receive the complete replica, not browser history pages.
 
 ## Architecture
 

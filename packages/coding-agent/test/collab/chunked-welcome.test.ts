@@ -10,15 +10,17 @@
  * forwarding contract exactly; only the TUI context and the network transport
  * are stubbed.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { importRoomKey } from "@oh-my-soup/pi-coding-agent/collab/crypto";
 import { CollabGuestLink } from "@oh-my-soup/pi-coding-agent/collab/guest";
 import { CollabHost } from "@oh-my-soup/pi-coding-agent/collab/host";
 import { COLLAB_PROTO, type CollabFrame, parseCollabLink } from "@oh-my-soup/pi-coding-agent/collab/protocol";
 import { CollabSocket } from "@oh-my-soup/pi-coding-agent/collab/relay-client";
+import { MAX_REPLICATED_PAYLOAD_BYTES } from "@oh-my-soup/pi-coding-agent/collab/replication-shrink";
 import { Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
 import type { InteractiveModeContext } from "@oh-my-soup/pi-coding-agent/modes/types";
 import type { SessionEntry } from "@oh-my-soup/pi-coding-agent/session/session-entries";
+import { COLLAB_HISTORY_BYTES, COLLAB_HISTORY_ENTRIES, type HistoryCursor } from "@oh-my-soup/pi-wire";
 import { installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
 
 // In-memory transport: shared FakeWebSocket + InMemoryRelay harness (see
@@ -31,16 +33,11 @@ interface SizedSnapshot {
 	entries: SessionEntry[];
 }
 
-/**
- * Build a synthetic transcript whose total serialized size comfortably
- * exceeds the host's `SNAPSHOT_CHUNK_BYTES` (512 KB), forcing several
- * chunks. Each entry is ~16 KB of repeated text, so 96 entries → ~1.5 MB,
- * cleanly above three chunks without making the test slow.
- */
+/** Native full replication must span many 64 KiB chunks and exceed browser page limits. */
 function makeLargeSnapshot(): SizedSnapshot {
 	const body = "x".repeat(16 * 1024);
 	const entries: SessionEntry[] = [];
-	for (let i = 0; i < 96; i++) {
+	for (let i = 0; i < 196; i++) {
 		entries.push({
 			type: "message",
 			id: `e${i}`,
@@ -184,25 +181,22 @@ function makeCancelledSwitchGuestContext(
 	} as unknown as InteractiveModeContext;
 }
 
-// ── Shared host/relay ───────────────────────────────────────────────────────
+// ── Isolated host/relay per scenario ─────────────────────────────────────────
 
 const snapshot = makeLargeSnapshot();
 let host: CollabHost;
 
-beforeAll(async () => {
+beforeEach(async () => {
 	installInMemoryRelay();
 	host = new CollabHost(makeHostContext(snapshot));
 	await host.start("ws://localhost:8788");
 });
 
-afterAll(async () => {
-	uninstallInMemoryRelay();
-	await host.stop("test done");
-});
-
 const guestCleanups: (() => void)[] = [];
-afterEach(() => {
+afterEach(async () => {
 	for (const cleanup of guestCleanups.splice(0).reverse()) cleanup();
+	await host.stop("test done");
+	uninstallInMemoryRelay();
 });
 
 describe("collab chunked welcome (#3144)", () => {
@@ -249,6 +243,8 @@ describe("collab chunked welcome (#3144)", () => {
 		if (welcome?.t !== "welcome") throw new Error("expected welcome frame");
 
 		expect(welcome.entryCount).toBe(snapshot.entries.length);
+		expect(welcome.entryCount).toBeGreaterThan(COLLAB_HISTORY_ENTRIES);
+		expect(welcome.history).toBeUndefined();
 		expect(welcome.header.id).toBe(snapshot.header.id);
 		// Critical fix: the welcome itself MUST NOT carry the transcript inline —
 		// inline bytes were what spent the guest's 30s timeout in #3144.
@@ -268,9 +264,13 @@ describe("collab chunked welcome (#3144)", () => {
 			chunks.push({ entries: f.entries, final: f.final });
 			if (f.final) break;
 		}
-		// Three+ chunks proves we honor the 512 KB cap with the 1.5 MB transcript;
-		// only the last carries `final: true`.
-		expect(chunks.length).toBeGreaterThan(1);
+		// Every ordinary frame fits the 64 KiB soft cap, not just its entry payloads.
+		expect(chunks.length).toBeGreaterThan(20);
+		for (const chunk of chunks) {
+			expect(Buffer.byteLength(JSON.stringify({ t: "snapshot-chunk", ...chunk }), "utf8")).toBeLessThanOrEqual(
+				64 * 1024,
+			);
+		}
 		expect(chunks.at(-1)?.final).toBe(true);
 		expect(chunks.slice(0, -1).every(c => !c.final)).toBe(true);
 
@@ -278,6 +278,237 @@ describe("collab chunked welcome (#3144)", () => {
 		for (const chunk of chunks) flattened.push(...chunk.entries);
 		expect(flattened.length).toBe(snapshot.entries.length);
 		expect(flattened.map(e => e.id)).toEqual(snapshot.entries.map(e => e.id));
+	});
+
+	it("bounds paged joins by UTF-8 bytes and lets read-only guests reach every entry in both directions", async () => {
+		const parsed = parseCollabLink(host.viewLink);
+		if ("error" in parsed) throw new Error(parsed.error);
+		const socket = new CollabSocket({ wsUrl: parsed.wsUrl, role: "guest", key: await importRoomKey(parsed.key) });
+		guestCleanups.push(() => socket.close());
+		const frames: CollabFrame[] = [];
+		const joined = Promise.withResolvers<void>();
+		const replies = new Map<number, (frame: Extract<CollabFrame, { t: "history" }>) => void>();
+		let reqId = 0;
+		socket.onFrame = frame => {
+			frames.push(frame);
+			if (frame.t === "snapshot-chunk" && frame.final) joined.resolve();
+			if (frame.t === "history") replies.get(frame.reqId)?.(frame);
+		};
+		socket.onOpen = () => socket.send({ t: "hello", proto: COLLAB_PROTO, name: "browser", history: "paged" });
+		socket.connect();
+		await joined.promise;
+		const fetch = (cursor: HistoryCursor) => {
+			const reply = Promise.withResolvers<Extract<CollabFrame, { t: "history" }>>();
+			replies.set(++reqId, reply.resolve);
+			socket.send({ t: "fetch-history", reqId, cursor });
+			return reply.promise;
+		};
+		const welcome = frames.find(frame => frame.t === "welcome");
+		if (welcome?.t !== "welcome" || !welcome.history) throw new Error("expected paged welcome");
+		expect(welcome.readOnly).toBe(true);
+		expect(welcome.history.total).toBe(snapshot.entries.length);
+		expect(welcome.history.afterId).toBeNull();
+		const initial = frames.flatMap(frame => (frame.t === "snapshot-chunk" ? frame.entries : []));
+		expect(initial.length).toBe(welcome.entryCount);
+		expect(initial.length).toBeLessThan(COLLAB_HISTORY_ENTRIES);
+		expect(Buffer.byteLength(JSON.stringify(initial), "utf8")).toBeLessThanOrEqual(COLLAB_HISTORY_BYTES);
+		expect(initial.map(entry => entry.id)).toEqual(snapshot.entries.slice(-initial.length).map(entry => entry.id));
+
+		const all = initial.slice();
+		let before = welcome.history.beforeId;
+		while (before !== null) {
+			const reply = await fetch({ kind: "before", id: before });
+			expect(reply.error).toBeUndefined();
+			expect(reply.entries.length).toBeGreaterThan(0);
+			expect(reply.entries.length).toBeLessThanOrEqual(COLLAB_HISTORY_ENTRIES);
+			expect(Buffer.byteLength(JSON.stringify(reply.entries), "utf8")).toBeLessThanOrEqual(COLLAB_HISTORY_BYTES);
+			expect(reply.page.afterId).toBe(reply.entries.at(-1)!.id);
+			expect(reply.entries.some(entry => entry.id === before)).toBe(false);
+			all.unshift(...reply.entries);
+			before = reply.page.beforeId;
+		}
+		expect(all.map(entry => entry.id)).toEqual(snapshot.entries.map(entry => entry.id));
+		const forward = [all[0]!.id];
+		let after: string | null = forward[0]!;
+		while (after !== null) {
+			const reply = await fetch({ kind: "after", id: after });
+			expect(reply.error).toBeUndefined();
+			expect(reply.page.beforeId).toBe(reply.entries[0]!.id);
+			forward.push(...reply.entries.map(entry => entry.id));
+			after = reply.page.afterId;
+		}
+		expect(forward).toEqual(snapshot.entries.map(entry => entry.id));
+		const latest = await fetch({ kind: "latest" });
+		expect(latest.entries.map(entry => entry.id)).toEqual(initial.map(entry => entry.id));
+		expect(latest.page).toEqual(welcome.history);
+	});
+
+	it("serializes only the latest 100 candidates, rejects stale cursors, and targets history replies", async () => {
+		const serialized: string[] = [];
+		const entries: SessionEntry[] = Array.from({ length: 9_000 }, (_, index) => {
+			const entry: SessionEntry = {
+				type: "message",
+				id: `bounded-${index}`,
+				parentId: null,
+				timestamp: "2026-06-20T00:00:00Z",
+				message: { role: "user", content: `text ${index}`, timestamp: 0 },
+			};
+			return Object.assign({}, entry, {
+				toJSON: () => {
+					serialized.push(entry.id);
+					return entry;
+				},
+			});
+		});
+		// A local-only entry cannot serve as a wire cursor and must not inflate total.
+		entries.push({
+			type: "custom",
+			id: "local-only",
+			parentId: null,
+			timestamp: "2026-06-20T00:00:00Z",
+			customType: "local",
+			data: {},
+		});
+		const localSnapshot: SizedSnapshot = { header: { ...snapshot.header, id: "bounded" }, entries };
+		const ctx = makeHostContext(localSnapshot);
+		const localHost = new CollabHost(ctx);
+		let transport: CollabSocket | undefined;
+		const connect = CollabSocket.prototype.connect;
+		const capture = spyOn(CollabSocket.prototype, "connect").mockImplementation(function (this: CollabSocket) {
+			transport = this;
+			connect.call(this);
+		});
+		try {
+			await localHost.start("ws://localhost:8788");
+		} finally {
+			capture.mockRestore();
+		}
+		if (!transport) throw new Error("host transport missing");
+		const sent: { frame: CollabFrame; peer: number }[] = [];
+		const send = spyOn(transport, "send").mockImplementation((frame, peer = 0) => {
+			sent.push({ frame: typeof frame === "string" ? (JSON.parse(frame) as CollabFrame) : frame, peer });
+		});
+		const batch = spyOn(transport, "sendBatch").mockImplementation((frames, peer) => {
+			for (const frame of frames) transport!.send(frame, peer);
+		});
+		try {
+			transport.onFrame!({ t: "hello", proto: COLLAB_PROTO, name: "paged", history: "paged" }, 7);
+			const welcome = sent.find(({ frame }) => frame.t === "welcome")?.frame;
+			if (welcome?.t !== "welcome") throw new Error("missing welcome");
+			expect(serialized).toHaveLength(COLLAB_HISTORY_ENTRIES);
+			expect(serialized.every(id => Number(id.slice("bounded-".length)) >= 8_900)).toBe(true);
+			expect(welcome.entryCount).toBe(COLLAB_HISTORY_ENTRIES);
+			expect(welcome.history).toEqual({ beforeId: "bounded-8900", afterId: null, total: 9_000 });
+			const fetch = (cursor: HistoryCursor, peer = 7) => {
+				transport!.onFrame!({ t: "fetch-history", reqId: 42, cursor }, peer);
+				const reply = sent.at(-1);
+				if (reply?.frame.t !== "history") throw new Error("missing targeted history reply");
+				expect(reply.peer).toBe(peer);
+				expect(reply.frame.reqId).toBe(42);
+				return reply.frame;
+			};
+			expect(fetch({ kind: "before", id: "bounded-0" }).page).toEqual({
+				beforeId: null,
+				afterId: null,
+				total: 9_000,
+			});
+			expect(fetch({ kind: "after", id: "bounded-8999" }).entries).toEqual([]);
+			expect(fetch({ kind: "before", id: "local-only" }).error).toContain("cursor");
+			expect(fetch({ kind: "before", id: "removed" }).error).toContain("cursor");
+			expect(fetch({ kind: "latest" }, 8).error).toContain("Join");
+			Object.defineProperty(ctx.session, "isSessionTransitioning", { configurable: true, value: true });
+			expect(fetch({ kind: "latest" }).error).toContain("transition");
+			localSnapshot.header.id = "provisional-other-session";
+			const snapshotRead = spyOn(ctx.sessionManager, "snapshotForReplication");
+			try {
+				expect(fetch({ kind: "latest" }).error).toContain("transition");
+				expect(snapshotRead).not.toHaveBeenCalled();
+			} finally {
+				snapshotRead.mockRestore();
+				localSnapshot.header.id = "bounded";
+			}
+			Object.defineProperty(ctx.session, "isSessionTransitioning", { configurable: true, value: false });
+			localSnapshot.entries = [];
+			const empty = fetch({ kind: "latest" });
+			expect(empty.error).toBeUndefined();
+			expect(empty.entries).toEqual([]);
+			expect(empty.page).toEqual({ beforeId: null, afterId: null, total: 0 });
+
+			const first = {
+				type: "message",
+				id: "boundary-first",
+				parentId: null,
+				timestamp: "2026-06-20T00:00:00Z",
+				message: { role: "user", content: "", timestamp: 0 },
+			} satisfies SessionEntry;
+			const second = { ...first, id: "boundary-second", message: { ...first.message } };
+			const overhead = Buffer.byteLength(JSON.stringify([first, second]), "utf8");
+			const contentBytes = COLLAB_HISTORY_BYTES - overhead;
+			const utf8 = (bytes: number) => "界".repeat(Math.floor(bytes / 3)) + "x".repeat(bytes % 3);
+			first.message.content = utf8(Math.floor(contentBytes / 2));
+			second.message.content = utf8(contentBytes - Math.floor(contentBytes / 2));
+			localSnapshot.entries = [first, second];
+			const exact = fetch({ kind: "latest" });
+			expect(exact.entries).toHaveLength(2);
+			expect(Buffer.byteLength(JSON.stringify(exact.entries), "utf8")).toBe(COLLAB_HISTORY_BYTES);
+			second.message.content += "x";
+			const over = fetch({ kind: "latest" });
+			expect(over.entries.map(entry => entry.id)).toEqual([second.id]);
+			expect(over.page).toEqual({ beforeId: second.id, afterId: null, total: 2 });
+			expect(fetch({ kind: "before", id: second.id }).entries.map(entry => entry.id)).toEqual([first.id]);
+
+			// Native chunk accounting must include its frame wrapper and array commas.
+			first.message.content = utf8(32 * 1024 - overhead);
+			second.message.content = utf8(32 * 1024);
+			sent.length = 0;
+			transport.onFrame!({ t: "hello", proto: COLLAB_PROTO, name: "native" }, 9);
+			const chunks = sent.map(({ frame }) => frame).filter(frame => frame.t === "snapshot-chunk");
+			expect(chunks).toHaveLength(2);
+			expect(chunks.flatMap(chunk => chunk.entries.map(entry => entry.id))).toEqual([first.id, second.id]);
+			for (const chunk of chunks) {
+				expect(Buffer.byteLength(JSON.stringify(chunk), "utf8")).toBeLessThanOrEqual(64 * 1024);
+			}
+		} finally {
+			send.mockRestore();
+			batch.mockRestore();
+			await localHost.stop("test done");
+		}
+	});
+
+	it("delivers a capped oversized page entry alone without mutating canonical history", async () => {
+		const entry: SessionEntry = {
+			type: "message",
+			id: "huge",
+			parentId: null,
+			timestamp: "2026-06-20T00:00:00Z",
+			message: { role: "user", content: "界".repeat(MAX_REPLICATED_PAYLOAD_BYTES), timestamp: 0 },
+		};
+		const localHost = new CollabHost(
+			makeHostContext({ header: { ...snapshot.header, id: "huge" }, entries: [entry] }),
+		);
+		await localHost.start("ws://localhost:8788");
+		const parsed = parseCollabLink(localHost.viewLink);
+		if ("error" in parsed) throw new Error(parsed.error);
+		const socket = new CollabSocket({ wsUrl: parsed.wsUrl, role: "guest", key: await importRoomKey(parsed.key) });
+		try {
+			const joined = Promise.withResolvers<Extract<CollabFrame, { t: "snapshot-chunk" }>>();
+			socket.onFrame = frame => {
+				if (frame.t === "snapshot-chunk" && frame.final) joined.resolve(frame);
+			};
+			socket.onOpen = () => socket.send({ t: "hello", proto: COLLAB_PROTO, name: "bounded", history: "paged" });
+			socket.connect();
+			const chunk = await joined.promise;
+			expect(chunk.entries).toHaveLength(1);
+			expect(chunk.entries[0]!.id).toBe(entry.id);
+			const bytes = Buffer.byteLength(JSON.stringify(chunk.entries[0]), "utf8");
+			expect(bytes).toBeGreaterThan(COLLAB_HISTORY_BYTES);
+			expect(bytes).toBeLessThanOrEqual(MAX_REPLICATED_PAYLOAD_BYTES);
+			if (entry.message.role !== "user") throw new Error("Expected canonical user message");
+			expect(entry.message.content).toHaveLength(MAX_REPLICATED_PAYLOAD_BYTES);
+		} finally {
+			socket.close();
+			await localHost.stop("test done");
+		}
 	});
 
 	it("rejects the pending join when snapshot resume fails", async () => {

@@ -1,3 +1,5 @@
+import { gcm } from '@noble/ciphers/aes.js';
+
     (function() {
       'use strict';
 
@@ -73,14 +75,20 @@
         var sealed = await (GIST_ID_RE.test(id) ? fetchGistBlob(id) : fetchServerBlob(id));
         if (sealed.length <= 12) throw new Error('Sealed session blob is truncated.');
 
-        var key = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['decrypt']);
+        var subtle = globalThis.crypto && globalThis.crypto.subtle;
         var plain;
         try {
-          plain = await crypto.subtle.decrypt(
-            { name: 'AES-GCM', iv: sealed.subarray(0, 12) },
-            key,
-            sealed.subarray(12)
-          );
+          if (subtle) {
+            var key = await subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['decrypt']);
+            plain = await subtle.decrypt(
+              { name: 'AES-GCM', iv: sealed.subarray(0, 12) },
+              key,
+              sealed.subarray(12)
+            );
+          } else {
+            // HTTP VPN origins lack WebCrypto; keep the same authenticated wire format.
+            plain = gcm(keyBytes, sealed.subarray(0, 12)).decrypt(sealed.subarray(12));
+          }
         } catch (_err) {
           throw new Error('Decryption failed: wrong or corrupted #key.');
         }

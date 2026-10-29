@@ -9,7 +9,19 @@
  * of the fixture JSONL — exactly the frames a real `oms /collab` host emits.
  */
 
-import type { AgentSnapshot, HostFrame, SessionEntry, SessionState, WireFrame } from "@oh-my-soup/pi-wire";
+import type {
+	AgentEvent,
+	AgentSnapshot,
+	AssistantMessage,
+	HistoryCursor,
+	HistoryPage,
+	HostFrame,
+	SessionEntry,
+	SessionState,
+	WireFrame,
+} from "@oh-my-soup/pi-wire";
+import { COLLAB_HISTORY_BYTES, COLLAB_HISTORY_ENTRIES } from "@oh-my-soup/pi-wire";
+import { diffCollabStream } from "@oh-my-soup/pi-wire/collab-stream";
 import { generateRoomKey, importRoomKey, open, seal } from "../src/lib/codec";
 import { COLLAB_PROTO, formatCollabLink, generateRoomId, packEnvelope, unpackEnvelope } from "../src/lib/link";
 import {
@@ -70,6 +82,9 @@ let replayQueue: ScriptedStep[] = [];
 let replayTimer: Timer | null = null;
 let tick = 0;
 let shuttingDown = false;
+let streamMessage: AssistantMessage | null = null;
+let streamId = 0;
+let streamRevision = 0;
 
 // ── sealed transport (order-preserving, mirrors relay-client) ────────────────
 
@@ -129,6 +144,35 @@ function notice(level: "info" | "warning" | "error", message: string): void {
 	sendFrame({ t: "event", event: { type: "notice", level, message, source: "collab" } });
 }
 
+function sendEvent(event: AgentEvent): void {
+	if (event.type === "message_update" && event.message.role === "assistant") {
+		if (streamMessage === null) {
+			streamId++;
+			streamRevision = 0;
+			sendFrame({ t: "stream", id: streamId, revision: streamRevision, message: event.message });
+		} else {
+			sendFrame({
+				t: "stream-delta",
+				id: streamId,
+				previousRevision: streamRevision,
+				revision: ++streamRevision,
+				patch: diffCollabStream(streamMessage, event.message),
+			});
+		}
+		streamMessage = event.message;
+		return;
+	}
+	sendFrame({ t: "event", event });
+	if (event.type === "message_start" && event.message.role === "assistant") {
+		streamId++;
+		streamRevision = 0;
+		streamMessage = event.message;
+		sendFrame({ t: "stream", id: streamId, revision: streamRevision, message: streamMessage });
+	} else if (event.type === "message_end" || event.type === "agent_end") {
+		streamMessage = null;
+	}
+}
+
 // ── scripted turn replay ─────────────────────────────────────────────────────
 
 function startReplay(): void {
@@ -156,7 +200,7 @@ function scheduleStep(): void {
 function applyStep(step: ScriptedStep): void {
 	switch (step.kind) {
 		case "event":
-			sendFrame({ t: "event", event: step.event });
+			sendEvent(step.event);
 			break;
 		case "entry":
 			appendEntry(step.entry);
@@ -182,7 +226,35 @@ function peerName(fromPeer: number): string {
 	return peers.get(fromPeer) ?? `guest-${fromPeer}`;
 }
 
-function handleHello(name: string, proto: number, fromPeer: number): void {
+function historyPage(cursor: HistoryCursor): { entries: SessionEntry[]; page: HistoryPage } | null {
+	const anchor = cursor.kind === "latest" ? entries.length : entries.findIndex(entry => entry.id === cursor.id);
+	if (anchor < 0) return null;
+	const forward = cursor.kind === "after";
+	let index = forward ? anchor + 1 : anchor - 1;
+	const selected: SessionEntry[] = [];
+	let bytes = 0;
+	while (index >= 0 && index < entries.length && selected.length < COLLAB_HISTORY_ENTRIES) {
+		const entry = entries[index]!;
+		const size = Buffer.byteLength(JSON.stringify(entry));
+		if (selected.length > 0 && bytes + size > COLLAB_HISTORY_BYTES) break;
+		selected.push(entry);
+		bytes += size;
+		index += forward ? 1 : -1;
+	}
+	if (!forward) selected.reverse();
+	const first = selected[0];
+	const last = selected[selected.length - 1];
+	return {
+		entries: selected,
+		page: {
+			beforeId: first !== undefined && entries[0]?.id !== first.id ? first.id : null,
+			afterId: last !== undefined && entries[entries.length - 1]?.id !== last.id ? last.id : null,
+			total: entries.length,
+		},
+	};
+}
+
+function handleHello(name: string, proto: number, fromPeer: number, history?: "paged"): void {
 	if (proto !== COLLAB_PROTO) {
 		sendFrame(
 			{ t: "error", message: `protocol mismatch: host speaks v${COLLAB_PROTO}, guest sent v${proto}` },
@@ -192,6 +264,7 @@ function handleHello(name: string, proto: number, fromPeer: number): void {
 	}
 	const cleanName = name.trim().slice(0, 64) || `guest-${fromPeer}`;
 	peers.set(fromPeer, cleanName);
+	const selected = history === "paged" ? historyPage({ kind: "latest" }) : null;
 	sendFrame(
 		{
 			t: "welcome",
@@ -199,11 +272,15 @@ function handleHello(name: string, proto: number, fromPeer: number): void {
 			header: fixtureHeader,
 			state: buildState(),
 			agents: agents.map(agent => ({ ...agent })),
-			entryCount: entries.length,
+			entryCount: selected?.entries.length ?? entries.length,
+			history: selected?.page,
 		},
 		fromPeer,
 	);
-	sendFrame({ t: "snapshot-chunk", entries: [...entries], final: true }, fromPeer);
+	sendFrame({ t: "snapshot-chunk", entries: selected?.entries ?? [...entries], final: true }, fromPeer);
+	if (streamMessage !== null) {
+		sendFrame({ t: "stream", id: streamId, revision: streamRevision, message: streamMessage }, fromPeer);
+	}
 	console.log(`mock-host: ${cleanName} joined (peer ${fromPeer})`);
 	broadcastState();
 }
@@ -233,7 +310,7 @@ function handleAbort(fromPeer: number): void {
 	cancelReplay();
 	queuedPrompts = 0;
 	notice("info", `${peerName(fromPeer)} interrupted`);
-	if (wasReplaying) sendFrame({ t: "event", event: { type: "agent_end" } });
+	if (wasReplaying) sendEvent({ type: "agent_end" });
 	streaming = false;
 	broadcastState();
 }
@@ -253,7 +330,7 @@ function handleFetchTranscript(reqId: number, fromByte: number, fromPeer: number
 function handleFrame(frame: WireFrame, fromPeer: number): void {
 	switch (frame.t) {
 		case "hello":
-			handleHello(frame.name, frame.proto, fromPeer);
+			handleHello(frame.name, frame.proto, fromPeer, frame.history);
 			break;
 		case "prompt":
 			handlePrompt(frame.text, fromPeer);
@@ -267,6 +344,20 @@ function handleFrame(frame: WireFrame, fromPeer: number): void {
 		case "fetch-transcript":
 			handleFetchTranscript(frame.reqId, frame.fromByte, fromPeer);
 			break;
+		case "fetch-history": {
+			const selected = historyPage(frame.cursor);
+			sendFrame(
+				{
+					t: "history",
+					reqId: frame.reqId,
+					entries: selected?.entries ?? [],
+					page: selected?.page ?? { beforeId: null, afterId: null, total: entries.length },
+					error: selected === null ? "History cursor is no longer available; return to latest" : undefined,
+				},
+				fromPeer,
+			);
+			break;
+		}
 		default:
 			// Host-frame echoes or unknown types: ignore.
 			break;

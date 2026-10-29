@@ -9,7 +9,7 @@
  * - `snapshot`: non-capability metadata (identity, session, cwd, model,
  *   participants, relay/attention/activity state) suitable for listing and
  *   polling;
- * - `link`: one browser URL for one exact host generation and access level,
+ * - `link`: one browser or native invite for one exact host generation and access level,
  *   rejected when the generation moved or the access level is not published.
  *
  * Full-control and view-only URLs, room keys, and write tokens stay in host
@@ -100,7 +100,7 @@ export interface CollabHostSnapshot {
 export interface CollabHostRegistrySource {
 	/** Current metadata; throws when the host can no longer vouch for its session. */
 	snapshot(): CollabHostSnapshot;
-	/** Browser URL for `access`, or `null` when that access is not published. */
+	/** Browser or native invite for `access`, or `null` when that access is not published. */
 	link(access: CollabAccess): string | null;
 }
 
@@ -672,7 +672,7 @@ export async function listCollabHosts(options?: CollabListOptions): Promise<Coll
 }
 
 /**
- * Resolve one browser URL for the host selected by `selector` — an exact
+ * Resolve one browser or native invite for the host selected by `selector` — an exact
  * instance ID, or a PID when no instance matches. The link request carries the
  * generation observed while listing, so a host that rotated rooms in between
  * answers `stale_generation` instead of leaking its successor's capability.

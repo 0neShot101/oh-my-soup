@@ -37,14 +37,65 @@ describe("collab link parsing", () => {
 		expect(parsed.wsUrl).toBe(`wss://relay.example.com:8443/r/${ROOM}`);
 	});
 
-	it("allows plain ws:// for localhost", () => {
-		const parsed = parseCollabLink(`ws://localhost:7466/r/${ROOM}#${KEY_TEXT}`);
-		if ("error" in parsed) throw new Error(parsed.error);
-		expect(parsed.wsUrl).toBe(`ws://localhost:7466/r/${ROOM}`);
+	it("preserves VPN ws transport and view/control access in direct and browser links", () => {
+		const token = Uint8Array.from({ length: 16 }, (_, i) => 0xf0 + i);
+		for (const writeToken of [undefined, token]) {
+			const link = formatCollabLink("ws://10.66.66.8", ROOM, KEY, writeToken);
+			for (const input of [link, `http://10.66.66.8/#${link}`, `10.66.66.8/#${link}`]) {
+				const parsed = parseCollabLink(input);
+				if ("error" in parsed) throw new Error(parsed.error);
+				expect(parsed.wsUrl).toBe(`ws://10.66.66.8/r/${ROOM}`);
+				expect(parsed.roomId).toBe(ROOM);
+				expect(parsed.key).toEqual(KEY);
+				expect(parsed.writeToken).toEqual(writeToken);
+			}
+		}
 	});
 
-	it("rejects plain ws:// for non-localhost hosts", () => {
-		expect("error" in parseCollabLink(`ws://relay.example.com/r/${ROOM}#${KEY_TEXT}`)).toBe(true);
+	it("normalizes explicit http VPN relay URLs to ws", () => {
+		for (const link of [
+			formatCollabLink("http://10.66.66.8:8080", ROOM, KEY),
+			`http://10.66.66.8:8080/r/${ROOM}#${KEY_TEXT}`,
+		]) {
+			const parsed = parseCollabLink(link);
+			if ("error" in parsed) throw new Error(parsed.error);
+			expect(parsed.wsUrl).toBe(`ws://10.66.66.8:8080/r/${ROOM}`);
+			expect(parsed.key).toEqual(KEY);
+			expect(parsed.writeToken).toBeUndefined();
+		}
+	});
+
+	it("preserves a nested VPN relay prefix and full access through a separate UI wrapper", () => {
+		const token = Uint8Array.from({ length: 16 }, (_, i) => 0xe0 + i);
+		const link = formatCollabLink("ws://10.66.66.8/team/r/relay///", ROOM, KEY, token);
+		const parsed = parseCollabLink(`https://web.example/tools/collab/#${link}`);
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(parsed.wsUrl).toBe(`ws://10.66.66.8/team/r/relay/r/${ROOM}`);
+		expect(parsed.roomId).toBe(ROOM);
+		expect(parsed.key).toEqual(KEY);
+		expect(parsed.writeToken).toEqual(token);
+	});
+
+	it("keeps a prefix on the default host instead of collapsing to a bare default-relay link", () => {
+		const link = formatCollabLink(`${DEFAULT_RELAY_URL}/alternate`, ROOM, KEY);
+		const parsed = parseCollabLink(link);
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(parsed.wsUrl).toBe(`${DEFAULT_RELAY_URL}/alternate/r/${ROOM}`);
+		expect(parsed.key).toEqual(KEY);
+		expect(parsed.writeToken).toBeUndefined();
+	});
+
+	it("retains HTTPS relay prefixes when parsing legacy key-only fragment links", () => {
+		const parsed = parseCollabLink(`https://relay.example/team/relay/r/${ROOM}#${KEY_TEXT}`);
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(parsed.wsUrl).toBe(`wss://relay.example/team/relay/r/${ROOM}`);
+		expect(parsed.key).toEqual(KEY);
+		expect(parsed.writeToken).toBeUndefined();
+	});
+
+	it("rejects unsupported relay schemes instead of treating them as ws", () => {
+		expect(() => formatCollabLink("ftp://10.66.66.8", ROOM, KEY)).toThrow();
+		expect("error" in parseCollabLink(`ftp://10.66.66.8/r/${ROOM}.${KEY_TEXT}`)).toBe(true);
 	});
 
 	it("rejects keys that are not 32 or 48 base64url bytes", () => {
@@ -95,9 +146,7 @@ describe("collab link parsing", () => {
 	});
 
 	it("falls through invalid http wrapper fragments without reparsing them", () => {
-		expect(parseCollabLink("https://web.example/#not-a-collab-link")).toEqual({
-			error: "Collab link must contain a /r/<roomId> path",
-		});
+		expect(parseCollabLink("https://web.example/#not-a-collab-link")).toHaveProperty("error");
 	});
 
 	it("prefers browser wrapper fragments over relay-like web paths", () => {

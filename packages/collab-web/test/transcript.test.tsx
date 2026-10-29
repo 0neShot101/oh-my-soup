@@ -5,6 +5,8 @@ import "./transcript-dom-shim";
 import {
 	followTranscriptTail,
 	Transcript,
+	type TranscriptProps,
+	transcriptWindow,
 	updateTranscriptTailLock,
 } from "../src/components/transcript/Transcript";
 import type { ActiveTool } from "../src/lib/client";
@@ -55,18 +57,16 @@ function activeTool(): ActiveTool {
 	};
 }
 
-function renderTranscript(props: {
-	entries?: readonly SessionEntry[];
-	activeTools?: ReadonlyMap<string, ActiveTool>;
-	working: boolean;
-}): string {
+function renderTranscript(props: Partial<TranscriptProps> & { working: boolean }): string {
 	return renderToStaticMarkup(
 		<Transcript
 			entries={props.entries ?? []}
-			stream={null}
-			streamDone={true}
+			stream={props.stream ?? null}
+			streamDone={props.streamDone ?? true}
 			activeTools={props.activeTools ?? new Map()}
 			working={props.working}
+			atLatest={props.atLatest}
+			compact={props.compact}
 		/>,
 	);
 }
@@ -190,5 +190,124 @@ describe("Transcript windowing", () => {
 		expect(html).toContain("message-150-end");
 		expect(html).not.toContain("message-149-end");
 		expect(html).toContain("show 150 earlier");
+	});
+});
+
+describe("Transcript bounded navigation", () => {
+	const entries: SessionEntry[] = Array.from({ length: 1250 }, (_, i) => ({
+		type: "message",
+		id: `window-${i}`,
+		parentId: i === 0 ? null : `window-${i - 1}`,
+		timestamp: "2026-07-15T00:00:00Z",
+		message: { role: "user", content: `row ${i}`, timestamp: i },
+	}));
+
+	it("keeps earlier/newer traversal bounded and reaches every entry in both transcript variants", () => {
+		for (const compact of [false, true]) {
+			const visited = new Set<string>();
+			let pinned: string | null = null;
+			for (;;) {
+				const window = transcriptWindow(entries, pinned);
+				const visible = entries.slice(window.start, window.end);
+				expect(visible.length).toBeLessThanOrEqual(100);
+				const html = renderTranscript({ entries: visible, working: false, compact });
+				expect(countElements(html, "[data-entry-id]")).toBeLessThanOrEqual(100);
+				for (const entry of visible) visited.add(entry.id);
+				if (window.earlierId === null) break;
+				pinned = window.earlierId;
+			}
+			expect(visited.size).toBe(entries.length);
+			expect(transcriptWindow(entries, pinned).start).toBe(0);
+			while (transcriptWindow(entries, pinned).newerId !== null) {
+				pinned = transcriptWindow(entries, pinned).newerId;
+				const window = transcriptWindow(entries, pinned);
+				expect(window.end - window.start).toBeLessThanOrEqual(100);
+			}
+			expect(transcriptWindow(entries, pinned).end).toBe(entries.length);
+			expect(countElements(renderTranscript({ entries, working: false, compact }), "[data-entry-id]")).toBe(100);
+		}
+	});
+
+	it("keeps an ID anchor as new rows arrive or older retained rows are evicted", () => {
+		const firstPage = entries.slice(0, 200);
+		const pinned = firstPage[75]!.id;
+		expect(transcriptWindow(firstPage, pinned)).toMatchObject({ start: 75, end: 175 });
+		expect(transcriptWindow(entries, pinned)).toMatchObject({ start: 75, end: 175 });
+		expect(transcriptWindow(entries.slice(50), pinned)).toMatchObject({ start: 25, end: 125 });
+		expect(transcriptWindow(entries.slice(100), pinned)).toMatchObject({ start: 0, end: 100 });
+	});
+
+	it("never attaches the current ghost, running tools or thinking indicator to historical pages", () => {
+		const stream: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "current response must stay at latest" }],
+			model: "test/model",
+			usage: assistantUsage(),
+			stopReason: "stop",
+			timestamp: 1,
+		};
+		const html = renderTranscript({
+			entries: entries.slice(0, 10),
+			stream,
+			activeTools: new Map([[TOOL_CALL_ID, activeTool()]]),
+			working: true,
+			atLatest: false,
+		});
+		expect(html).not.toContain("current response must stay at latest");
+		expect(html).not.toContain("thinking…");
+		expect(countElements(html, ".tv-card")).toBe(0);
+	});
+});
+
+describe("Transcript tool results across page boundaries", () => {
+	const result: SessionEntry = {
+		type: "message",
+		id: "tool-result",
+		parentId: "assistant-entry-1",
+		timestamp: "2026-07-09T00:00:01Z",
+		message: {
+			role: "toolResult",
+			toolCallId: TOOL_CALL_ID,
+			toolName: TOOL_NAME,
+			content: [{ type: "text", text: "the result remains accessible" }],
+			isError: false,
+			timestamp: 2,
+		},
+	};
+
+	it("renders an unpaired result as its own usable card rather than dropping it", () => {
+		const html = renderTranscript({ entries: [result], working: false, atLatest: false });
+		expect(countElements(html, ".tv-card")).toBe(1);
+		expect(countElements(html, ".tv-status--ok")).toBe(1);
+		expect(countElements(html, ".tv-head")).toBe(1);
+		expect(html).toContain(TOOL_NAME);
+	});
+
+	it("does not duplicate a result when its call is in the same visible window", () => {
+		const html = renderTranscript({ entries: [committedAssistantToolCall(), result], working: false });
+		expect(countElements(html, ".tv-card")).toBe(1);
+		expect(countElements(html, ".tv-status--ok")).toBe(1);
+		expect(html).not.toContain("Result not on this page.");
+	});
+
+	it("marks a call whose result is outside the page without presenting it as still running", () => {
+		const html = renderTranscript({ entries: [committedAssistantToolCall()], working: false, atLatest: false });
+		expect(countElements(html, ".tv-card")).toBe(1);
+		expect(countElements(html, '[aria-label="running"]')).toBe(0);
+		expect(html).toContain("Result not on this page.");
+	});
+
+	it("reveals the result when tail windowing evicts its paired call", () => {
+		const fillers: SessionEntry[] = Array.from({ length: 99 }, (_, i) => ({
+			type: "message",
+			id: `filler-${i}`,
+			parentId: null,
+			timestamp: "2026-07-09T00:00:01Z",
+			message: { role: "user", content: "between call and result", timestamp: 2 },
+		}));
+		const html = renderTranscript({ entries: [committedAssistantToolCall(), ...fillers, result], working: false });
+		expect(countElements(html, "[data-entry-id]")).toBe(100);
+		expect(countElements(html, ".tv-card")).toBe(1);
+		expect(countElements(html, ".tv-status--ok")).toBe(1);
 	});
 });

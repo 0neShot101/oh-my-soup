@@ -16,6 +16,7 @@
 			"@babel/types": "^7.29.7",
 			"@huggingface/transformers": "^4.2.0",
 			"@napi-rs/cli": "3.7.2",
+			"@noble/ciphers": "2.4.0",
 			"@oh-my-soup/oms-stats": "18.13.1",
 			"@oh-my-soup/omstype": "18.13.1",
 			"@oh-my-soup/pi-agent-core": "18.13.1",

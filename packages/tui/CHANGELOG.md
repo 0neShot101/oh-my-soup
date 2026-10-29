@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Collaboration browser links now retain their explicit HTTP/HTTPS scheme in terminal and native text, so copying a VPN HTTP invitation does not silently select HTTPS.
+
 ## [18.13.1] - 2026-10-27
 
 ### Added

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped collab to protocol v4: optional paged browser history, exclusive entry-ID cursors, bounded history replies, and ordered assistant-stream baselines/content patches. Older hosts and guests are rejected explicitly; native guests retain full replica snapshots.
+
 ## [18.12.3] - 2026-10-19
 
 ### Added

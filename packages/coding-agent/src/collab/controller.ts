@@ -237,7 +237,7 @@ export class CollabController {
 				"No relay configured. Set collab.relayUrl in /settings or pass one: /collab relay.example.com",
 			);
 		}
-		// Scheme-less relay args default to wss (ws:// must be spelled out for localhost).
+		// Scheme-less relay args default to wss; non-TLS transport requires explicit ws:// or http://.
 		return input.includes("://") ? input : `wss://${input}`;
 	}
 

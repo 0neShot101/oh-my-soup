@@ -1,6 +1,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { CollabController } from "@oh-my-soup/pi-coding-agent/collab/controller";
+import { generateRoomKey, generateWriteToken } from "@oh-my-soup/pi-coding-agent/collab/crypto";
 import { CollabHost } from "@oh-my-soup/pi-coding-agent/collab/host";
+import { formatCollabLink, generateRoomId } from "@oh-my-soup/pi-coding-agent/collab/protocol";
 import { resetSettingsForTest, Settings } from "@oh-my-soup/pi-coding-agent/config/settings";
 import { initTheme } from "@oh-my-soup/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-soup/pi-coding-agent/modes/types";
@@ -26,15 +28,17 @@ afterAll(() => {
 });
 
 function fakeHost(options?: {
-	webLink?: string;
-	webViewLink?: string;
+	link?: string;
+	viewLink?: string;
+	webLink?: string | null;
+	webViewLink?: string | null;
 	access?: "view" | "control";
 }): NonNullable<InteractiveModeContext["collabHost"]> {
 	return {
-		link: "relay.example.com/r/full-control",
-		viewLink: "relay.example.com/r/read-only",
-		webLink: options?.webLink ?? "https://my.omp.sh/#full-control",
-		webViewLink: options?.webViewLink ?? "https://my.omp.sh/#read-only",
+		link: options?.link ?? "relay.example.com/r/full-control",
+		viewLink: options?.viewLink ?? "relay.example.com/r/read-only",
+		webLink: options?.webLink === undefined ? "https://my.omp.sh/#full-control" : options.webLink,
+		webViewLink: options?.webViewLink === undefined ? "https://my.omp.sh/#read-only" : options.webViewLink,
 		participants: [{ name: "host", role: "host" }],
 		access: options?.access ?? "control",
 	} as unknown as NonNullable<InteractiveModeContext["collabHost"]>;
@@ -97,6 +101,45 @@ describe("/collab slash command QR code rendering", () => {
 		expect(text).not.toContain("my.omp.sh/#full-control");
 	});
 
+	it.each(["control", "view"] as const)(
+		"prints a complete native %s join command without browser output when no web UI is known",
+		async access => {
+			const relayUrl = "ws://10.66.66.8/team/relay";
+			const roomId = generateRoomId();
+			const key = generateRoomKey();
+			const host = fakeHost({
+				link: formatCollabLink(relayUrl, roomId, key, generateWriteToken()),
+				viewLink: formatCollabLink(relayUrl, roomId, key),
+				webLink: null,
+				webViewLink: null,
+				access,
+			});
+			const start = mockStartedHostLinks(host);
+			const harness = await createRuntimeHarness();
+			const command = access === "view" ? "/collab view" : "/collab";
+			const invite = access === "view" ? host.viewLink : host.link;
+			const joinCommand = `oms join "${invite}"`;
+
+			await executeBuiltinSlashCommand(`${command} ${relayUrl}`, harness.runtime);
+
+			expect(start).toHaveBeenCalledWith(relayUrl, "");
+			const text = harness.showStatus.mock.calls[0]?.[0] as string;
+			expect(Bun.stripANSI(text).startsWith(joinCommand)).toBe(true);
+			expect(text).not.toMatch(/browser|\x1b\]8;/i);
+			if (access === "view") expect(text).not.toContain(host.link);
+			expect(harness.present).not.toHaveBeenCalled();
+			expect(harness.showError).not.toHaveBeenCalled();
+
+			harness.showStatus.mockClear();
+			await executeBuiltinSlashCommand("/collab status", harness.runtime);
+			const status = harness.showStatus.mock.calls[0]?.[0] as string;
+			expect(status).toContain(joinCommand);
+			expect(status).not.toMatch(/browser|\x1b\]8;/i);
+			if (access === "view") expect(status).not.toContain(host.link);
+			expect(harness.present).not.toHaveBeenCalled();
+		},
+	);
+
 	it("starts hosting and prints a one-shot full-control QR", async () => {
 		mockStartedHostLinks();
 		const harness = await createRuntimeHarness();
@@ -133,17 +176,24 @@ describe("/collab slash command QR code rendering", () => {
 		expect(fallback).not.toContain("https://my.omp.sh/#started-full");
 	});
 
-	it("prints the active full-control browser QR when hosting", async () => {
-		const harness = await createRuntimeHarness({ collabHost: fakeHost() });
+	it("prints the explicit browser UI's link and QR alongside the native command when hosting", async () => {
+		const host = fakeHost({
+			link: "ws://10.66.66.8/team/relay/r/full-control",
+			webLink: "https://web.example/client/#ws://10.66.66.8/team/relay/r/full-control",
+		});
+		const harness = await createRuntimeHarness({ collabHost: host });
 
 		const handled = await executeBuiltinSlashCommand("/collab", harness.runtime);
 
 		expect(handled).toBe(true);
 		const statusText = harness.showStatus.mock.calls[0]?.[0] as string;
-		expect(statusText).toContain("my.omp.sh/#full-control");
+		if (!host.webLink) throw new Error("configured browser invitation missing");
+		expect(statusText).toContain(`oms join "${host.link}"`);
+		expect(statusText).toContain(host.webLink!);
 		const presented = harness.present.mock.calls[0]?.[0] as readonly unknown[];
 
 		const component = presented[1] as CollabQrCodeComponent;
+		expect(component.url).toBe(host.webLink);
 		expect(component.render(120).join("\n")).toMatch(/\x1b\[(?:47|40)m/);
 	});
 
@@ -195,7 +245,7 @@ describe("/collab slash command QR code rendering", () => {
 		expect(clipped).toContain(webViewLink);
 	});
 
-	it("keeps the browser URL on the first status row so transcript clipping cannot hide it", async () => {
+	it("keeps an available browser URL on the first status row so transcript clipping cannot hide it", async () => {
 		const webLink = `https://my.omp.sh/#${"long-collab-token".repeat(8)}`;
 		const harness = await createRuntimeHarness({ collabHost: fakeHost({ webLink }) });
 

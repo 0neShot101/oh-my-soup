@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { QrCode, type QrEcLevel, renderQrHalfBlocks } from "../src/chrome/qrcode";
+import { collabBrowserLink } from "../src/chrome/collab-qrcode";
 
 function matrixFingerprint(qr: QrCode): string {
 	let bits = "";
@@ -110,5 +111,18 @@ describe("renderQrHalfBlocks", () => {
 		const margin = 4;
 		const lines = renderQrHalfBlocks(qr, { margin });
 		expect(lines.length).toBe(Math.ceil((qr.size + margin * 2) / 2));
+	});
+});
+
+describe("copyable collab browser invitations", () => {
+	it("preserves the VPN HTTP origin when rendered terminal text is pasted as a URL", () => {
+		const invitation =
+			"http://10.66.66.8/#ws://10.66.66.8/r/copyable-room.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+		const copiedUrl = new URL(Bun.stripANSI(collabBrowserLink(invitation)));
+		expect(copiedUrl.protocol).toBe("http:");
+		expect(copiedUrl.origin).toBe("http://10.66.66.8");
+		expect(copiedUrl.pathname).toBe("/");
+		expect(copiedUrl.search).toBe("");
+		expect(copiedUrl.hash).toBe(new URL(invitation).hash);
 	});
 });

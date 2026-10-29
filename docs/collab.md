@@ -20,7 +20,7 @@ Collab session started!
 
 The browser line is click-to-join (an OSC 8 hyperlink to the full `https://` deep link): the relay serves the web guest client at `/`, and the room id + key ride in the URL fragment. From another oms (any directory, any machine), either form works:
 
-Running `/collab` or `/collab view` starts or displays the active hosting session, rendering terminal/browser join links and a QR code for the browser URL. `/collab` requests control access: if the active room was started view-only, it replaces that room. `/collab view` reuses either access level and prints only the read-only link.
+Running `/collab` or `/collab view` starts or displays the active hosting session and prints a native `oms join` invitation. A browser invitation and QR code appear only when the browser UI is known: the default hosted relay, or an explicit `collab.webUrl`. Custom relays do not imply a browser page at their root. `/collab` requests control access: if the active room was started view-only, it replaces that room. `/collab view` reuses either access level and prints only the read-only link.
 
 ```
 /join my.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q.gdJU…
@@ -33,7 +33,7 @@ The guest's previous session is restored on `/leave` (or when the host stops).
 | Command           | Effect                                                                              |
 | ----------------- | ----------------------------------------------------------------------------------- |
 | `/collab`         | Start full-control sharing; reuse a control room or replace a view-only room        |
-| `/collab <relay>` | Start sharing through a specific relay (`relay.example.com`, `ws://localhost:7475`) |
+| `/collab <relay>` | Start sharing through a specific relay (`relay.example.com`, `ws://10.66.66.8`) |
 | `/collab view [relay]` | Start read-only sharing, or print the existing room's read-only link/QR        |
 | `/collab status`  | Show link + participants                                                            |
 | `/collab stop`    | Stop sharing                                                                        |
@@ -46,12 +46,13 @@ The guest's previous session is restored on `/leave` (or when the host stops).
 
 ### Choosing the relay server
 
-Use `/settings` → **Interaction** → **Collab** → **Relay Server** to choose the server OMS hosts through. This edits `collab.relayUrl`; the default remains `wss://my.omp.sh`. Remote servers use `wss://`; plain `ws://` is supported only for localhost/loopback development.
+Use `/settings` → **Interaction** → **Collab** → **Relay Server** to choose the server OMS hosts through. This edits `collab.relayUrl`; the default remains `wss://my.omp.sh`. Use `wss://` for TLS, or explicitly opt into `ws://` for a relay reachable through a trusted VPN. Relay URLs beginning with `https://` normalize to `wss://`, and `http://` to `ws://`. An omitted scheme still means `wss://`; a failed TLS connection never falls back to plaintext.
 
 You can also switch from a terminal:
 
 ```sh
 oms config set collab.relayUrl ws://localhost:7466  # repository's local development relay
+oms config set collab.relayUrl ws://10.66.66.8     # native clients on a trusted, private VPN
 oms config set collab.relayUrl wss://my.omp.sh      # hosted default
 ```
 
@@ -59,7 +60,9 @@ Start the repository's local relay with `bun run collab:relay` from the repo roo
 
 Changing the setting while hosting closes the old room and reconnects the current session to the chosen server, preserving its view/control access. Old links stop working and guests must rejoin with the new link from `/collab` or `oms collab link`. Changing the server while not hosting does not start sharing. `collab.autoStart` is unchanged.
 
-Guests connect to the server encoded in their invitation. Changing this setting does not move an existing guest connection or share its remote replica; it applies when hosting the local session again. An explicitly configured `collab.webUrl` remains the browser UI, while an empty one follows the selected relay server.
+Guests connect to the server encoded in their invitation. Changing this setting does not move an existing guest connection or share its remote replica; it applies when hosting the local session again. An explicitly configured `collab.webUrl` remains the browser UI. Leave it empty for native-only custom relays; only the default hosted relay has an automatically known browser UI.
+
+For a single room without changing settings, run `/collab ws://10.66.66.8`. Native guests use its terminal invitation with `oms join "<link>"`; explicit `ws://` and any relay path prefix survive the link. Keep the relay VPN-only with routing and firewall rules. Session payloads remain AES-256-GCM encrypted, but plaintext transport does not provide TLS authentication or protect relay-control traffic. Browser guests have additional [secure-context requirements](#web-client).
 
 ### Sharing every session automatically
 
@@ -92,8 +95,8 @@ Replacement rooms wait for the session operation to finish its hooks, transcript
 ```
 oms collab list                          # one row per host, no links
 oms collab list --json                   # {"version": 1, "hosts": [...]}
-oms collab link <instanceId|pid>         # print that host's full-control browser URL
-oms collab link <instanceId|pid> --view  # print its view-only browser URL
+oms collab link <instanceId|pid>         # full-control browser URL, or native invite when no web UI is configured
+oms collab link <instanceId|pid> --view  # read-only browser URL or native invite
 oms collab link <instanceId> --json      # {"version": 1, "instanceId", "generation", "access", "url"}
 ```
 
@@ -117,14 +120,23 @@ Accepted by `/join <link>` and `oms join "<link>"`:
 host[:port]/r/<roomId>.<key>                                     → custom relay, wss:// inferred
 host[:port]/r/<roomId>#<key>                                     → legacy direct relay form
 https://host[:port]/r/<roomId>.<key>                             → direct relay URL, normalized to wss://
+http://host[:port]/r/<roomId>.<key>                              → direct relay URL, normalized to ws://
 wss://host[:port]/r/<roomId>.<key>                               → direct websocket relay URL
-ws://localhost:7475/r/<roomId>.<key>                             → direct plain ws, localhost only
+ws://10.66.66.8/r/<roomId>.<key>                                 → direct plain ws over a trusted VPN
+ws://10.66.66.8/infra/relay/r/<roomId>.<key>                      → native relay behind a path prefix
 https://host[:port]/#<link>                                      → browser deep link when web UI and relay share a host
 https://web-host[:port][/<path>]/#<relay-link>                   → browser UI wrapper with relay link in the fragment
 https://web.example/collab/#relay.example.com/r/<roomId>.<key>   → web UI and relay on different hosts
+http://10.66.66.8/#ws://10.66.66.8/r/<roomId>.<key>               → VPN HTTP browser UI with an explicitly configured webUrl
 ```
 
 `<link>` / `<relay-link>` are parsed recursively as any accepted link above. For `http(s)` browser wrappers with a parseable fragment, the fragment wins before the HTTP host/path are treated as a relay. This lets `https://web.example/collab/#relay.example.com/r/<roomId>.<key>` open the web UI at `web.example` while joining `wss://relay.example.com/r/<roomId>`. If the fragment is not a complete collab link, parsing falls back to the legacy direct relay form, so `https://relay.example.com/r/<roomId>#<key>` still means relay `relay.example.com`.
+
+Plain `ws://` relay links keep their scheme when formatted, including inside browser-link fragments; only `wss://` native relay invitations can omit it. Browser invitations display their full HTTP(S) scheme so copied text preserves the configured page origin. Parsers still accept older scheme-less browser wrappers, but that does not make a browser's guessed HTTPS origin valid.
+
+For the VPN-IP setup, use the full `http://10.66.66.8/#…` invitation, not `https://10.66.66.8/#…`. The existing HTTPS certificate is for the configured hostname, not the private IP. A certificate-name error happens before the room lookup; changing the outer scheme to the configured HTTP origin preserves the room ID, room key, and write token. Do not disable certificate checks to work around the wrong URL.
+
+Relay URLs are base URLs, not necessarily origins. For example, `collab.relayUrl = wss://relay.example/infra/oms/` connects through `wss://relay.example/infra/oms/r/<roomId>`. Trailing base slashes are normalized without discarding the prefix. A separately hosted browser UI can use `collab.webUrl = https://web.example/tools/collab/`; the browser invitation then loads that UI path while retaining the complete relay path in its fragment. Setting the browser URL does not relocate or discover either server; both configured routes must already exist.
 
 The trailing `.<key>` or `#<key>` part is the room secret, base64url-encoded, in one of two strengths:
 
@@ -166,16 +178,18 @@ When a guest joins during an assistant turn, that in-flight turn appears on the 
 
 ## Web client
 
-`packages/collab-web` is a standalone browser client for the same links — no oms install needed on the guest side. The relay serves it at `/`, which is what makes the `/collab` deep link click-to-join: `https://<relay>/#<link>` loads the client and auto-connects from the fragment. It renders the live transcript (streaming text, thinking, tool cards), a subagent panel with on-demand transcripts, and a composer with the same guest powers (prompt, interrupt, hub actions). Run `bun run dev` in the package for a local instance, `bun run mock-host` for an offline scripted host to develop against, and `bun run build` to emit a static `dist/` deployable anywhere (HTTPS required for WebCrypto). The client never talks to anything but the relay, and the key stays in the URL fragment.
+`packages/collab-web` is a standalone browser client for the same links — no oms install needed on the guest side. Serve it at the configured `collab.webUrl`; the invitation's fragment identifies the separate relay and room. It renders the live transcript, subagents and composer. `bun run build` produces the static browser app and self-contained encrypted share viewer. WebCrypto is preferred where available; trusted VPN HTTP pages use a bundled AES-256-GCM backend with identical authenticated wire bytes. Secure randomness remains required, and authentication failures never cause backend fallback.
 
-Set `collab.webUrl` when the browser UI is hosted separately from the websocket relay. When empty, `/collab` derives `http(s)://host[:port]` from `collab.relayUrl`; explicit web UI URLs must use `https://` except for localhost/loopback `http://` development origins, and cannot contain a query string or fragment. The generated browser URL still carries the relay-specific collab link in the fragment.
+Set `collab.webUrl` to the browser UI's actual HTTP(S) base URL, including its path prefix. For custom relays, an empty value produces native invitations only, rather than guessing a browser page at the relay root; only `wss://my.omp.sh` has an automatically known UI. Explicit web UI URLs cannot contain a query string or fragment. The generated browser URL carries the full relay-specific invitation, including any relay path prefix, in its fragment.
+
+For a trusted VPN deployment, use `collab.relayUrl = ws://10.66.66.8` and `collab.webUrl = http://10.66.66.8`, with nginx serving the browser app and its assets only on the VPN address. Session and share payloads remain encrypted even when `crypto.subtle` is unavailable. HTTP relies on the VPN for transport integrity and trusted delivery of application JavaScript; use HTTPS/WSS outside that trust boundary. HTTPS pages still normally block remote `ws://` as mixed content: setting the UI to HTTPS alone does not upgrade the relay transport in an invitation.
 
 ## Settings
 
 | Setting               | Default               | Meaning                                                                                                        |
 | --------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `collab.relayUrl`     | `wss://my.omp.sh`     | Relay Server: default hosting endpoint; changing it reconnects an active room without changing access          |
-| `collab.webUrl`       | empty                 | Browser UI URL for `/collab` links; empty derives from relay; explicit `http://` is allowed only for localhost |
+| `collab.relayUrl`     | `wss://my.omp.sh`     | Relay base URL, including an optional prefix; TLS by default, explicit `ws://`/`http://` for trusted VPNs |
+| `collab.webUrl`       | empty                 | HTTP(S) UI base URL, including its own prefix; required for browser invitations with custom relays |
 | `collab.displayName`  | OS username           | Name shown to other participants                                                                               |
 | `collab.autoStart`    | `off`                 | `view` / `control`: host every interactive session as it starts and publish it to the local registry            |
 | `share.serverUrl`     | `https://my.omp.sh/s` | Share viewer/upload base used by `/share` (links are `<base>/<id>#<key>`)                                      |
@@ -184,16 +198,16 @@ Set `collab.webUrl` when the browser UI is hosted separately from the websocket 
 
 ## Self-hosting the relay
 
-The production relay is not currently distributed for self-hosting: its Go source and standalone binaries are not published. The endpoint list below documents the hosted service's network contract, not an installable release.
+The [`feat/collab-server` branch](https://github.com/pickpocket/oh-my-soup/tree/feat/collab-server) now contains a standalone Rust relay (`oms-relay`), separate from this client monorepo. Keep it in a separate checkout. Build it locally using its pinned Rust toolchain and locked dependencies, then transfer the release executable to the deployment host; do not compile on a small production VPS.
 
-For local protocol development, this repository includes a source-available, WebSocket-only stand-in at [`packages/collab-web/scripts/local-relay.ts`](../packages/collab-web/scripts/local-relay.ts). Run `bun run relay` from `packages/collab-web` to listen on `ws://localhost:7466`. It implements `/r/<roomId>` but does not serve the browser client, `/share` blobs, or `/healthz`, so it is not a replacement for the production service.
+The standalone relay exposes only:
 
-The relay is a small content-blind Go service. It keeps no state beyond live connections and exposes:
+- `GET /r/<roomId>?role=host|guest` — opaque WebSocket room routing.
+- `GET /healthz` — liveness and active-room count.
 
-- `GET /` — the static collab-web guest client (target of the `/collab` deep link),
-- `GET /r/<roomId>?role=host|guest` — WebSocket upgrade,
-- `POST /s` / `GET /s/<id>` / `GET /s/<id>/raw` — `/share` blob upload, viewer page, and blob fetch,
-- `GET /healthz` — liveness.
+It does not serve `/`, static browser assets, or `/s` encrypted-share storage. Configure the actual browser UI with `collab.webUrl`, and retain a separate content/share service if those features are required. A reverse proxy can route `/r/` and `/healthz` to the new relay while routing browser assets and `/s` to that content service. Bind backends to loopback; for VPN-only deployments, expose the proxy only on the VPN address. Restarting the relay destroys its ephemeral rooms, so clients must reconnect and resynchronize.
+
+For local protocol development, this client repository also retains the WebSocket-only stand-in at [`packages/collab-web/scripts/local-relay.ts`](../packages/collab-web/scripts/local-relay.ts). It is not the production standalone server.
 
 ## Implementation files
 
@@ -209,14 +223,17 @@ The relay is a small content-blind Go service. It keeps no state beyond live con
 
 Hub topology — the host is authoritative, guests never peer:
 
-1. `welcome` + `snapshot-chunk` frames — initial state and transcript. The transcript is byte-bounded into chunks so each arrival resets the guest's progress timeout; oversized replicated entries are shrunk before transmission.
+1. `welcome` + `snapshot-chunk` frames — initial state and transcript, normally in chunks of at most 64 KiB. Browser `hello` requests `history: "paged"`: only the latest page is serialized and transferred, bounded by 100 entries and 128 KiB. The existing oversized-entry shrinking policy permits one capped entry to exceed these soft byte limits. Native guests omit this option and receive the complete replica.
 2. `entry` frames — durable session entries, broadcast pre-blob-externalization so images stay inline (guests cannot resolve host blob refs). Guests append them with ids preserved to a replica session file under `~/.oms/collab/<roomId>.jsonl` and into the agent's message array, which is why `/dump` and context estimates work.
-3. `event` frames — live agent events, fed straight into the guest's normal event controller; rendering is events-only to prevent double-render.
+3. `event` frames — live agent events, fed into the guest's normal event controller. Assistant `message_update` traffic instead uses `stream` baselines and ordered `stream-delta` content patches, coalesced for 50 ms before serialization. Text/thinking appends do not repeat accumulated prefixes or duplicate the provider partial. Canonical start/end events remain ordered; a joining peer receives the current baseline before future deltas.
 4. `state` frames — debounced footer snapshots: streaming flag, the host's full model object and thinking level (applied to the guest's replica agent state, so model display and context-window math are native), host context numbers, and participants.
 5. `bus` frames — mirrored task-subagent lifecycle/progress EventBus traffic, republished on the guest's local bus so the subagent HUD and status-line count work natively.
 6. `agents` frames — agent-registry snapshots feeding a guest-local registry, so the Agent Hub table renders host subagents.
 7. `ui-request` / `ui-request-end` frames — host select/editor prompts presented to full-control guests and dismissed everywhere once settled. Guests answer with `ui-response`.
+8. `history` frames — targeted browser pages answering `fetch-history` with exclusive before/after entry-ID cursors, total count and further-navigation cursors. Older/Newer/Latest replace the browser page; displayed and live-tail windows stay byte/count bounded. Historical pages do not display the unrelated current streaming ghost.
 
-Guest→host: `hello`, `prompt`, `abort`, `agent-cmd` (hub chat/kill/revive), `fetch-transcript` (incremental subagent-transcript reads answered by targeted `transcript` frames), and `ui-response`. The replica loads through the regular `/resume` machinery, so theming, ctrl+o, and transcript behavior are native by construction; the guest process never chdirs to host paths.
+Guest→host: `hello`, `prompt`, `abort`, `agent-cmd` (hub chat/kill/revive), `fetch-history` (main browser transcript pages), `fetch-transcript` (incremental subagent-transcript reads answered by targeted `transcript` frames), and `ui-response`. The native replica loads through the regular `/resume` machinery, so theming, ctrl+o, and transcript behavior are native by construction; the guest process never chdirs to host paths.
 
 Transcript fetches are capped at 4 MiB per reply and end on complete JSONL lines. Guests continue from `newSize`; a single entry exceeding the cap produces a terminal transcript error instead of an endless empty-read retry.
+
+Protocol v4 rejects older hosts/guests rather than applying incompatible updates. After updating, run `/restart` in an existing host, then `/collab` and reopen the newly generated invitation. Stream patch revisions and append offsets are checked; synchronization loss is reported explicitly and requires rejoining.

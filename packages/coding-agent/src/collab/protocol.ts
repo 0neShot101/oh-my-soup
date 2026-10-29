@@ -7,11 +7,12 @@
  * control messages that carry no session data.
  */
 
-import type { ImageContent } from "@oh-my-soup/pi-ai";
+import type { AssistantMessage, ImageContent } from "@oh-my-soup/pi-ai";
 import type {
 	BusChannel,
 	CollabUiRequest,
 	GuestFrame,
+	HistoryPage,
 	ParsedCollabLink,
 	Participant,
 	AgentSnapshot as WireAgentSnapshot,
@@ -23,6 +24,7 @@ import {
 	ROOM_KEY_BYTES,
 	WRITE_TOKEN_BYTES,
 } from "@oh-my-soup/pi-wire";
+import type { CollabStreamPatch } from "@oh-my-soup/pi-wire/collab-stream";
 import type { CollabSessionState } from "@oh-my-soup/pi-tui/status-line/types";
 import type { AgentSessionEvent } from "../session/agent-session";
 import type { SessionEntry, SessionHeader } from "../session/session-entries";
@@ -71,6 +73,7 @@ export type CollabFrame =
 			entryCount: number;
 			/** True when this peer joined through a read-only (view) link. */
 			readOnly?: boolean;
+			history?: HistoryPage;
 	  }
 	/**
 	 * Targeted snapshot fragment delivered after `welcome`. Splits a large
@@ -83,6 +86,9 @@ export type CollabFrame =
 	| { t: "snapshot-chunk"; entries: SessionEntry[]; final: boolean }
 	| { t: "entry"; entry: SessionEntry }
 	| { t: "event"; event: AgentSessionEvent }
+	| { t: "stream"; id: number; revision: number; message: AssistantMessage }
+	| { t: "stream-delta"; id: number; previousRevision: number; revision: number; patch: CollabStreamPatch }
+	| { t: "history"; reqId: number; entries: SessionEntry[]; page: HistoryPage; error?: string }
 	| { t: "state"; state: CollabSessionState }
 	/** Mirrored EventBus traffic (task subagent lifecycle/progress channels only). */
 	| { t: "bus"; channel: BusChannel; data: unknown }
@@ -122,6 +128,26 @@ const SNAPSHOT_CHUNK_FIELDS: FrameFields<"snapshot-chunk"> = {
 	entries: "entries",
 	final: "final",
 };
+const HISTORY_FIELDS: FrameFields<"history"> = {
+	t: "history",
+	reqId: "reqId",
+	entries: "entries",
+	page: "page",
+	error: "error",
+};
+const STREAM_FIELDS: FrameFields<"stream"> = {
+	t: "stream",
+	id: "id",
+	revision: "revision",
+	message: "message",
+};
+const STREAM_DELTA_FIELDS: FrameFields<"stream-delta"> = {
+	t: "stream-delta",
+	id: "id",
+	previousRevision: "previousRevision",
+	revision: "revision",
+	patch: "patch",
+};
 
 const ENTRY_FRAME_HEAD = `{"t":"${ENTRY_FIELDS.t}","${ENTRY_FIELDS.entry}":`;
 const EVENT_FRAME_HEAD = `{"t":"${EVENT_FIELDS.t}","${EVENT_FIELDS.event}":`;
@@ -146,6 +172,36 @@ export function encodeEventFrame(eventJson: string): EncodedFrame {
 /** `{ t: "snapshot-chunk", entries, final }` from each entry's JSON. */
 export function encodeSnapshotChunk(entryJsons: readonly string[], final: boolean): EncodedFrame {
 	return encodedFrame(`${SNAPSHOT_CHUNK_HEAD}${entryJsons.join(",")}${SNAPSHOT_CHUNK_FINAL}${final}}`);
+}
+
+/** Bounded history entries are already serialized by the host's page selector. */
+export function encodeHistoryFrame(
+	reqId: number,
+	entries: readonly string[],
+	page: HistoryPage,
+	error?: string,
+): EncodedFrame {
+	const f = HISTORY_FIELDS;
+	return encodedFrame(
+		`{"t":"${f.t}","${f.reqId}":${reqId},"${f.entries}":[${entries.join(",")}],"${f.page}":${JSON.stringify(page)}${error === undefined ? "" : `,"${f.error}":${JSON.stringify(error)}`}}`,
+	);
+}
+
+export function encodeStreamFrame(id: number, revision: number, messageJson: string): EncodedFrame {
+	const f = STREAM_FIELDS;
+	return encodedFrame(`{"t":"${f.t}","${f.id}":${id},"${f.revision}":${revision},"${f.message}":${messageJson}}`);
+}
+
+export function encodeStreamDeltaFrame(
+	id: number,
+	previousRevision: number,
+	revision: number,
+	patchJson: string,
+): EncodedFrame {
+	const f = STREAM_DELTA_FIELDS;
+	return encodedFrame(
+		`{"t":"${f.t}","${f.id}":${id},"${f.previousRevision}":${previousRevision},"${f.revision}":${revision},"${f.patch}":${patchJson}}`,
+	);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -173,17 +229,12 @@ export function rewriteEnvelopePeer(data: Uint8Array, peerId: number): void {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Link format: wss://<host[:port]>/r/<roomId>.<base64url-32-byte-key>
+// Link format: ws(s)://<host[:port]>/<relay-prefix>/r/<roomId>.<base64url-32-byte-key>
 // ═══════════════════════════════════════════════════════════════════════════
 
-const ROOM_PATH_RE = /^\/r\/([A-Za-z0-9_-]{10,64})(?:\.([A-Za-z0-9_-]+))?$/;
+const ROOM_PATH_RE = /^(.*)\/r\/([A-Za-z0-9_-]{10,64})(?:\.([A-Za-z0-9_-]+))?$/;
 const BARE_LINK_RE = /^([A-Za-z0-9_-]{10,64})[#.]([A-Za-z0-9_-]+)$/;
 const B64URL_RE = /^[A-Za-z0-9_-]+$/;
-const LOCAL_HOSTNAMES: Record<string, true> = { localhost: true, "127.0.0.1": true, "::1": true, "[::1]": true };
-
-function isLocalHostname(hostname: string): boolean {
-	return LOCAL_HOSTNAMES[hostname] === true;
-}
 
 export function generateRoomId(): string {
 	const bytes = new Uint8Array(ROOM_ID_BYTES);
@@ -191,8 +242,8 @@ export function generateRoomId(): string {
 	return Buffer.from(bytes).toString("base64url");
 }
 
-/** Normalize a relay base URL (ws/wss/http/https) into a ws/wss origin, or an error. */
-function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: string } {
+/** Normalize a relay base URL (ws/wss/http/https), preserving its path, or return an error. */
+function normalizeRelayBaseUrl(relayUrl: string): { baseUrl: string } | { error: string } {
 	let url: URL;
 	try {
 		url = new URL(relayUrl);
@@ -212,18 +263,15 @@ function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: s
 		default:
 			return { error: `Unsupported relay URL scheme: ${url.protocol}` };
 	}
-	if (scheme === "ws:" && !isLocalHostname(url.hostname)) {
-		return { error: "relay link must be wss:// (plain ws:// is only allowed for localhost)" };
-	}
 	const port = url.port ? `:${url.port}` : "";
-	return { origin: `${scheme}//${url.hostname}${port}` };
+	const path = url.pathname.replace(/\/+$/, "");
+	return { baseUrl: `${scheme}//${url.hostname}${port}${path}` };
 }
 
 /**
  * Render the shareable link. Compact forms: the default relay collapses to
- * `<roomId>.<key>`, other wss relays drop the scheme (`host[:port]/r/…`);
- * only localhost ws:// links keep their full URL so parsing cannot
- * mis-infer wss.
+ * `<roomId>.<key>`, other wss relays drop the scheme (`host[:port]/prefix/r/…`);
+ * ws:// links keep their full URL so parsing cannot mis-infer wss.
  *
  * The room secret is dot-joined (`<roomId>.<key>`) rather than `#`-joined:
  * RFC 3986 forbids a raw `#` inside a fragment, so strict URL stacks (macOS
@@ -236,25 +284,23 @@ function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: s
  * 32-byte key, which is also the pre-token link format.
  */
 export function formatCollabLink(relayUrl: string, roomId: string, key: Uint8Array, writeToken?: Uint8Array): string {
-	const normalized = normalizeRelayOrigin(relayUrl);
+	const normalized = normalizeRelayBaseUrl(relayUrl);
 	if ("error" in normalized) throw new Error(normalized.error);
 	const secret = writeToken ? Buffer.concat([key, writeToken]) : Buffer.from(key);
 	const keyText = secret.toString("base64url");
-	if (normalized.origin === DEFAULT_RELAY_URL) return `${roomId}.${keyText}`;
-	const compact = normalized.origin.startsWith("wss://")
-		? normalized.origin.slice("wss://".length)
-		: normalized.origin;
+	if (normalized.baseUrl === DEFAULT_RELAY_URL) return `${roomId}.${keyText}`;
+	const compact = normalized.baseUrl.startsWith("wss://")
+		? normalized.baseUrl.slice("wss://".length)
+		: normalized.baseUrl;
 	return `${compact}/r/${roomId}.${keyText}`;
 }
 
-function normalizeCollabWebBaseUrl(relayUrl: string, webUrl?: string): string {
+function normalizeCollabWebBaseUrl(relayUrl: string, webUrl?: string): string | null {
 	const explicitWebUrl = webUrl?.trim();
 	if (!explicitWebUrl) {
-		const normalized = normalizeRelayOrigin(relayUrl);
+		const normalized = normalizeRelayBaseUrl(relayUrl);
 		if ("error" in normalized) throw new Error(normalized.error);
-		return normalized.origin.startsWith("wss://")
-			? `https://${normalized.origin.slice("wss://".length)}`
-			: `http://${normalized.origin.slice("ws://".length)}`;
+		return normalized.baseUrl === DEFAULT_RELAY_URL ? `https://${normalized.baseUrl.slice("wss://".length)}` : null;
 	}
 
 	let url: URL;
@@ -266,9 +312,6 @@ function normalizeCollabWebBaseUrl(relayUrl: string, webUrl?: string): string {
 	if (url.protocol !== "http:" && url.protocol !== "https:") {
 		throw new Error("collab.webUrl must start with http:// or https://");
 	}
-	if (url.protocol === "http:" && !isLocalHostname(url.hostname)) {
-		throw new Error("collab.webUrl must use https:// unless it targets localhost");
-	}
 	if (url.search || url.hash) {
 		throw new Error("collab.webUrl must not include a query string or fragment");
 	}
@@ -279,7 +322,8 @@ function normalizeCollabWebBaseUrl(relayUrl: string, webUrl?: string): string {
 /**
  * Render the browser deep link. The browser UI may be hosted separately from
  * the relay; the fragment always carries the relay-specific collab link, so
- * room secrets stay out of HTTP path and query bytes.
+ * room secrets stay out of HTTP path and query bytes. Custom relays require
+ * an explicit web UI URL; only the default relay has a known browser UI.
  */
 export function formatCollabWebLink(
 	relayUrl: string,
@@ -287,8 +331,10 @@ export function formatCollabWebLink(
 	key: Uint8Array,
 	writeToken?: Uint8Array,
 	webUrl?: string,
-): string {
-	return `${normalizeCollabWebBaseUrl(relayUrl, webUrl)}/#${formatCollabLink(relayUrl, roomId, key, writeToken)}`;
+): string | null {
+	const webBaseUrl = normalizeCollabWebBaseUrl(relayUrl, webUrl);
+	if (webBaseUrl === null) return null;
+	return `${webBaseUrl}/#${formatCollabLink(relayUrl, roomId, key, writeToken)}`;
 }
 
 export function parseCollabLink(link: string): ParsedCollabLink | { error: string } {
@@ -298,8 +344,8 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 	// Bare `<roomId>.<key>` (legacy `<roomId>#<key>`) → default relay.
 	const bare = BARE_LINK_RE.exec(text);
 	if (bare) text = `${DEFAULT_RELAY_URL}/r/${bare[1]}.${bare[2]}`;
-	// Scheme-less `host[:port]/r/…` → wss.
-	else if (!text.includes("://")) text = `wss://${text}`;
+	// Infer wss only when the outer URL has no scheme (fragments may contain ws://).
+	else if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(text)) text = `wss://${text}`;
 	let url: URL;
 	try {
 		url = new URL(text);
@@ -311,9 +357,9 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 		const parsed = parseCollabLink(inner);
 		if (!("error" in parsed)) return parsed;
 	}
-	const normalized = normalizeRelayOrigin(url.origin);
-	if ("error" in normalized) return normalized;
 	const match = ROOM_PATH_RE.exec(url.pathname);
+	const normalized = normalizeRelayBaseUrl(`${url.origin}${match?.[1] ?? ""}`);
+	if ("error" in normalized) return normalized;
 	if (!match) {
 		// Non-http(s) deep links may also carry a complete collab link in the
 		// fragment. http(s) links are handled once above so invalid fragments
@@ -322,10 +368,10 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 		if (inner && url.protocol !== "http:" && url.protocol !== "https:") return parseCollabLink(inner);
 		return { error: "Collab link must contain a /r/<roomId> path" };
 	}
-	const roomId = match[1]!;
+	const roomId = match[2]!;
 	// Key rides dot-joined in the path (`/r/<roomId>.<key>`); legacy links
 	// carry it in the fragment (`/r/<roomId>#<key>`).
-	const fragment = match[2] ?? (url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
+	const fragment = match[3] ?? (url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
 	if (!fragment) {
 		return { error: "Collab link is missing the <key> part" };
 	}
@@ -335,5 +381,5 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 	}
 	const key = secret.subarray(0, ROOM_KEY_BYTES);
 	const writeToken = secret.byteLength > ROOM_KEY_BYTES ? secret.subarray(ROOM_KEY_BYTES) : undefined;
-	return { wsUrl: `${normalized.origin}/r/${roomId}`, roomId, key, writeToken };
+	return { wsUrl: `${normalized.baseUrl}/r/${roomId}`, roomId, key, writeToken };
 }

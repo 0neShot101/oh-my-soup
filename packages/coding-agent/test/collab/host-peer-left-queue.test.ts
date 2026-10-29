@@ -57,8 +57,9 @@ it("discards a departed guest's queued snapshot instead of stalling the next gue
 	leaver.connect();
 	await leaverChunked.promise;
 
-	// Mid-snapshot: the first chunk is on the wire, the rest are still queued.
-	expect(hostWs.bufferedAmount).toBeGreaterThanOrEqual(HIGH_WATER_MARK);
+	// Wait until the snapshot actually parks; a small first chunk need not
+	// fill the transport's high-water mark on its own.
+	await waitFor(() => hostWs.bufferedAmount >= HIGH_WATER_MARK, "snapshot never reached backpressure");
 	expect(leaverFrames.filter(frame => frame.t === "snapshot-chunk").some(frame => frame.final)).toBe(false);
 	const leaverPeer = probe.targets.find(peer => peer !== 0);
 	expect(leaverPeer).toBeGreaterThan(0);

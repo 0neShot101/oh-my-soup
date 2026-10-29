@@ -7,13 +7,12 @@ import { QrCode, renderQrHalfBlocks, renderQrText } from "./qrcode";
 import type { DescribeContext, NativeNode } from "../native/node";
 import { code, col, text } from "../native/describe";
 
-/** Scheme-less display form of a collab browser deep link, OSC-8 linked. */
+/** Preserve the explicit browser protocol in copied text as well as the OSC-8 target. */
 export function collabBrowserLink(webLink: string, label?: string): string {
-	const schemeLess = webLink.replace(/^https?:\/\//, "");
-	const display = fgOrPlain("accent", `\x1b[4m${label ?? schemeLess}\x1b[24m`);
+	const display = fgOrPlain("accent", `\x1b[4m${label ?? webLink}\x1b[24m`);
 	const linked = urlHyperlinkAlways(webLink, display);
 	// Without OSC-8 support, keep the literal URL at the visible prefix.
-	return label !== undefined && linked === display ? fgOrPlain("accent", `\x1b[4m${schemeLess}\x1b[24m`) : linked;
+	return label !== undefined && linked === display ? fgOrPlain("accent", `\x1b[4m${webLink}\x1b[24m`) : linked;
 }
 
 /**
@@ -70,7 +69,7 @@ export class CollabQrCodeComponent implements Component, TranscriptPresentationT
 		const qr = renderQrText(this.#qr, cx.dark).join("\n");
 		const node = col(
 			[
-				text([{ t: this.url.replace(/^https?:\/\//, ""), s: "accent link", href: this.url }], { wrap: "none" }),
+				text([{ t: this.url, s: "accent link", href: this.url }], { wrap: "none" }),
 				code(qr, { lang: "text", wrap: false }),
 			],
 			{ role: "omp.collab.qrcode" },
