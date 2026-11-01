@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `@oh-my-soup/pi-catalog/access-programs` with `daybreakProgramFor`, `modelDaybreakProgram`, and `daybreakAvailability` to resolve Codex Daybreak (Trusted Access for Cyber) programs and account eligibility
+- Added `@oh-my-soup/pi-catalog/access-programs` with `daybreakProgramFor`, `modelDaybreakProgram`, and `daybreakAvailability` to resolve Codex Daybreak (Trusted Access for Cyber) programs and account eligibility ([#13](https://github.com/pickpocket/oh-my-soup/pull/13) by [@0neShot101](https://github.com/0neShot101))
 
 ### Changed
 
