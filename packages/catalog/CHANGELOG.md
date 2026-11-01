@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `@oh-my-soup/pi-catalog/access-programs` with `daybreakProgramFor`, `modelDaybreakProgram`, and `daybreakAvailability` to resolve Codex Daybreak (Trusted Access for Cyber) programs and account eligibility
+
 ### Changed
 
 - Default web search tries dedicated search engines before falling back to a hosted chat model.

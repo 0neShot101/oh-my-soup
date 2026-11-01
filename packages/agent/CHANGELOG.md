@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `Agent.daybreak` (and `AgentOptions.daybreak`) to forward the Codex Daybreak (Trusted Access for Cyber) toggle to every request; off by default
+
 ## [18.13.0] - 2026-10-26
 
 ### Added

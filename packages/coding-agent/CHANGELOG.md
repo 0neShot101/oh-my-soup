@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Daybreak (OpenAI Trusted Access for Cyber) as an off-by-default toggle: `/daybreak [on|off|status]` (offered once the Codex catalog shows your account is eligible), the persisted `daybreak` setting, and a Daybreak control (`alt+d`) in the `/model` hub; when on, Codex requests ask for the program each model advertises (`daybreak_blue`, else `daybreak_red`).
+
 ### Changed
 
 - Collaboration's Relay Server setting now switches active hosting connections to the chosen server without changing view/control access or starting sharing when it is off.

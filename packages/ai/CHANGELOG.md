@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Codex Daybreak (Trusted Access for Cyber) is now a per-request toggle, off by default: `SimpleStreamOptions.daybreak` / `OpenAICodexResponsesOptions.daybreak` request the model's advertised `daybreak_blue` (or `daybreak_red`), while off sends `standard` explicitly when advertised instead of auto-requesting `daybreak_blue`; `unsupported_access_program` rejections now also drop the program and replay
+
 ## [18.13.1] - 2026-10-27
 
 ### Added

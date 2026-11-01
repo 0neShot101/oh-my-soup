@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- The `/model` hub shows a Daybreak (Trusted Access for Cyber) toggle when the account is eligible: `alt+d` flips it, the status line shows `Daybreak: on|off`, and models that offer a Daybreak program carry a `daybreak` badge.
+
 ### Fixed
 
 - Collaboration browser links now retain their explicit HTTP/HTTPS scheme in terminal and native text, so copying a VPN HTTP invitation does not silently select HTTPS.
